@@ -1,0 +1,25 @@
+La Fabrique est installée dans le namespace « {{ .Release.Namespace }} ».
+
+1. Code d'installation (affiché une fois, au premier démarrage) :
+
+   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "fabrique.fullname" . }}-dashboard | grep "code d'installation"
+
+2. Ouvrir le dashboard :
+{{- if .Values.ingress.enabled }}
+
+   {{ include "fabrique.publicUrl" . }}
+{{- else }}
+
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fabrique.fullname" . }} 8080:{{ .Values.service.port }}
+   puis http://localhost:8080
+{{- end }}
+
+3. Saisir le code, créer le compte administrateur, puis suivre la page Setup (un modèle, un provider Git, un premier repo).
+{{- if .Values.runner.enabled }}
+   Le runner intégré « {{ .Values.runner.name }} » s'enregistre seul : il apparaît en ligne dans Runners en moins d'une minute.
+{{- end }}
+{{- if not .Values.secrets.existingSecret }}
+
+Les secrets de l'application sont dans le Secret « {{ include "fabrique.fullname" . }} ». Sauvegarde-le : sans lui, les clés
+des modèles et les tokens Git enregistrés dans le dashboard sont illisibles. Il n'est pas supprimé par `helm uninstall`.
+{{- end }}

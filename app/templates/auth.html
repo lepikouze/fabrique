@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fabrique</title>
+<link rel="stylesheet" href="/static/app.css?v=28"><link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=3"><link rel="apple-touch-icon" href="/static/icon-180.png?v=1"><script src="/static/theme.js?v=1"></script></head>
+<body class="auth-page">
+<main class="auth-box">
+ <h1 class="auth-brand">{% with cls="big" %}{% include "_wordmark.html" %}{% endwith %}</h1>
+ {% if kind == 'denied' %}<p>Ce compte n'a aucun rôle dans la Fabrique : il n'appartient à aucun groupe autorisé.</p><p class="muted">Demande à un admin de t'ajouter au bon groupe dans le provider d'identité.</p><a class="btn primary" href="/auth/login">Réessayer</a>
+ {% elif kind == 'error' %}<p>La connexion n'a pas abouti.</p><p class="muted">Le provider d'identité est injoignable ou a renvoyé une réponse invalide.</p><a class="btn primary" href="/auth/login">Réessayer</a>
+ {% elif kind == 'misconfigured' %}<p>La connexion est mal configurée : le dashboard reste fermé tant qu'elle n'est pas corrigée.</p><p class="muted">Un admin doit vérifier les variables OIDC_* et SESSION_SECRET (détail dans les journaux du conteneur).</p>
+ {% elif kind == 'setup' %}<p><b>Premier démarrage.</b> Crée le compte administrateur. Il servira aussi de compte de secours si la connexion unique (OIDC) est indisponible.</p>
+  {% if detail %}<p class="bad" role="alert">{{ detail }}</p>{% endif %}
+  <form method="post" action="/auth/setup" class="frm auth-form" autocomplete="off">
+   <label for="s-code">Code d'installation <small class="muted">écrit dans les journaux du conteneur du dashboard au démarrage</small></label>
+   <input id="s-code" name="code" value="{{ keep.code }}" required class="mono" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+   <label for="s-login">Identifiant</label><input id="s-login" name="login" value="{{ keep.login }}" required minlength="3" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" class="mono" autocomplete="username">
+   <label for="s-name">Nom affiché <small class="muted">facultatif</small></label><input id="s-name" name="name" maxlength="120" value="{{ keep.name }}">
+   <label for="s-pw">Mot de passe</label>
+   <input id="s-pw" name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password">
+   <p class="muted small auth-hint">{{ PW_RULE }}</p>
+   <label for="s-pw2">Mot de passe, encore</label><input id="s-pw2" name="password2" type="password" required minlength="12" maxlength="200" autocomplete="new-password">
+   <button class="btn primary">Créer le compte administrateur</button>
+  </form>
+ {% elif kind == 'login' %}{% if out %}<p class="muted" role="status">Tu es déconnecté.</p>{% endif %}
+  {% if detail %}<p class="bad" role="alert">{{ detail }}</p>{% endif %}
+  {% set local_form %}
+  <form method="post" action="/auth/password" class="frm auth-form">
+   <input type="hidden" name="next" value="{{ next or '/' }}">
+   <label for="l-login">Identifiant</label><input id="l-login" name="login" required maxlength="40" class="mono" autocomplete="username" {{ 'autofocus' if not sso }}>
+   <label for="l-pw">Mot de passe</label><input id="l-pw" name="password" type="password" required maxlength="200" autocomplete="current-password">
+   <button class="btn {{ 'primary' if not sso }}">Se connecter</button>
+  </form>
+  {% endset %}
+  {% if sso %}
+  <div class="auth-choices">
+   <a class="btn primary auth-wide" href="/auth/login?sso=1&next={{ (next or '/')|urlencode }}">Se connecter en SSO</a>
+   <details class="auth-local" {{ 'open' if detail }}>
+    <summary class="btn auth-wide">Connexion locale</summary>
+    {{ local_form }}
+   </details>
+  </div>
+  {% else %}{{ local_form }}{% endif %}
+ {% elif kind == 'logged_out' %}<p>Tu es déconnecté.</p><a class="btn primary" href="/auth/login">Se reconnecter</a>
+ {% else %}<a class="btn primary" href="/auth/login">Se connecter</a>{% endif %}
+</main>
+</body>
+</html>

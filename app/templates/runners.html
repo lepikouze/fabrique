@@ -1,0 +1,53 @@
+{% extends "base.html" %}{% from "_macros.html" import ic, dot, empty %}
+{% block title %}Runners{% endblock %}
+{% block h1 %}Runners{% endblock %}
+{% block counters %}{% endblock %}
+{% block tools %}{% if can(user, 'runners_edit') %}<button type="button" class="btn primary" data-open-dialog="add-runner">{{ ic('plus') }}Ajouter un runner</button>{% endif %}{% endblock %}
+{% block content %}
+<div class="pad pad-top">{% if new_token %}
+<div class="callout c-amber token-box" role="alert"><b class="ct">Token du runner « {{ new_name }} » : copie-le maintenant, il ne sera plus jamais affiché</b>
+ <p><code class="mono sel-all">{{ new_token }}</code></p>
+ <p class="muted small">À placer dans l'environnement du runner (FABRIQUE_RUNNER_TOKEN). Seule son empreinte est conservée ; en cas de fuite, révoque le runner et crée-en un autre.</p></div>
+{% endif %}
+</div>
+<div data-live="runners" class="pad">
+<p class="lead">Un runner est un programme sans IA : il prend une commande dans la file, prépare un workspace jetable, lance l'agent avec le bon modèle, applique les barrières et renvoie preuves et coûts. C'est le seul à détenir les accès Git et LLM.</p>
+<p class="muted">File : {{ pending|selectattr('state', 'equalto', 'pending')|list|length }} commande(s) en attente · {{ pending|selectattr('state', 'equalto', 'leased')|list|length }} en cours.</p>
+{% if not runners %}
+ {{ empty('Aucun runner connecté.', 'Ajoute un runner pour obtenir son token, puis démarre-le avec ce token. Les demandes restent en file en attendant.') }}
+{% else %}
+<div class="cards2">
+{% for r in runners %}
+ <article class="box">
+  <header class="box-h"><b>{{ r.name }}</b><span class="pill {{ 'on' if r.online else 'off' }}">{{ dot('var(--ok)' if r.online else 'var(--ink-3)') }}{{ 'en ligne' if r.online else 'hors ligne' }}</span><span class="mono muted right">{{ r.kind }}</span></header>
+  <dl class="kv">
+   <dt>Vu</dt><dd class="mono">{{ r.last_seen|hms }} · {{ r.last_seen|il_y_a }}</dd>
+   <dt>Hôte</dt><dd class="mono">{{ r.host or '—' }}</dd>
+   <dt>Capacité</dt><dd>{{ r.in_flight }} en cours / {{ r.capacity }} max</dd>
+   {% if r.metrics.cpu is defined %}<dt>Processeur</dt><dd>{{ r.metrics.cpu }} %</dd>{% endif %}
+   {% if r.metrics.mem %}<dt>Mémoire</dt><dd>{{ r.metrics.mem[0] }} Go / {{ r.metrics.mem[1] }} Go</dd>{% endif %}
+   {% if r.metrics.disk %}<dt>Disque</dt><dd>{{ r.metrics.disk[0] }} Go libres / {{ r.metrics.disk[1] }} Go</dd>{% endif %}
+   <dt>Agents</dt><dd>{% for h in r.harnesses %}<span class="pill">{{ h.name }} <span class="mono muted">{{ h.version }}</span></span>{% else %}—{% endfor %}</dd>
+   <dt>Tags</dt><dd>{% for t in r.tags or [] %}<span class="pill mono">{{ t }}</span>{% else %}<span class="muted">aucune (variable RUNNER_TAGS)</span>{% endfor %}</dd>
+   <dt>Version</dt><dd class="mono">{{ r.version or '—' }}</dd>
+   <dt>Type</dt><dd>{{ 'réel (token)' if r.token_hash else 'démonstration' }}</dd>
+  </dl>
+  {% if r.token_hash and can(user, 'runners_edit') %}<form method="post" action="/runners/{{r.id}}/rotate" data-confirm="Renouveler le token de {{ r.name }} ? L'ancien cessera de fonctionner tout de suite : il faudra donner le nouveau au runner."><button class="btn sm">Renouveler le token</button></form> <form method="post" action="/runners/{{r.id}}/revoke" data-confirm="Révoquer {{ r.name }} ? Son token cessera de fonctionner."><button class="btn sm danger">Révoquer</button></form>{% endif %}
+ </article>
+{% endfor %}
+</div>
+{% endif %}
+</div>
+{% if can(user, 'runners_edit') %}
+<dialog id="add-runner" class="dlg" aria-labelledby="add-runner-t">
+ <form method="post" action="/runners" class="frm">
+  <h2 id="add-runner-t">Ajouter un runner</h2>
+  <p class="muted">Le token sera affiché une seule fois. Le runner s'en sert pour prendre des commandes et ne peut écrire que sur les jobs qu'il traite.</p>
+  <label for="ru-name">Nom</label><input id="ru-name" name="name" required maxlength="60" pattern="[a-z0-9][a-z0-9._-]+" class="mono" placeholder="runner-1">
+  <label for="ru-kind">Type</label><select id="ru-kind" name="kind"><option value="conteneur">Conteneur</option><option value="vm">VM</option><option value="kubernetes">Kubernetes</option></select>
+  <div class="row-end"><button type="button" class="btn" data-close-dialog>Annuler</button><button class="btn primary">Créer et afficher le token</button></div>
+ </form>
+</dialog>
+{% endif %}
+{% endblock %}
+{% block foot %}{{ runners|length }} runner{{'s' if runners|length != 1}} · {{ runners|selectattr('online')|list|length }} en ligne{% endblock %}

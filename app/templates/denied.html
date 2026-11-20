@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% from "_macros.html" import empty %}
+{% block title %}Accès refusé{% endblock %}
+{% block h1 %}Accès refusé{% endblock %}
+{% block counters %}{% endblock %}
+{% block content %}<div class="pad">{{ empty('Ton rôle ne permet pas de voir ' ~ what ~ '.', 'Ton rôle actuel : ' ~ ROLE_LABEL[user.role] ~ '. Il vient de tes groupes dans le provider d’identité.') }}</div>{% endblock %}

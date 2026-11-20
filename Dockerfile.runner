@@ -1,0 +1,26 @@
+# Une image, trois rôles : runner (python -m runner.main), lanceur (python -m lanceur.main), atelier des jobs (sleep).
+# Runner de la Fabrique : Python + git + Claude Code. Le runner tourne en root SANS capacités sauf SETUID/SETGID/KILL
+# (pour lancer l'agent sous l'utilisateur « agent » et l'arrêter) ; l'agent n'a aucune capacité et aucun secret.
+# La version du commit (GIT_SHA) n'est déclarée qu'à la fin : sinon chaque commit invaliderait le cache des couches lourdes.
+FROM node:22-bookworm-slim AS node
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TZ=Europe/Paris
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && npm install -g @anthropic-ai/claude-code@2.1.322 && npm cache clean --force
+RUN pip install --no-cache-dir httpx==0.28.1 docker==7.1.0 kubernetes==37.0.2 \
+ && useradd -u 10002 -m -d /home/agent agent \
+ && mkdir -p /work /etc/claude-code
+WORKDIR /opt/fabrique
+COPY runner runner
+COPY lanceur lanceur
+# Réglages gérés de Claude Code : priorité maximale, non modifiables par l'agent (fichier root, lecture seule).
+COPY runner/managed-settings.json /etc/claude-code/managed-settings.json
+RUN install -m 0755 runner/fab.py /usr/local/bin/fab && chmod 0644 /etc/claude-code/managed-settings.json \
+ && chmod -R a+rX /opt/fabrique
+ENV AGENT_UID=10002 WORK_DIR=/work
+ARG GIT_SHA=dev
+ENV FABRIQUE_VERSION=$GIT_SHA RUNNER_VERSION=$GIT_SHA
+CMD ["python", "-m", "runner.main"]

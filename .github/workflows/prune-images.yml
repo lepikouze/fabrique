@@ -1,0 +1,31 @@
+# Manual cleanup of published images: deletes every version that carries none of the tags to keep.
+name: prune-images
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Tags to keep, space separated (latest is always kept)"
+        required: false
+        default: ""
+permissions:
+  packages: write
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete versions without a kept tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          KEEP: latest ${{ inputs.keep }}
+        run: |
+          for name in fabrique fabrique-runner fabrique-proxy fabrique-job-python fabrique-job-node fabrique-job-go fabrique-job-java; do
+            gh api --paginate "/users/$OWNER/packages/container/$name/versions" \
+              --jq '.[] | "\(.id) \(.metadata.container.tags | join(","))"' | while read -r id tags; do
+              keep=no
+              for t in $KEEP; do case ",$tags," in *",$t,"*) keep=yes;; esac; done
+              if [ "$keep" = yes ]; then echo "keep   $name $tags"; continue; fi
+              echo "delete $name ${tags:-untagged}"
+              gh api -X DELETE "/users/$OWNER/packages/container/$name/versions/$id"
+            done
+          done

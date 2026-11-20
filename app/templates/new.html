@@ -1,0 +1,63 @@
+{% extends "base.html" %}{% from "_macros.html" import ic, empty, model_or_profile %}
+{% block title %}Nouvelle demande{% endblock %}
+{% block h1 %}Nouvelle demande{% endblock %}
+{% block counters %}{% endblock %}
+{% block content %}
+<div class="narrow-page">
+{% if not repos %}
+ {{ empty('Aucun repo n’accepte de demandes.', 'Un admin doit d’abord ajouter un repo et lui permettre de recevoir des demandes (Repos).') }}
+{% else %}
+ <form method="post" action="/new" class="frm card-form kinded {{ 'is-study' if pre.study }}" data-kinded>
+  <p class="lead k-change">Décris ce que tu veux comme à un collègue développeur. Un agent lit la demande, pose une question si quelque chose n'est pas clair, puis propose une PR vérifiée.</p>
+  <p class="lead k-study">Pose ta question comme à un collègue développeur. Un agent lit le repo, pose une question si le périmètre n'est pas clair, puis rend un rapport. Il ne modifie rien.</p>
+  {% if error %}<div class="callout c-red" role="alert"><b class="ct">Demande refusée</b><p>{{ error }} Ta saisie est conservée.</p></div>{% endif %}
+  {% if pre.ref %}<div class="callout c-green"><b class="ct">Suite de l'étude {{ pre.ref }}</b><p>Le formulaire reprend la demande et les conclusions de l'étude. Relis et coupe ce qui ne sert pas : ce texte devient la demande de l'agent.</p></div>{% endif %}
+  <label for="n-repo">Repo</label>
+  <select id="n-repo" name="repo_id" required>{% for r in repos %}<option value="{{r.id}}" {{'selected' if r.id == sel_repo}}>{{ r.name }} — {{ r.slug }}</option>{% endfor %}</select>
+  {% for r in repos %}<p class="repo-info muted small" data-repo-info="{{r.id}}" {{ 'hidden' if r.id != sel_repo }}>Sur ce repo : <b>{{ r.info.agent }}</b> avec <b>{{ r.info.model }}</b>{% if r.info.review %}, relu par <b>{{ r.info.review }}</b>{% endif %}{% if r.info.profile %} (profil {{ r.info.profile }}){% endif %} · budget <span class="mono">{{ r.info.budget|money }}</span> par job · merge : <b>{{ r.info.policy }}</b></p>{% endfor %}
+  <fieldset class="kind">
+   <legend>Type de demande</legend>
+   <label class="check-row"><input type="radio" name="study" value="" {{ 'checked' if not pre.study }}> <span><b>Changement</b> — l'agent modifie le code et propose une PR vérifiée.</span></label>
+   <label class="check-row"><input type="radio" name="study" value="1" {{ 'checked' if pre.study }}> <span><b>Étude</b> — l'agent lit le repo et rend un rapport (analyse, chiffrage, options). Il ne modifie rien : ni branche, ni PR.</span></label>
+  </fieldset>
+  <label for="n-title"><span class="k-change">Titre <small>une phrase</small></span><span class="k-study">La question <small>une phrase</small></span></label>
+  <input id="n-title" name="title" required maxlength="200" value="{{ pre.title }}" autofocus
+         placeholder="{{ 'Combien coûterait le passage à PostgreSQL ?' if pre.study else 'Exporter les liens en CSV' }}"
+         data-ph-change="Exporter les liens en CSV" data-ph-study="Combien coûterait le passage à PostgreSQL ?">
+  <label for="n-need"><span class="k-change">Le besoin</span><span class="k-study">Ce qu'il faut étudier</span></label>
+  <textarea id="n-need" name="need" rows="{{ 14 if pre.ref else 6 }}" required maxlength="8000"
+            placeholder="{{ 'Ce que tu veux comprendre ou chiffrer, le contexte, et ce que tu sais déjà.' if pre.study else 'Ce qui doit changer, pour qui, et pourquoi. Les liens et exemples aident.' }}"
+            data-ph-change="Ce qui doit changer, pour qui, et pourquoi. Les liens et exemples aident."
+            data-ph-study="Ce que tu veux comprendre ou chiffrer, le contexte, et ce que tu sais déjà.">{{ pre.need }}</textarea>
+  <label for="n-done"><span class="k-change">Terminé quand <small>le critère que la vérification devra prouver</small></span><span class="k-study">Ce que le rapport doit contenir <small>facultatif</small></span></label>
+  <textarea id="n-done" name="done_when" rows="2" maxlength="2000"
+            placeholder="{{ 'Un chiffrage par étape, deux options comparées et une recommandation.' if pre.study else 'Le fichier s\'ouvre dans un tableur, et un test couvre l\'export.' }}"
+            data-ph-change="Le fichier s'ouvre dans un tableur, et un test couvre l'export."
+            data-ph-study="Un chiffrage par étape, deux options comparées et une recommandation.">{{ pre.done_when }}</textarea>
+  <p class="muted small k-study">Sans précision, le rapport suit la trame habituelle : réponse courte, constats avec preuves, options, suite proposée, limites.</p>
+  {% if can(user, 'see_all') %}
+  <div class="adv-head"><span>Agent et modèle</span>
+  <details class="info"><summary aria-label="Aide sur le choix de l'agent et du modèle">i</summary>
+    <div class="bubble">
+     <p><b>En général, ne change rien.</b> « Réglage du repo » applique l'agent et le modèle choisis par un admin pour ce repo (Repos › settings), sinon ceux des Settings globaux.</p>
+     <ul>
+      <li><b>Agent</b> : le programme qui travaille dans le repo. Claude Code fonctionne avec Claude comme avec un modèle local.</li>
+      <li><b>Modèle</b> : un modèle local (Gemma, Qwen via llama.cpp) ne coûte rien mais est moins fiable ; un modèle Claude est plus fiable et facturé, dans la limite du budget du job.</li>
+      <li>Change-les seulement pour un essai précis, par exemple comparer deux modèles sur la même demande.</li>
+     </ul>
+    </div>
+   </details>
+  </div>
+  <details class="adv" {{ 'open' if pre.harness or pre.model or pre.profile }}><summary>Choisir l'agent et le modèle <small>par défaut : ceux du repo</small></summary>
+   <div class="grid2">
+    <div><label for="n-h">Agent</label><select id="n-h" name="harness"><option value="">Réglage du repo</option>{% for k, v in HARNESSES.items() %}<option value="{{k}}" {{ 'disabled' if k not in READY }} {{ 'selected' if pre.harness == k }}>{{v}}{{ ' (bientôt)' if k not in READY }}</option>{% endfor %}</select></div>
+    <div><label for="n-m">Modèle ou profil</label><select id="n-m" name="choice">{{ model_or_profile(profs, models, pre.model, pre.profile, inherit='Réglage du repo') }}</select></div>
+   </div>
+  </details>
+  {% endif %}
+  <div class="row-end"><small class="muted">Ensuite : la demande entre dans la Queue et tu la suis dans Jobs ; si l'agent a une question, elle arrive dans ton Inbox. Le texte est transmis à l'agent comme une donnée : il ne peut pas lever les barrières de la Fabrique.</small><button class="btn cta">{{ ic('plus') }}<span class="k-change">Déposer la demande</span><span class="k-study">Lancer l'étude</span></button></div>
+ </form>
+{% endif %}
+</div>
+{% endblock %}
+{% block foot %}Nouvelle demande{% endblock %}

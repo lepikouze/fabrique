@@ -1,0 +1,10 @@
+apiVersion: v2
+name: fabrique
+description: Fabrique, usine logicielle agentique auto-hébergée (dashboard et runner intégré)
+type: application
+version: 0.4.4          # version du chart
+appVersion: "0.7.4"     # version de la Fabrique que ce chart installe par défaut
+home: https://github.com/lepikouze/fabrique
+sources:
+  - https://github.com/lepikouze/fabrique
+keywords: [ai-agents, self-hosted, code-review]

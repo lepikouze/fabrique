@@ -1,0 +1,12 @@
+{% macro ic(name, cls='') %}<svg class="ic {{cls}}" aria-hidden="true"><use href="#i-{{name}}"/></svg>{% endmacro %}
+{% macro dot(color, cls='') %}<i class="dot {{cls}}" style="--c:{{color}}"></i>{% endmacro %}
+{% macro stage_pill(st) %}<span class="pill stage" style="--c:{{st.color}}"><i class="dot" style="--c:{{st.color}}"></i>{{ st.label }}</span>{% endmacro %}
+{% macro model_badge(m) %}<span class="pill model {{ 'claude' if m.startswith('claude') else 'local' }}">{{ m }}</span>{% endmacro %}
+{% macro empty(title, text) %}<div class="empty"><b>{{ title }}</b><p>{{ text }}</p></div>{% endmacro %}
+{# Liste unique « Modèle ou profil » : un modèle seul sert à tout ; un profil donne un modèle par rôle. On choisit l'un ou
+   l'autre, jamais les deux. Valeurs : « p:<profil> » ou « m:<modèle> » ; « inherit » ajoute une première option vide. #}
+{% macro model_or_profile(profs, models, sel_model, sel_profile, inherit='', compat=False) %}
+{% if inherit %}<option value="">{{ inherit }}</option>{% endif %}
+{% if profs %}<optgroup label="Profils : un modèle par rôle">{% for p in profs %}{% set am = models|selectattr('id', 'equalto', p.roles.agent.model)|first %}<option value="p:{{ p.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(am)|join(' ') if am else 'claude-code' }}"{% endif %} {{ 'selected' if sel_profile == p.id }}>{{ p.name }}</option>{% endfor %}</optgroup>{% endif %}
+<optgroup label="Modèles : un seul pour tout">{% for m in models %}<option value="m:{{ m.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(m)|join(' ') }}"{% endif %} {{ 'selected' if not sel_profile and sel_model == m.id }}>{{ m.name }}</option>{% endfor %}</optgroup>
+{% endmacro %}

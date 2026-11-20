@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Setup{% endblock %}
+{% block content %}
+<section class="box start-box">
+ <h2>Setup</h2>
+ <p class="muted">Ce qu'il faut avant de déposer une première demande. Cette page disparaît du menu quand tout est fait.</p>
+ <ol class="start-steps">
+ {% for label, done, link, help in steps %}
+  <li class="{{ 'done' if done }}"><span class="st" aria-hidden="true">{{ '✓' if done else loop.index }}</span>
+   <div><b>{{ label }}</b>{% if done %} <span class="ok">fait</span>{% endif %}<p class="muted">{{ help }}</p></div>
+   {% if not done %}<a class="btn" href="{{ link }}">Régler</a>{% endif %}</li>
+ {% endfor %}
+ </ol>
+ {% if steps|rejectattr(1)|list|length == 0 %}<p><a class="btn primary" href="/new">Déposer une première demande</a></p>{% endif %}
+</section>
+{% endblock %}

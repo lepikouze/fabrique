@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ j.ref }}{% endblock %}
+{% block h1 %}<a href="{{ ('/archives' ~ ('?' ~ back_qs if back_qs else '')) if j.archived else '/jobs' }}" class="crumb">{{ 'Archives' if j.archived else 'Jobs' }}</a> <span class="muted">/</span> <span class="mono">{{ j.ref }}</span>{% endblock %}
+{% block content %}
+<div class="full-page" data-live="full" data-full-ref="{{ j.ref }}">{% with full = True %}{% include "_job_panel.html" %}{% endwith %}</div>
+{% endblock %}
+{# Vue en grand : les compteurs du jour restent visibles ; le job occupe la zone de travail et celle du pied. #}
+{% block footbar %}{% endblock %}

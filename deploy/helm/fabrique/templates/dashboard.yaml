@@ -1,0 +1,117 @@
+{{- $name := include "fabrique.fullname" . }}
+{{- if not .Values.dashboard.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-donnees
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep        # la base n'est jamais supprimée par `helm uninstall`
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.dashboard.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.dashboard.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-dashboard
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1                            # une seule instance : la base est un fichier SQLite sur un volume
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "fabrique.selector" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels: {{- include "fabrique.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dashboard
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | trunc 16 }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: dashboard
+          image: {{ include "fabrique.image" (dict "root" . "name" "fabrique") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: TZ, value: {{ .Values.timezone | quote }}}
+            - {name: FABRIQUE_DATA, value: /data}
+            - {name: PUBLIC_URL, value: {{ include "fabrique.publicUrl" . | quote }}}
+            - {name: FABRIQUE_DEMO, value: {{ ternary "1" "0" (.Values.dashboard.demo | default false) | quote }}}
+            - name: SESSION_SECRET
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: session-secret}}
+            - name: FABRIQUE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: secret-key}}
+            {{- if .Values.runner.enabled }}
+            - name: FABRIQUE_BOOTSTRAP_RUNNER_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: runner-token}}
+            {{- end }}
+            {{- include "fabrique.proxyEnv" . | nindent 12 }}
+            {{- with .Values.dashboard.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - {name: donnees, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: donnees
+          persistentVolumeClaim:
+            claimName: {{ .Values.dashboard.persistence.existingClaim | default (printf "%s-donnees" $name) }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "fabrique.selector" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http}

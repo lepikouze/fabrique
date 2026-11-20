@@ -1,0 +1,40 @@
+# Images des conteneurs de jobs, une par langage (liste blanche du lanceur : python, node, go, java). Même outillage
+# partout : git, Python 3 (pour fab et les hooks), Node.js 22, Claude Code, Codex CLI et Betterleaks. Le code du runner
+# n'y est pas : seulement la commande fab, les hooks garde.py et controle.py, et les réglages gérés de Claude Code.
+# Aucun secret.
+ARG BASE=python:3.12-slim-bookworm
+FROM node:22-bookworm-slim AS node
+
+# Betterleaks (détection de secrets, MIT) : archive officielle, empreinte SHA-256 figée ici pour chaque architecture.
+FROM debian:bookworm-slim AS betterleaks
+ARG TARGETARCH=amd64
+ARG BETTERLEAKS_VERSION=1.10.1
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
+ && case "$TARGETARCH" in \
+      amd64) a=x64; sum=c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e ;; \
+      arm64) a=arm64; sum=62a63199f9f61a6b5e5a6f58f048493db20fbc8c770014f4d903a4d97886e1bf ;; \
+      *) echo "architecture non prise en charge : $TARGETARCH" >&2; exit 1 ;; esac \
+ && f="betterleaks_${BETTERLEAKS_VERSION}_linux_${a}.tar.gz" \
+ && curl -fsSLo "/tmp/$f" "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/$f" \
+ && echo "$sum  /tmp/$f" | sha256sum -c - \
+ && tar -xzf "/tmp/$f" -C /usr/local/bin betterleaks && chmod 0755 /usr/local/bin/betterleaks
+FROM ${BASE}
+ARG EXTRA=""
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata \
+      $(command -v python3 >/dev/null || echo python3) ${EXTRA} \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g @anthropic-ai/claude-code@2.1.322 @openai/codex@0.167.2 && npm cache clean --force \
+ && (id -u agent >/dev/null 2>&1 || useradd -u 10002 -m -d /home/agent agent) && mkdir -p /work /etc/claude-code
+COPY runner/managed-settings.json /etc/claude-code/managed-settings.json
+COPY --from=betterleaks /usr/local/bin/betterleaks /usr/local/bin/betterleaks
+COPY runner/fab.py runner/garde.py runner/controle.py /opt/fabrique/runner/
+RUN install -m 0755 /opt/fabrique/runner/fab.py /usr/local/bin/fab \
+ && chmod -R a+rX /opt/fabrique && chmod 0644 /etc/claude-code/managed-settings.json
+ARG FLAVOR=python
+ENV TZ=Europe/Paris FABRIQUE_IMAGE=$FLAVOR
+CMD ["sleep", "infinity"]

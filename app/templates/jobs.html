@@ -1,0 +1,85 @@
+{% extends "base.html" %}{% from "_macros.html" import ic, dot, empty, stage_pill %}
+{% block title %}Jobs{% endblock %}
+{% block h1 %}{{ 'Jobs archivés' if archived else 'Jobs' }}{% endblock %}
+{% block tools %}
+ <div class="seg" role="group" aria-label="Affichage">
+  <a href="?view=board{{ '&repo=%d'|format(repo) if repo }}{{ '&archived=1' if archived }}" class="{{'on' if view == 'board'}}" {% if view == 'board' %}aria-current="true"{% endif %}>Tableau</a>
+  <a href="?view=list{{ '&repo=%d'|format(repo) if repo }}{{ '&archived=1' if archived }}" class="{{'on' if view == 'list'}}" {% if view == 'list' %}aria-current="true"{% endif %}>Liste</a>
+ </div>
+ <form method="get" class="inline">
+  <input type="hidden" name="view" value="{{view}}">{% if archived %}<input type="hidden" name="archived" value="1">{% endif %}
+  <label class="sr" for="f-repo">Repo</label>
+  <select id="f-repo" name="repo" data-autosubmit><option value="0">Tous les repos</option>{% for r in repos %}<option value="{{r.id}}" {{'selected' if r.id == repo}}>{{ r.name }}</option>{% endfor %}</select>
+  <noscript><button>Filtrer</button></noscript>
+ </form>
+ <a class="tool keep" href="{{ '?view=' ~ view if archived else '/archives' }}" aria-label="{{ 'Jobs en cours' if archived else 'Jobs archivés' }}" title="{{ 'Jobs en cours' if archived else 'Jobs archivés : recherche, restauration' }}">{{ ic('archive') }}{{ 'Jobs en cours' if archived else 'Archivés' }} {% if not archived %}<span class="n">{{ archived_n }}</span>{% endif %}</a>
+ {% if counters.need %}<a class="tool need" href="/inbox">{{ ic('inbox') }}{{ counters.need }} attend{{'ent' if counters.need > 1}} ta réponse</a>{% endif %}
+ <a class="btn cta" href="/new">{{ ic('plus') }}Nouvelle demande</a>
+{% endblock %}
+{% block content %}
+<div data-live="jobs" class="jobs-wrap {{ 'with-panel' if detail }}">
+{% if not js %}
+ {{ empty('Aucun job ' ~ ('archivé' if archived else 'pour l’instant') ~ '.', 'Une demande déposée avec « Nouvelle demande » apparaît ici, dans la colonne « Queue », puis avance d’étape en étape en temps réel.' if not archived else 'Les jobs fusionnés ou en échec archivés depuis leur détail arrivent ici.') }}
+{% elif view == 'board' %}
+ <div class="board {{ 'compact' if compact }}" role="list" aria-label="Jobs par étape">
+ {% for st, items in groups %}{% if items or st.key not in ('spec', 'done', 'failed') %}
+  <section class="col" role="listitem" aria-label="{{ st.label }} : {{ items|length }}">
+   <h2 class="col-h">{{ dot(st.color) }}{{ st.label }} <span class="n">{{ items|length }}</span></h2>
+   <div class="col-b">
+   {% for j in items %}
+    <a class="card {{'sel' if sel == j.ref}}" href="?view=board&job={{j.ref}}{{ '&repo=%d'|format(repo) if repo }}{{ '&archived=1' if archived }}" data-row data-ref="{{j.ref}}" style="--c:{{ j.stage_info.color if compact else st.color }}">
+     <span class="c-top"><span class="mono ref">{% if j.activity == 'active' %}<i class="spin" aria-label="agent en cours"></i>{% endif %}{{ j.ref }}</span><span class="c-src">{% if j.pr_number %}PR #{{ j.pr_number }}{% else %}{{ j.repo.name if j.repo else '' }}{% endif %}</span></span>
+     <span class="c-title">{{ j.title }}</span>
+     {% if compact %}<span class="c-stage">{{ stage_pill(j.stage_info) }}</span>{% endif %}
+     {% if j.open_question %}<span class="c-q">{{ j.open_question }}</span>
+     {% elif j.status_text %}<span class="c-status {{ 'ok' if j.stage in ('merged', 'done') else 'bad' if j.stage == 'failed' }}">{{ j.status_text }}</span>{% endif %}
+     {% if j.verified_sha %}<span class="c-ver">{{ ic('shield') }}Vérifié à <span class="mono">{{ j.verified_sha }}</span> · {{ j.checks_ok }}/{{ j.checks_total }}</span>{% endif %}
+     <span class="c-foot"><span>{{ j.harness_label }}</span>{% if j.agents_running > 1 %}<span>{{ j.agents_running }} agents</span>{% endif %}<span class="mono">{{ j.cost|money }}</span>{% if j.runner %}<span class="run {{ j.activity }}">{{ dot('var(--ok)' if j.activity == 'active' else 'var(--ink-3)') }}{{ j.runner.name }}</span>{% endif %}</span>
+    </a>
+   {% else %}<p class="none">Aucun</p>{% endfor %}
+   </div>
+  </section>
+ {% endif %}{% endfor %}
+ </div>
+{% else %}
+{% macro jrow(j, color, pill=false) %}
+   <a class="row {{'sel' if sel == j.ref}}" role="row" href="?view=list&job={{j.ref}}{{ '&repo=%d'|format(repo) if repo }}{{ '&archived=1' if archived }}{{ '&f=' ~ fam if fam }}" data-row data-ref="{{j.ref}}">
+    {{ dot(color) }}<span class="mono ref">{{ j.ref }}</span>
+    <span class="r-title"><span class="t">{{ j.title }}</span>{% if j.activity == 'active' %}<i class="spin" aria-label="agent en cours"></i>{% endif %}</span>
+    <span class="r-status {{ 'q' if j.open_question }} {{ 'ok' if j.stage in ('merged', 'done') }}">{% if pill %}{{ stage_pill(j.stage_info) }}<span class="st">{{ j.open_question or j.status_text }}</span>{% else %}{{ j.open_question or j.status_text }}{% endif %}</span>
+    <span class="r-ver">{% if j.verified_sha %}{{ ic('shield') }}<span class="mono">{{ j.verified_sha }}</span> · {{ j.checks_ok }}/{{ j.checks_total }}{% endif %}</span>
+    <span class="r-run hide-narrow">{{ j.runner.name if j.runner else '—' }}</span>
+    <span class="r-h hide-narrow">{{ j.harness_label }}</span>
+    <span class="mono r-cost">{{ j.cost|money }}</span>
+    <span class="mono r-at">{{ j.updated_at|quand }}</span>
+   </a>
+{% endmacro %}
+ <div class="list {{ 'flat' if flat }}" role="table" aria-label="{{ 'Jobs par dernière activité' if flat else 'Jobs par étape' }}">
+ {% if flat %}
+  {% set q = ('&repo=%d'|format(repo) if repo else '') ~ ('&archived=1' if archived else '') %}
+  <nav class="fam-bar" aria-label="Filtrer par étape">
+   <a class="pill {{ 'on' if not fam }}" href="?view=list{{ q }}" {% if not fam %}aria-current="true"{% endif %}>Toutes les étapes</a>
+   {% for k, lbl, color, _ in families %}<a class="pill {{ 'on' if fam == k }}" href="?view=list&f={{ k }}{{ q }}" {% if fam == k %}aria-current="true"{% endif %}>{{ lbl }}</a>{% endfor %}
+   <span class="muted">Trié par dernière activité</span>
+  </nav>
+  <div class="grp">
+  {% for j in groups[0][1] %}{{ jrow(j, j.stage_info.color, true) }}{% else %}<p class="none pad">Aucun job dans ce filtre.</p>{% endfor %}
+  </div>
+ {% else %}
+ {% for st, items in groups %}{% if items %}
+  <details class="grp" open>
+   <summary class="grp-h">{{ ic('chev', 'chev') }}{{ dot(st.color) }}{{ st.label }} <span class="n">{{ items|length }}</span></summary>
+   {% for j in items %}{{ jrow(j, st.color) }}{% endfor %}
+  </details>
+ {% endif %}{% endfor %}
+ {% endif %}
+ </div>
+{% endif %}
+</div>
+{% endblock %}
+{% block aside %}
+<aside class="panel" id="panel" aria-label="Détail du job" {% if not detail %}hidden{% endif %} data-kind="job" data-view="{{view}}">
+ {% if detail %}{% with j = detail, full = False %}{% include "_job_panel.html" %}{% endwith %}{% endif %}
+</aside>
+{% endblock %}
+{% block foot %}{{ js|length }} job{{'s' if js|length != 1}}{% endblock %}

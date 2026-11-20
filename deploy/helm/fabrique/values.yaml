@@ -1,0 +1,126 @@
+# Valeurs par défaut du chart Fabrique. Aucune n'est obligatoire : `helm install fabrique .` donne une installation qui
+# démarre. En production, règle au moins `publicUrl` et `ingress`.
+
+image:
+  registry: ghcr.io/lepikouze      # registre et espace de nommage des images
+  tag: latest                      # épingle une version précise en production
+  pullPolicy: IfNotPresent
+imagePullSecrets: []               # ex. [{name: mon-secret-de-registre}] pour un registre privé
+
+# Adresse publique du dashboard (liens des notifications, retour de la connexion unique). Vide : déduite de l'Ingress.
+publicUrl: ""
+timezone: Europe/Paris
+
+# Secrets de l'application : sessions, chiffrement des clés des modèles et des tokens Git, token du runner intégré.
+secrets:
+  # Vide : le chart crée un Secret, génère les trois valeurs au premier `helm install` et les garde aux mises à jour.
+  # Renseigné : nom d'un Secret que tu gères toi-même (Sealed Secrets, External Secrets, Vault…), avec les clés
+  # `session-secret`, `secret-key` et `runner-token` (ce dernier : « fab_ » suivi d'au moins 32 caractères).
+  existingSecret: ""
+
+dashboard:
+  # Mode démonstration (FABRIQUE_DEMO) : onglet Démonstration dans les Settings, avec des jobs, runners et coûts fictifs à
+  # afficher ou masquer. Pour une présentation ou un essai ; à laisser à false en service réel.
+  demo: false
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  persistence:
+    size: 2Gi
+    storageClass: ""               # vide : classe de stockage par défaut du cluster
+    existingClaim: ""
+  # Variables d'environnement supplémentaires (connexion unique OIDC, comptes de secours…), voir docs/configuration.md.
+  extraEnv: []
+  #  - {name: OIDC_ISSUER, value: "https://sso.exemple.org/realms/equipe"}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""                    # ex. nginx, traefik
+  host: fabrique.exemple.org
+  annotations: {}
+  #  cert-manager.io/cluster-issuer: letsencrypt             # certificat délivré par cert-manager
+  #  nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  #  nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # le dashboard se met à jour par une connexion longue
+  #  nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: true
+    secretName: ""                 # vide : « <nom>-tls » (à fournir, ou créé par cert-manager via une annotation)
+
+# Runner intégré : il s'enregistre seul auprès du dashboard avec le token du Secret.
+runner:
+  enabled: true
+  name: runner-integre
+  tags: kubernetes
+  capacity: 2
+  # Où tournent les jobs.
+  #   kubernetes : un Pod jetable par job, créé par le launcher (recommandé). Réseau fermé, proxy de sortie obligatoire.
+  #   local      : dans le Pod du runner, sous un simple utilisateur sans droits. Pour un essai ; pas une frontière de sécurité.
+  executor: kubernetes
+  resources:
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {memory: 4Gi}
+  persistence:                     # workspaces des jobs et miroirs Git, partagés entre le runner et les Pods de jobs
+    size: 20Gi
+    storageClass: ""
+    # ReadWriteMany dès que le cluster a plusieurs nœuds (NFS, CephFS, Longhorn RWX…) : le runner et les Pods de jobs
+    # montent le même volume. ReadWriteOnce suffit sur un seul nœud.
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+  gitAuthor: "Agent Fabrique <fabrique-bot@noreply.invalid>"
+  extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+# Pods de jobs (executor: kubernetes). Leur politique de sécurité est figée dans le launcher et ne se règle pas ici.
+jobs:
+  memory: 4Gi
+  cpu: "2"
+  startTimeoutSeconds: 300         # tirage de l'image compris
+  # Images par langage, dans image.registry, avec image.tag. Le runner ne choisit qu'un NOM de cette liste.
+  images:
+    python: fabrique-job-python
+    node: fabrique-job-node
+    go: fabrique-job-go
+    java: fabrique-job-java
+
+launcher:
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+# Proxy de sortie des jobs : seuls ces noms d'hôtes (expressions régulières ancrées) sont joignables depuis un job.
+proxy:
+  allow:
+    - ^pypi\.org$
+    - ^files\.pythonhosted\.org$
+    - ^registry\.npmjs\.org$
+    - ^proxy\.golang\.org$
+    - ^sum\.golang\.org$
+    - ^repo\.maven\.apache\.org$
+    - ^repo1\.maven\.org$
+    - ^services\.gradle\.org$
+    - ^downloads\.gradle\.org$
+    - ^plugins\.gradle\.org$
+    - ^plugins-artifacts\.gradle\.org$
+  resources:
+    requests: {cpu: 10m, memory: 16Mi}
+    limits: {memory: 128Mi}
+
+networkPolicy:
+  enabled: true                    # ferme le réseau des Pods de jobs (il faut un CNI qui applique les NetworkPolicy)
+
+# Proxy d'entreprise : à renseigner si le cluster ne sort sur Internet qu'à travers un proxy.
+#   - le dashboard et le runner l'utilisent pour joindre une forge ou un fournisseur de modèles extérieurs ;
+#   - le proxy de sortie des jobs lui transmet les requêtes de sa liste blanche (registres de paquets).
+outboundProxy:
+  url: ""                          # ex. http://proxy.exemple.org:3128 : adresse IP ou nom complet, sans identifiant
+  # Ce qui se joint en direct, sans ce proxy : domaines internes et plages d'adresses, séparés par des virgules.
+  # Les services de la Fabrique dans le cluster y sont ajoutés automatiquement.
+  noProxy: ""                      # ex. .exemple.org,10.0.0.0/8,172.16.0.0/12

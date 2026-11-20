@@ -1,0 +1,5 @@
+Inter (variable, sous-ensemble latin) — Copyright 2016 The Inter Project Authors — SIL Open Font License 1.1 (LICENCE-inter.txt)
+JetBrains Mono (variable, sous-ensemble latin) — Copyright 2020 The JetBrains Mono Project Authors — SIL Open Font License 1.1 (LICENCE-jetbrains-mono.txt)
+Fichiers obtenus depuis les paquets @fontsource-variable/inter et @fontsource-variable/jetbrains-mono 5.2.8.
+Jost (graisse 600, sous-ensemble latin) — Copyright 2020 The Jost Project Authors — SIL Open Font License 1.1 (LICENCE-jost.txt)
+Fichier obtenu depuis Google Fonts (fonts.gstatic.com), version 20.

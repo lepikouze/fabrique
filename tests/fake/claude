@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Faux Claude Code pour les tests du runner. Agent : parle à la Fabrique via fab.py, modifie le dépôt, flux stream-json.
+Relecteur (--output-format json) : renvoie un verdict JSON. Le titre de la demande pilote les cas de test."""
+import json, os, subprocess, sys, time
+args = sys.argv[1:]
+prompt = args[args.index("-p") + 1]
+resume = args[args.index("--resume") + 1] if "--resume" in args else None
+FAB = [sys.executable, os.path.join(os.path.dirname(__file__), "..", "..", "runner", "fab.py")]
+def out(o): print(json.dumps(o), flush=True)
+def fab(*a): subprocess.run(FAB + list(a), check=True, capture_output=True)
+
+if "--output-format" in args and args[args.index("--output-format") + 1] == "json":   # relecteur
+    src = open("carnet.py").read()
+    mark = os.path.join(os.environ.get("HOME", "/tmp"), ".illisible")
+    if "ILLISIBLE" in prompt and ("TOUJOURS" in prompt or not os.path.exists(mark)):
+        open(mark, "w").close()
+        print(json.dumps({"result": "Je pense que c'est bon mais je n'ai pas fini…", "total_cost_usd": 0.0}))
+        sys.exit(0)
+    verdict = "bloquant" if any(k in prompt for k in ("BLOQUER", "SANSPREUVE", "PREUVEVIDE")) and "# corrigé" not in src else "ok"
+    preuve = "" if "SANSPREUVE" in prompt else ("true" if "PREUVEVIDE" in prompt else "grep -q '# corrigé' carnet.py")
+    print(json.dumps({"result": "Voici ma relecture.\n" + json.dumps({"verdict": verdict, "resume": "relu", "points": ["carnet.py : ok()"] if verdict != "ok" else [],
+                                                                       "preuve": preuve}),
+                      "total_cost_usd": 0.1}))
+    sys.exit(0)
+
+sid = resume or "sess-42"
+out({"type": "system", "subtype": "init", "session_id": sid})
+if prompt.startswith("Onboarding du dépôt"):          # agent d'onboarding : n'écrit que la recette (sauf cas « touche »)
+    fab("etape", "triage", "lecture du dépôt")
+    if os.path.exists("RIEN_A_VERIFIER"):              # projet sans tests ni build : l'agent abandonne
+        fab("echec", "aucun test, aucun build : rien à vérifier")
+        out({"type": "result", "subtype": "success", "session_id": sid, "result": "abandon"})
+        sys.exit(0)
+    os.makedirs(".fabrique", exist_ok=True)
+    with open(".fabrique/setup.json", "w") as f:
+        json.dump({"setup": [] if "sanscheck" in prompt else ["true"], "checks": {} if "sanscheck" in prompt else {"tests": "python3 -c 'import carnet'"},
+                   "env": [{"name": "API_KEY", "purpose": "appel externe des tests d'intégration", "required": False}]}, f)
+    if "touche" in prompt:
+        with open("carnet.py", "a") as f:
+            f.write("# l'agent a corrigé le code au passage\n")
+        os.makedirs(".venv/bin", exist_ok=True)
+        open(".venv/bin/activate", "w").write("# env\n")
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "-qm", "Recette de la Fabrique"], check=True, capture_output=True)
+    fab("decision", "--confiant", "oui", "--verdict", "recette prouvée", "--interpretation", "pip + pytest")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "fini"})
+    sys.exit(0)
+if "agent d'étude" in " ".join(args):   # agent d'étude : un rapport, rien d'autre
+    fab("etape", "triage", "cadrage de l'étude")
+    if "QUESTION" in prompt and "<reponse>" not in prompt:
+        fab("question", "Quel périmètre ?")
+        out({"type": "result", "subtype": "success", "session_id": sid, "result": "question posée", "total_cost_usd": 0.2})
+        sys.exit(0)
+    fab("etape", "investigating", "lecture du code")
+    with open("carnet.py", "a") as f:
+        f.write("# essai jetable de l'étude\n")
+    if "SANSRAPPORT" not in prompt:
+        with open("RAPPORT_ETUDE.md", "w") as f:
+            f.write("## Réponse courte\nok() renvoie False.\n\n<script>alert(1)</script>\n")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "", "total_cost_usd": 0.3})
+    sys.exit(0)
+if "MUET" in prompt and "Chien de garde" not in prompt:
+    time.sleep(6)                       # silence : le chien de garde coupe et relance
+if "LONG" in prompt:
+    time.sleep(8)                       # le test demande l'arrêt pendant ce temps
+fab("etape", "triage", "compris")
+if "ABANDON" in prompt:
+    fab("echec", "la chaîne d'outils est cassée")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "abandon"})
+    sys.exit(0)
+if "QUESTION" in prompt and "<reponse>" not in prompt:
+    fab("question", "A ou B ?")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "question posée", "total_cost_usd": 0.5})
+    sys.exit(0)
+bad = "CASSER" in prompt and "contrôles échouent" not in prompt
+out({"type": "assistant", "message": {"usage": {"input_tokens": 1000, "output_tokens": 200},
+     "content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": os.path.join(os.getcwd(), "carnet.py")}}]}})
+body = "def ok():\n    return %s\n" % ("0" if bad else "True")
+if "Des relecteurs ont trouvé" in prompt:
+    body += "# corrigé\n"
+with open("carnet.py", "w") as f:
+    f.write(body)
+subprocess.run(["git", "add", "-A"], check=True)
+subprocess.run(["git", "commit", "-qm", "changement de l'agent"], check=True, capture_output=True)
+fab("decision", "--confiant", "oui", "--verdict", "fait", "--interpretation", "compris")
+out({"type": "result", "subtype": "success", "session_id": sid, "result": "fini", "total_cost_usd": 0.5})

@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% from "_macros.html" import ic %}
+{% block title %}Mon compte{% endblock %}
+{% block h1 %}Mon compte{% endblock %}
+{% block counters %}{% endblock %}
+{% block content %}
+<div class="account-page">
+ <section class="box">
+  <h2>{{ user.name }}</h2>
+  <p class="muted"><span class="mono">{{ user.user }}</span> · {{ ROLE_LABEL[user.role] }} · {{ 'compte local' if local_account else 'connexion par le fournisseur d’identité' }}</p>
+ </section>
+ <section class="box">
+  <h2>Mot de passe</h2>
+  {% if local_account %}
+  <form method="post" action="/account/password" class="frm" autocomplete="off">
+   <label for="mp-old">Mot de passe actuel</label>
+   <input id="mp-old" name="old" type="password" required autocomplete="current-password">
+   <label for="mp-new">Nouveau mot de passe</label>
+   <input id="mp-new" name="new" type="password" required minlength="12" maxlength="200" autocomplete="new-password" aria-describedby="mp-h">
+   <p class="muted small" id="mp-h">{{ PW_RULE }}</p>
+   <div class="row-end"><small class="muted">Tes autres sessions seront fermées.</small><button class="btn primary">Changer le mot de passe</button></div>
+  </form>
+  {% else %}
+  <p class="muted">Ce compte se connecte par le fournisseur d'identité : son mot de passe se change là-bas.</p>
+  {% endif %}
+ </section>
+</div>
+{% endblock %}
+{% block foot %}Mon compte{% endblock %}

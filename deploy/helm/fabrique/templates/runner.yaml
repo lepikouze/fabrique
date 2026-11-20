@@ -1,0 +1,141 @@
+{{- if .Values.runner.enabled }}
+{{- $name := include "fabrique.fullname" . }}
+{{- $k8s := eq .Values.runner.executor "kubernetes" }}
+{{- if not (has .Values.runner.executor (list "kubernetes" "local")) }}{{ fail "runner.executor : « kubernetes » ou « local »" }}{{ end }}
+{{- if not .Values.runner.persistence.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-travail
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+spec:
+  accessModes: [{{ .Values.runner.persistence.accessMode }}]
+  {{- with .Values.runner.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.runner.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-runner
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runner
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {{- include "fabrique.selector" . | nindent 6 }}
+      app.kubernetes.io/component: runner
+  template:
+    metadata:
+      labels: {{- include "fabrique.labels" . | nindent 8 }}
+        app.kubernetes.io/component: runner
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | trunc 16 }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        {{- if $k8s }}
+        # Volume de travail neuf (NFS, CSI) : la racine appartient souvent à root. Le groupe du runner lui est donné au
+        # montage, pour qu'il puisse y écrire ; vérifié sur la racine seulement, pas fichier par fichier.
+        fsGroup: 10002
+        fsGroupChangePolicy: OnRootMismatch
+        {{- end }}
+      containers:
+        - name: runner
+          image: {{ include "fabrique.image" (dict "root" . "name" "fabrique-runner") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - {name: TZ, value: {{ .Values.timezone | quote }}}
+            - {name: FABRIQUE_URL, value: "http://{{ $name }}:{{ .Values.service.port }}"}
+            - name: FABRIQUE_RUNNER_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: runner-token}}
+            - {name: RUNNER_HOST, value: {{ .Values.runner.name | quote }}}
+            - {name: RUNNER_TAGS, value: {{ .Values.runner.tags | quote }}}
+            - {name: CAPACITY, value: {{ .Values.runner.capacity | quote }}}
+            {{- if $k8s }}
+            # « docker » désigne ici l'exécution par un launcher, un conteneur par job : sur Kubernetes, un Pod par job.
+            - {name: EXECUTOR, value: docker}
+            - {name: LAUNCHER_URL, value: "http://{{ $name }}-launcher:7080"}
+            - name: LAUNCHER_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: launcher-token}}
+            - {name: RELAY_HOST, value: "0.0.0.0"}
+            - {name: RELAY_PUBLIC_URL, value: "http://{{ $name }}-runner:7071"}
+            - {name: GATEWAY_PUBLIC_URL, value: "http://{{ $name }}-runner:7072"}
+            - {name: JOB_PROXY, value: "http://{{ $name }}-proxy:3128"}
+            - {name: AGENT_UID, value: ""}       # pas de changement d'utilisateur : le runner EST déjà l'utilisateur sans droits
+            - {name: HOME, value: /tmp}
+            {{- else }}
+            - {name: EXECUTOR, value: local}
+            {{- end }}
+            - {name: GIT_AUTHOR, value: {{ .Values.runner.gitAuthor | quote }}}
+            {{- include "fabrique.proxyEnv" . | nindent 12 }}
+            {{- with .Values.runner.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}
+          {{- if $k8s }}
+          ports:
+            - {name: relay, containerPort: 7071}
+            - {name: gateway, containerPort: 7072}
+          {{- end }}
+          securityContext:
+            {{- if $k8s }}
+            # Un Pod par job : plus aucun code d'agent ne tourne ici. Le runner est un utilisateur sans droits, le même
+            # que celui des Pods de jobs (10002), ce qui lui suffit pour préparer leur espace de travail dans le volume
+            # partagé. Conforme au niveau Pod Security « restricted ».
+            runAsNonRoot: true
+            runAsUser: 10002
+            runAsGroup: 10002
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            {{- else }}
+            # Jobs dans ce Pod : le runner démarre en root sans capacités, sauf celles qui lui servent à lancer l'agent
+            # sous un autre utilisateur (10002, sans droits ni secrets) et à l'arrêter. Niveau Pod Security « baseline ».
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [SETUID, SETGID, KILL]}
+            {{- end }}
+          resources: {{- toYaml .Values.runner.resources | nindent 12 }}
+          volumeMounts:
+            - {name: travail, mountPath: /work}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: travail
+          persistentVolumeClaim:
+            claimName: {{ .Values.runner.persistence.existingClaim | default (printf "%s-travail" $name) }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- if $k8s }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-runner
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runner
+spec:
+  selector: {{- include "fabrique.selector" . | nindent 4 }}
+    app.kubernetes.io/component: runner
+  ports:                                 # joints par les Pods de jobs seulement (NetworkPolicy)
+    - {name: relay, port: 7071, targetPort: relay}
+    - {name: gateway, port: 7072, targetPort: gateway}
+{{- end }}
+{{- end }}

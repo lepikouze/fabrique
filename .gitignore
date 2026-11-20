@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+/data/
+*.db
+*.db-*
+
+# outils locaux
+.venv/
+.impeccable/
+/deploy/.env
+.env

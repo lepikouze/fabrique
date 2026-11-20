@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/garde.py", "timeout": 10}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/controle.py hook", "timeout": 30}]}
+    ]
+  },
+  "permissions": {
+    "deny": ["WebFetch", "WebSearch", "Bash(git push:*)", "Bash(git remote:*)", "Bash(git config:*)", "Bash(curl:*)", "Bash(wget:*)",
+             "Read(/proc/**)", "Read(/etc/claude-code/**)", "Read(/opt/fabrique/**)"]
+  },
+  "attribution": {"commit": "Co-Authored-By: Fabrique <fabrique@fabrique.invalid>", "pr": ""},
+  "allowManagedHooksOnly": true,
+  "disableBypassPermissionsMode": "disable",
+  "cleanupPeriodDays": 30
+}

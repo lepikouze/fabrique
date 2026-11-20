@@ -1,0 +1,225 @@
+{{- if and .Values.runner.enabled (eq .Values.runner.executor "kubernetes") }}
+{{- $name := include "fabrique.fullname" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+---
+# Tout ce que la Fabrique peut faire dans le cluster : gérer des Pods et y exécuter des commandes, dans CE namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods/log]            # lecture du journal du proxy : sorties réseau de chaque job
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}-launcher}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}-launcher, namespace: {{ .Release.Namespace }}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: launcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "fabrique.selector" . | nindent 6 }}
+      app.kubernetes.io/component: launcher
+  template:
+    metadata:
+      labels: {{- include "fabrique.labels" . | nindent 8 }}
+        app.kubernetes.io/component: launcher
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ $name }}-launcher      # le SEUL Pod de la Fabrique qui a un accès à l'API du cluster
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: launcher
+          image: {{ include "fabrique.image" (dict "root" . "name" "fabrique-runner") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [python, -m, lanceur.kube]
+          ports:
+            - {name: http, containerPort: 7080}
+          env:
+            - name: LAUNCHER_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ include "fabrique.secretName" . }}, key: launcher-token}}
+            - name: JOBS_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: JOBS_PREFIX, value: "{{ $name }}-job"}
+            - {name: PROXY_SELECTOR, value: "app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=proxy"}
+            - {name: WORK_PVC, value: {{ .Values.runner.persistence.existingClaim | default (printf "%s-travail" $name) | quote }}}
+            - name: ATELIER_IMAGES
+              value: {{ $imgs := list }}{{ range $k, $v := .Values.jobs.images }}{{ $imgs = append $imgs (printf "%s=%s/%s:%s" $k $.Values.image.registry $v ($.Values.image.tag | toString)) }}{{ end }}{{ join "," $imgs | quote }}
+            - {name: JOB_MEMORY, value: {{ .Values.jobs.memory | quote }}}
+            - {name: JOB_CPUS, value: {{ .Values.jobs.cpu | quote }}}
+            - {name: JOB_START_TIMEOUT, value: {{ .Values.jobs.startTimeoutSeconds | quote }}}
+            - {name: JOB_IMAGE_PULL_POLICY, value: {{ .Values.image.pullPolicy | quote }}}
+            - {name: JOB_IMAGE_PULL_SECRETS, value: {{ $ps := list }}{{ range .Values.imagePullSecrets }}{{ $ps = append $ps .name }}{{ end }}{{ join "," $ps | quote }}}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.launcher.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: launcher
+spec:
+  selector: {{- include "fabrique.selector" . | nindent 4 }}
+    app.kubernetes.io/component: launcher
+  ports:
+    - {name: http, port: 7080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-proxy
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "fabrique.selector" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels: {{- include "fabrique.labels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Le proxy ne résout que des noms publics complets : sans cela, le résolveur essaie d'abord les domaines de recherche
+      # du cluster et du nœud (pypi.org.<domaine>…), et une réponse vide sur l'un d'eux fait échouer la résolution.
+      dnsConfig:
+        options:
+          - {name: ndots, value: "1"}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: proxy
+          image: {{ include "fabrique.image" (dict "root" . "name" "fabrique-proxy") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - {name: proxy, containerPort: 3128}
+          env:
+            - {name: PROXY_ALLOW, value: {{ join "," .Values.proxy.allow | quote }}}
+            {{- if .Values.outboundProxy.url }}
+            - {name: PROXY_UPSTREAM, value: {{ .Values.outboundProxy.url | quote }}}
+            - {name: PROXY_NO_UPSTREAM, value: {{ .Values.outboundProxy.noProxy | quote }}}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.proxy.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-proxy
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  selector: {{- include "fabrique.selector" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  ports:
+    - {name: proxy, port: 3128, targetPort: proxy}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Un Pod de job ne reçoit rien et ne joint que trois choses : le proxy de sortie (liste blanche), le relay et la gateway
+# du runner, et le DNS du cluster. Pas l'API Kubernetes, pas le dashboard, pas Internet en direct.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-jobs
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {fabrique.io/role: job}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "fabrique.selector" . | nindent 14 }}
+              app.kubernetes.io/component: proxy
+      ports:
+        - {protocol: TCP, port: 3128}
+    - to:
+        - podSelector:
+            matchLabels: {{- include "fabrique.selector" . | nindent 14 }}
+              app.kubernetes.io/component: runner
+      ports:
+        - {protocol: TCP, port: 7071}
+        - {protocol: TCP, port: 7072}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Le launcher n'est joint que par le runner.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-launcher
+  labels: {{- include "fabrique.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "fabrique.selector" . | nindent 6 }}
+      app.kubernetes.io/component: launcher
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "fabrique.selector" . | nindent 14 }}
+              app.kubernetes.io/component: runner
+      ports:
+        - {protocol: TCP, port: 7080}
+{{- end }}
+{{- end }}

@@ -1,0 +1,191 @@
+{% from "_macros.html" import ic, dot, stage_pill, model_badge %}
+{% macro head() %}
+<div class="p-id mono">{{ j.ref }}{% if j.source == 'étude' %} · étude{% else %} · {{ j.branch }}{% endif %}</div>
+<h2 class="p-title">{{ j.title }}</h2>
+<div class="p-badges">
+ {{ stage_pill(j.stage_info) }}
+ <span class="pill">{{ j.activity_label }}</span>
+ {{ model_badge(j.model) }}
+ {% set mx = j.models or {} %}{% if mx.review_model %}<span class="pill" title="Modèle des relecteurs">relu par <span class="mono">{{ mx.review_model }}</span></span>{% endif %}
+ {% if mx.profile %}<span class="pill" title="Profil de modèles retenu à la création du job">profil {{ mx.profile }}</span>{% endif %}
+ {% if j.repo %}<span class="pill mono">{{ j.repo.slug }}</span>{% endif %}
+</div>
+<p class="p-run">{{ j.harness_label }} · {{ ('runner ' ~ j.runner.name) if j.runner else 'aucun runner encore' }} <span class="mono">{{ j.cost|money }}</span> <span class="muted">sur un budget de</span> <span class="mono">{{ j.budget|money }}</span></p>
+{% if j.budget and j.cost %}{% set pct = (j.cost / j.budget * 100)|round|int %}<div class="meter {{ 'warn' if pct >= 80 }}" role="meter" aria-label="Budget consommé" aria-valuenow="{{ [pct, 100]|min }}" aria-valuemin="0" aria-valuemax="100"><i style="width:{{ [pct, 100]|min }}%"></i></div>{% endif %}
+<div class="p-actions">
+ {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="btn" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Pull request{{ ic('ext') }}</a>{% endif %}
+ {% if can(user, 'decide') and j.stage not in ('merged', 'done', 'failed') and j.source != 'démo' %}
+ <form method="post" action="/jobs/{{j.ref}}/cancel" data-confirm="Arrêter {{ j.ref }} ? L'agent est tué et le job passe en échec.">{% if j.cancel_requested %}<button class="btn" disabled>Arrêt demandé…</button>{% else %}<button class="btn danger">{{ ic('x') }}Arrêter le job</button>{% endif %}</form>{% endif %}
+ {% if can(user, 'archive') and (j.stage in ('merged', 'done', 'failed') or j.merge_state == 'refused') %}
+ <form method="post" action="/jobs/{{j.ref}}/archive">{% if j.archived %}<input type="hidden" name="restore" value="1">{% endif %}<button class="btn">{{ ic('archive') }}{{ 'Restaurer' if j.archived else 'Archiver' }}</button></form>{% endif %}
+ {% if can(user, 'settings') and j.archived and j.source != 'démo' %}<button type="button" class="btn danger" data-delete-ref="{{ j.ref }}" data-delete-phrase="{{ DELETE_PHRASE(j) }}" data-delete-title="{{ j.title }}">Supprimer…</button>{% endif %}
+</div>
+<p class="p-from muted">Demandé par <b>{{ j.requester }}</b> le {{ j.created_at|date_longue }} · source : {{ j.source }}</p>
+{% endmacro %}
+
+{% macro study_block() %}
+{% if j.source == 'étude' %}
+<section class="sec">
+ <h3>Rapport d'étude</h3>
+ {% if j.report %}
+ <p class="row-end"><a class="btn sm" href="/jobs/{{ j.ref }}/rapport.md" download>Télécharger le rapport (Markdown)</a></p>
+ <div class="prose report">{{ j.report }}</div>
+ <p class="muted small">Texte rendu par l'agent, affiché tel quel. Une étude ne modifie rien : aucune branche, aucune PR.</p>
+ {% if can(user, 'request') %}<p><a class="btn" href="/new?from={{ j.ref }}">{{ ic('plus') }}En faire une demande</a></p>{% endif %}
+ {% elif j.stage == 'failed' %}<p class="muted">L'étude a échoué avant de rendre son rapport.</p>
+ {% else %}<p class="muted">L'agent étudie le repo. Il ne modifie rien : son rapport s'affichera ici.</p>{% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro request_block() %}
+<section class="sec">
+ <h3>La demande</h3>
+ <p class="prose">{{ j.request }}</p>
+ {% if j.done_when %}<p class="prose"><b>Terminé quand :</b> {{ j.done_when }}</p>{% endif %}
+</section>
+{% endmacro %}
+
+{% macro qa() %}
+{% for q in j.questions %}
+ <div class="callout {{ 'c-amber' if q.answer is none else 'c-green' }}">
+  <b class="ct">{{ 'Question pour toi' if q.answer is none else 'Réponse reçue ' ~ (q.answered_at|hms) }}</b>
+  <p>{{ q.question }}</p>
+  {% if q.answer is not none %}<p class="ans"><span class="muted">{{ q.answered_by }} :</span> {{ q.answer }}</p>{% endif %}
+ </div>
+{% endfor %}
+{% if j.open_question and j.stage == 'waiting' and (can(user, 'answer') or j.requester == user.user) %}
+ <form method="post" action="/jobs/{{j.ref}}/answer" class="answer" data-cmd-enter>
+  <label for="ans-{{j.ref}}">Ta réponse</label>
+  <textarea id="ans-{{j.ref}}" name="answer" rows="3" required maxlength="4000" placeholder="Réponds à la question…"></textarea>
+  <div class="row-end"><small class="muted">L'agent reprend au tri avec ta réponse, traitée comme une donnée.</small><button class="btn primary">{{ ic('send') }}Envoyer</button></div>
+ </form>
+{% endif %}
+{% endmacro %}
+
+{% macro decision() %}
+{% set d = j.decision %}
+{% if d %}
+<section class="sec">
+ <h3>Décision de merge <span class="muted right">{{ POLICIES[d.policy][0] }} · {{ d.at|hm }}</span></h3>
+ <p class="state-line">{% if j.merge_state == 'merged' %}<span class="ok">Mergé</span>{% elif j.merge_state == 'ready' %}<span class="amber">Attend la décision d'un reviewer</span>{% elif j.merge_state == 'approved' %}<span class="ok">Approuvée</span> · en attente du runner{% elif j.merge_state == 'reviewing' %}<span class="amber">Vérification relancée</span> · en attente du runner{% elif j.merge_state == 'refused' %}<span class="bad">Refusée</span>{% else %}En attente des checks{% endif %}</p>
+ <p>{{ d.recommendation }}</p>
+ {% set ef = REVIEW_EFFORT(j) %}{% if ef %}<p class="effort"><b>Effort de relecture : {{ ef.n }}/5</b> <span class="muted">({{ ef.label }}) · {{ ef.files }} fichier(s), +{{ ef.add }} −{{ ef.rem }}</span></p>{% endif %}
+ <ul class="limits">{% for l in d.limits %}<li class="{{ 'l-ok' if l.ok else 'l-bad' }}">{{ ic('check' if l.ok else 'x') }}<b>{{ l.name }}</b><span class="muted">{{ l.detail }}</span></li>{% endfor %}</ul>
+ <h4>Interprétation</h4>{% if d.interpretation|length > 600 %}<details class="long"><summary class="prose">{{ d.interpretation[:400] }}… <span class="link">tout afficher</span></summary><p class="prose">{{ d.interpretation }}</p></details>{% else %}<p class="prose">{{ d.interpretation }}</p>{% endif %}
+ {% if d.assumptions %}{% set hyp = [d.assumptions|join('') ~ '…'] if d.assumptions|map('length')|max <= 1 else d.assumptions %}<h4>Hypothèses</h4><ul class="bul">{% for a in hyp %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+ <p class="verdict {{ 'ok' if d.confident else 'amber' }}">{{ ic('check' if d.confident else 'x') }}{{ d.verdict }}</p>
+ {% if d.notes %}<h4>Notes</h4>{% if d.notes|length > 600 %}<details class="long"><summary class="prose muted">{{ d.notes[:400] }}… <span class="link">tout afficher</span></summary><p class="prose muted">{{ d.notes }}</p></details>{% else %}<p class="prose muted">{{ d.notes }}</p>{% endif %}{% endif %}
+ {% if j.merge_state == 'ready' and can(user, 'decide') %}
+ {% set checks = TO_CHECK(j) %}{% set chg = CHANGES_URL(j) %}
+ {% if checks %}<div class="callout c-amber"><b class="ct">À vérifier avant d'approuver</b>
+  <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b> : {{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
+ <p class="links">{% if chg %}<a class="link" href="{{ chg }}" target="_blank" rel="noopener noreferrer">Voir les changements {{ ic('ext') }}</a>{% endif %}
+  {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="link" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Relire la PR #{{ j.pr_number }} {{ ic('ext') }}</a>{% endif %}</p>
+ <form method="post" action="/jobs/{{j.ref}}/decide" class="decide">
+  <label class="sr" for="note-{{j.ref}}">Commentaire (facultatif)</label>
+  <input id="note-{{j.ref}}" name="note" maxlength="300" placeholder="Commentaire pour l'audit (facultatif)">
+  <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approuver le merge</button>
+  <button class="btn danger" name="verdict" value="refuse">Refuser</button>
+ </form>
+ {% if j.source != 'onboarding' %}<form method="post" action="/jobs/{{j.ref}}/reviews" class="inline"><button class="btn" title="Le runner relit le même sha, sans relancer l'agent">Relancer la vérification</button></form>{% endif %}
+ {% endif %}
+</section>
+{% endif %}
+{% if j.stage == 'spec' and can(user, 'decide') %}
+<section class="sec"><h3>Spec à valider</h3><p>{{ j.timeline[-1].summary if j.timeline else '' }}</p>
+ <form method="post" action="/jobs/{{j.ref}}/spec" class="decide">
+  <input name="note" maxlength="300" placeholder="Commentaire (facultatif)" aria-label="Commentaire">
+  <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Valider la spec</button>
+  <button class="btn danger" name="verdict" value="refuse">Refuser</button>
+ </form></section>
+{% endif %}
+{% endmacro %}
+
+{% macro reviews_block() %}
+{% if j.reviews %}{% set cur = j.reviews|selectattr('sha', 'equalto', j.verified_sha)|list %}{% set shown = cur or j.reviews %}
+<section class="sec">
+ <h3>Vérification <span class="muted right mono">{{ (shown|first).sha }}</span></h3>
+ <p class="muted small">Agents vérificateurs en lecture seule, sur le diff vérifié. Un point bloquant donne une seule ronde de correction.</p>
+ {% for r in shown|sort(attribute='role') %}
+ <details class="check" {% if r.verdict != 'ok' %}open{% endif %}>
+  <summary><span class="{{ 'ok' if r.verdict == 'ok' else 'bad' if r.verdict == 'bloquant' else 'amber' }}">{{ ic('check' if r.verdict == 'ok' else 'x') }}</span><b>{{ REVIEW_ROLES[r.role] }}</b><span class="muted">{{ REVIEW_VERDICTS[r.verdict] }}</span><span class="mono muted right">{{ r.model }}</span></summary>
+  <div class="review-body">{% if r.summary %}<p>{{ r.summary }}</p>{% endif %}{% if r.points %}<ul class="bul">{% for p in r.points %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}</div>
+ </details>
+ {% endfor %}
+ {% if cur and cur|length < j.reviews|length %}<p class="muted small">Vérification précédentes (avant correction) : {{ j.reviews|length - cur|length }}, dans le journal d'audit et les événements.</p>{% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro evidence() %}
+{% if j.evidence %}
+<section class="sec">
+ <h3>Preuves</h3>
+ {% set ok = j.evidence|selectattr('ok')|list|length %}
+ <p class="{{ 'ok' if ok == j.evidence|length else 'bad' }} ver">{{ ic('shield') }}Vérifié à <span class="mono">{{ j.verified_sha }}</span> · {{ ok }}/{{ j.evidence|length }} checks</p>
+ <p class="muted small">Relancés par le runner sur le commit exact · recipe du repo figée à l'onboarding</p>
+ {% for e in j.evidence %}
+ <details class="check">
+  {% set warn = SECURITY_WARN(e) %}
+  <summary><span class="{{ 'amber' if warn else 'ok' if e.ok else 'bad' }}" {% if warn %}title="Alertes à titre d'information"{% endif %}>{{ ic('shield' if warn else 'check' if e.ok else 'x') }}</span><b>{{ e.name }}</b><span class="mono muted cmd">{{ e.command }}</span><span class="mono muted right">{{ e.duration_ms|duree }}</span></summary>
+  <pre class="console">{{ e.output }}</pre>
+ </details>
+ {% endfor %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro audit_block() %}
+{% if j.audit %}
+<section class="sec">
+ <h3>Journal d'audit</h3>
+ <ol class="audit">{% for a in j.audit %}<li><span class="a-h"><b class="{{ 'ok' if a.action == 'Mergé' }}">{{ a.action }}</b>{% if a.target %} <span class="mono muted">{{ a.target }}</span>{% endif %}<span class="mono muted right">{{ a.at|hms }}</span></span><span class="muted small">{{ a.actor }}{% if a.detail %} · {{ a.detail }}{% endif %}</span></li>{% endfor %}</ol>
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro timeline_block() %}
+<section class="sec">
+ <h3>Chronologie</h3>
+ <ol class="tl">{% for t in j.timeline %}
+  <li class="tl-{{t.state}}" style="--c:{{ t.info.color }}"><span class="tl-dot" aria-hidden="true"></span><span class="tl-h"><b>{{ t.info.label }}</b>{% if t.at %}<span class="mono muted right">{{ t.at|hms }}</span>{% endif %}</span>{% if t.summary %}<p>{{ t.summary }}</p>{% endif %}<span class="sr">{{ {'done': 'terminée', 'current': 'en cours', 'todo': 'à venir'}[t.state] }}</span></li>
+ {% else %}<li class="muted">Pas encore commencé : le job attend un runner.</li>{% endfor %}</ol>
+</section>
+{% endmacro %}
+
+{% macro agents_block() %}
+{% if j.agents %}
+<section class="sec">
+ <h3>Agents · {{ j.agents|length }}</h3>
+ <ul class="agents">{% for a in j.agents %}
+  <li class="{{ 'sub' if a.name != 'session principale' }}">{{ dot('var(--ok)' if a.state == 'running' else 'var(--ink-3)') }}<b>{{ a.name }}</b>{% if a.name != 'session principale' %}<span class="muted"> · {{ a.task }}</span>{% endif %}{{ model_badge(a.model) }}<span class="mono muted right">{{ a.tokens|tokens }} · {{ a.cost|money }}</span></li>
+ {% endfor %}</ul>
+</section>
+{% endif %}
+{% endmacro %}
+
+{% macro events_block() %}
+<section class="sec">
+ <h3>Événements en direct{% if j.events %}<button type="button" class="ghost sq right copy-btn" data-copy="#ev-{{j.ref}}" title="Copier le journal (ordre chronologique)" aria-label="Copier le journal des événements">{{ ic('copy') }}</button>{% endif %}</h3>
+ {% if j.events %}<ol class="events mono" id="ev-{{j.ref}}">{% for e in j.events %}<li><span class="muted">{{ e.at|hms }}</span> <b>{{ e.kind }}</b> {{ e.message }}</li>{% endfor %}</ol>
+ {% else %}<p class="muted">Aucun événement.</p>{% endif %}
+</section>
+{% endmacro %}
+
+<div class="p-bar">
+ {# Un job archivé vit dans la page Archives : réduire ou fermer y ramène, pas à la page Jobs. #}
+ {% set home = '/archives' if j.archived else '/jobs' %}
+ {% set bq = (back_qs|default('')) if j.archived else '' %}
+ {% if full %}<a class="ghost sq" href="{{ home }}?{{ bq ~ '&' if bq }}job={{j.ref}}" title="Revenir au panneau latéral (Échap)" aria-label="Réduire" data-shrink>{{ ic('shrink') }}</a>
+ {% else %}<a class="ghost sq" href="/jobs/{{j.ref}}" title="Ouvrir en grand" aria-label="Ouvrir en grand" data-expand>{{ ic('expand') }}</a>{% endif %}
+ <a class="ghost sq" href="{{ home }}{{ '?' ~ bq if bq }}" title="Fermer (Échap)" aria-label="Fermer" data-close>{{ ic('x') }}</a>
+</div>
+{% if full %}
+<div class="full2">
+ <div class="fcol">{{ head() }}{{ qa() }}{{ study_block() }}{{ decision() }}{{ request_block() }}{{ evidence() }}{{ reviews_block() }}{{ audit_block() }}</div>
+ <div class="fcol">{{ timeline_block() }}{{ agents_block() }}{{ events_block() }}</div>
+</div>
+{% else %}
+<div class="p-body" data-ref="{{j.ref}}">{{ head() }}{{ qa() }}{{ study_block() }}{{ decision() }}{{ request_block() }}{{ evidence() }}{{ reviews_block() }}{{ timeline_block() }}{{ agents_block() }}{{ events_block() }}{{ audit_block() }}</div>
+{% endif %}

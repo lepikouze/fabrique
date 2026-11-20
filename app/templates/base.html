@@ -1,0 +1,116 @@
+{% from "_macros.html" import ic, dot %}
+<!doctype html>
+<html lang="fr" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>{% block title %}{% endblock %} · Fabrique</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=3"><link rel="apple-touch-icon" href="/static/icon-180.png?v=1">
+<link rel="stylesheet" href="/static/app.css?v=28">
+<script src="/static/theme.js?v=2"></script>
+</head>
+<body class="pg-{{page}}" data-page="{{page}}">
+{% include "_icons.html" %}
+<a class="skip" href="#main">Aller au contenu</a>
+<div class="shell" id="shell">
+ <nav class="side" aria-label="Navigation principale">
+  <a class="brand" href="/jobs" aria-label="Fabrique, accueil"><svg class="logo-mark" viewBox="343 214 575 762" aria-hidden="true"><g  fill-rule="evenodd"><path d="M351 347 659 222V327L903 222V474H535V585H840a70 70 0 0 1 0 140H535V918c0 30-19 50-48 50h-8c-30 0-49-20-49-50V486h-79Z M434 357h66v69h-66Z M526 357h66v69h-66Z M695 357h66v69h-66Z M787 357h66v69h-66Z M557.5 613H839a41.5 41.5 0 0 1 0 83H557.5a41.5 41.5 0 0 1 0-83Z M545 594h16v12h-16Z M595 594h16v12h-16Z M645 594h16v12h-16Z M695 594h16v12h-16Z M745 594h16v12h-16Z M795 594h16v12h-16Z M845 594h16v12h-16Z M545 703h16v12h-16Z M595 703h16v12h-16Z M645 703h16v12h-16Z M695 703h16v12h-16Z M745 703h16v12h-16Z M795 703h16v12h-16Z M845 703h16v12h-16Z"/><path d="M603.2 655a31.7 31.7 0 1 1 -63.4 0a31.7 31.7 0 1 1 63.4 0Z M594.5 655a7 7 0 1 1 -14 0a7 7 0 1 1 14 0Z"/><path d="M861.7 655a31.7 31.7 0 1 1 -63.4 0a31.7 31.7 0 1 1 63.4 0Z M853 655a7 7 0 1 1 -14 0a7 7 0 1 1 14 0Z"/></g></svg><span class="lbl">{% with cls="" %}{% include "_wordmark.html" %}{% endwith %}</span></a>
+  {% set need = counters.need %}
+  <a href="/inbox" class="nav {{'on' if page == 'inbox'}}" {% if page == 'inbox' %}aria-current="page"{% endif %} title="Inbox">{{ ic('inbox') }}<span class="lbl">Inbox</span>{% if need %}<b class="badge" aria-label="{{need}} en attente">{{ need }}</b>{% endif %}</a>
+  <a href="/jobs" class="nav {{'on' if page == 'jobs'}}" {% if page == 'jobs' %}aria-current="page"{% endif %} title="Jobs">{{ ic('board') }}<span class="lbl">Jobs</span></a>
+  <a href="/new" class="nav {{'on' if page == 'new'}}" {% if page == 'new' %}aria-current="page"{% endif %} title="Nouvelle demande">{{ ic('plus') }}<span class="lbl">Nouvelle demande</span></a>
+  {% if can(user, 'see_infra') %}
+  <span class="sep" role="separator"></span>
+  <a href="/runners" class="nav {{'on' if page == 'runners'}}" {% if page == 'runners' %}aria-current="page"{% endif %} title="Runners">{{ ic('server') }}<span class="lbl">Runners</span></a>
+  <a href="/repos" class="nav {{'on' if page == 'repos'}}" {% if page == 'repos' %}aria-current="page"{% endif %} title="Repos">{{ ic('repo') }}<span class="lbl">Repos</span></a>
+  <a href="/activity" class="nav {{'on' if page == 'activity'}}" {% if page == 'activity' %}aria-current="page"{% endif %} title="Audit log">{{ ic('pulse') }}<span class="lbl">Audit log</span></a>
+  {% endif %}
+  {% if start_todo %}<a href="/start" class="nav {{'on' if page == 'start'}}" title="Setup">{{ ic('plus') }}<span class="lbl">Setup</span><span class="badge">{{ start_todo }}</span></a>{% endif %}
+  {% if can(user, 'settings') %}<a href="/settings" class="nav {{'on' if page == 'settings'}}" {% if page == 'settings' %}aria-current="page"{% endif %} title="Settings">{{ ic('gear') }}<span class="lbl">Settings</span></a>{% endif %}
+  <div class="side-foot">
+   <details class="usermenu">
+    <summary class="me" title="{{ user.name }} · {{ ROLE_LABEL[user.role] }}"><span class="av" aria-hidden="true">{{ user.name[:1]|upper }}</span><span class="lbl"><b>{{ user.name }}</b><small>{{ ROLE_LABEL[user.role] }}</small></span>{{ ic('chev', 'chev lbl') }}</summary>
+    <div class="menu" role="menu">
+     <span class="menu-h">Thème</span>
+     <div class="theme-pick" role="group" aria-label="Thème">
+      <button type="button" data-theme-set="light" role="menuitemradio">Clair</button><button type="button" data-theme-set="dark" role="menuitemradio">Sombre</button><button type="button" data-theme-set="auto" role="menuitemradio">Auto</button>
+     </div>
+     <span class="menu-h">Jobs : tableau</span>
+     <form method="post" action="/prefs/jobs" class="theme-pick" role="group" aria-label="Affichage du tableau des jobs">
+      <button name="board" value="stages" role="menuitemradio" aria-checked="{{ 'true' if view_prefs.board == 'stages' else 'false' }}" title="Une colonne par étape">Par étape</button><button name="board" value="compact" role="menuitemradio" aria-checked="{{ 'true' if view_prefs.board == 'compact' else 'false' }}" title="Quatre colonnes : en attente, en cours, à toi, terminé">Condensé</button>
+     </form>
+     <span class="menu-h">Jobs : liste</span>
+     <form method="post" action="/prefs/jobs" class="theme-pick" role="group" aria-label="Affichage de la liste des jobs">
+      <button name="list" value="grouped" role="menuitemradio" aria-checked="{{ 'true' if view_prefs.list == 'grouped' else 'false' }}" title="Un groupe par étape">Par étape</button><button name="list" value="flat" role="menuitemradio" aria-checked="{{ 'true' if view_prefs.list == 'flat' else 'false' }}" title="Une ligne par job, par dernière activité">À plat</button>
+     </form>
+     {% if mode == 'on' %}<a class="menu-i" href="/account" role="menuitem">Mon compte</a>{% endif %}
+     {% if user.role != 'admin' and mode == 'on' %}<button type="button" class="menu-i" role="menuitem" data-open-dialog="access-dlg">Demander un autre rôle</button>{% endif %}
+     {% if mode == 'on' %}<form method="post" action="/auth/logout"><button class="menu-i" role="menuitem">{{ ic('logout') }}Déconnecter</button></form>{% endif %}
+    </div>
+   </details>
+   <span class="version lbl" title="Version de la Fabrique">Fabrique {{ VERSION }}</span>
+  </div>
+ </nav>
+
+ {% if user.role != 'admin' and mode == 'on' %}
+ <dialog id="access-dlg" class="dlg" aria-labelledby="access-dlg-t">
+  <button type="button" class="ghost sq dlg-x" data-close-dialog aria-label="Fermer">{{ ic('x') }}</button>
+  <h2 id="access-dlg-t">Demander un autre rôle</h2>
+  <p class="muted">{{ user.name or user.user }} · rôle actuel : <b>{{ ROLE_LABEL[user.role] }}</b></p>
+  {% if access_request %}
+  <div class="callout c-amber"><b class="ct">Demande en attente</b><p>Rôle demandé : {{ ROLE_LABEL[access_request.role] }}{% if access_request.note %} — « {{ access_request.note }} »{% endif %}. Un admin la verra dans son inbox.</p></div>
+  {% else %}
+  <form method="post" action="/access" class="frm">
+   <label for="ad-role">Rôle demandé</label>
+   <select id="ad-role" name="role">{% for r in ('verifier', 'admin') %}{% if user.role == 'requester' or r == 'admin' %}<option value="{{r}}">{{ ROLE_LABEL[r] }}</option>{% endif %}{% endfor %}</select>
+   <label for="ad-note">Pourquoi <small>facultatif</small></label>
+   <textarea id="ad-note" name="note" rows="3" maxlength="500" placeholder="Je relis les PR de l'équipe infra."></textarea>
+   <div class="row-end"><button type="button" class="btn" data-close-dialog>Annuler</button><button class="btn primary">Envoyer la demande</button></div>
+  </form>
+  {% endif %}
+ </dialog>
+ {% endif %}
+
+ <div class="main-col">
+  <header class="top">
+   <button type="button" class="ghost sq" data-sidebar-toggle title="Afficher / masquer la barre latérale (B)" aria-label="Afficher ou masquer la barre latérale">{{ ic('sidebar') }}</button>
+   <h1>{% block h1 %}{% endblock %}</h1>
+   <div class="top-tools">{% block tools %}{% endblock %}</div>
+  </header>
+  {% if mode == 'off' or demo %}
+  <div class="banner" role="note">
+   {% if demo %}<span><b>Démonstration</b> · jobs, runners et coûts fictifs, animés par un simulateur. Aucun agent ne tourne.</span>{% endif %}
+   {% if mode == 'off' %}<span><b>Mode ouvert</b> · FABRIQUE_OPEN=1 : pas de connexion, tout visiteur est admin. Développement seulement.</span>
+   <form method="post" action="/dev/as" class="as"><label for="as-role">Voir en tant que</label>
+    <select id="as-role" name="role" data-autosubmit>{% for r in ('admin', 'verifier', 'requester') %}<option value="{{r}}" {{'selected' if user.role == r}}>{{ ROLE_LABEL[r] }}</option>{% endfor %}</select>
+    <noscript><button>OK</button></noscript></form>{% endif %}
+  </div>
+  {% endif %}
+  {% block counters %}
+  <section class="stats" aria-label="Compteurs du jour" data-live="stats">
+   <div><span>Jobs actifs</span><b class="acc">{{ counters.active }}</b><small>un agent travaille</small></div>
+   <div><span>En attente</span><b>{{ counters.idle }}</b><small>d'un runner, d'une réponse ou d'une décision</small></div>
+   <div><span>Agents en cours</span><b>{{ counters.agents }}</b><small>sessions et sous-agents</small></div>
+   <div><span>Tokens du jour</span><b>{{ counters.tokens|tokens }}</b><small>{{ counters.today }} job{{'s' if counters.today != 1}} touché{{'s' if counters.today != 1}} aujourd'hui</small></div>
+   <div><span>Dépense du jour</span><b class="mono">{{ counters.spend|money }}</b><small>coût API cumulé de ces jobs</small></div>
+  </section>
+  {% endblock %}
+  <div class="work">
+   <main id="main" class="content" tabindex="-1">{% block content %}{% endblock %}</main>
+   {% block aside %}{% endblock %}
+   {% if user and can(user, 'settings') %}{% include "_delete_dialog.html" %}{% endif %}
+  </div>
+  {% block footbar %}
+  <footer class="foot">
+   <span data-live="foot-l">{% block foot %}{% endblock %}</span>
+   <span class="live" id="live" data-state="connecting"><i class="dot" style="--c:var(--ok)"></i><span data-live="foot-r">En direct · {{ counters.active }} actif{{'s' if counters.active != 1}}</span></span>
+   <span class="keys" aria-hidden="true"><kbd>J</kbd> précédent <kbd>K</kbd> suivant <kbd>↵</kbd> ouvrir <kbd>Échap</kbd> fermer <kbd>B</kbd> barre</span>
+  </footer>
+  {% endblock %}
+ </div>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite">{% if flash and flash.ok %}<div class="toast ok">{{ ic('check') }}<span>{{ flash.ok }}</span></div>{% endif %}{% if flash and flash.err %}<div class="toast err" role="alert"><span>{{ flash.err }}</span></div>{% endif %}</div>
+<script src="/static/app.js?v=20" defer></script>
+</body>
+</html>

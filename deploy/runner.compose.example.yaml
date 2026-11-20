@@ -1,0 +1,90 @@
+# Fabrique — un runner, sur une autre machine que le dashboard. Trois services, chacun un seul pouvoir :
+#   runner   : reçoit les commandes du dashboard, pilote les jobs ; AUCUN accès Docker
+#   launcher : seul accès Docker ; crée les conteneurs jetables des jobs, avec une politique figée
+#   proxy    : seule sortie réseau des jobs, en liste blanche
+#
+# Deux valeurs à donner, rien d'autre :
+#   FABRIQUE_URL           l'adresse du dashboard, telle que cette machine la joint (ex. https://fabrique.exemple.org)
+#   FABRIQUE_RUNNER_TOKEN  le token affiché une fois par le dashboard : Runners → Nouveau runner
+#
+#   FABRIQUE_URL=https://fabrique.exemple.org FABRIQUE_RUNNER_TOKEN=fab_… docker compose -f runner.compose.example.yaml up -d
+#
+# Le runner apparaît « en ligne » dans le dashboard en quelques secondes. Les tokens Git et les clés des modèles se règlent
+# dans le dashboard (Settings) : rien à mettre ici. Images : mêmes variables que le compose.yaml (voir .env.example).
+name: ${COMPOSE_PROJECT_NAME:-fabrique-runner}
+
+x-durci: &durci
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+networks:
+  launcher:                      # runner <-> launcher, rien d'autre
+  jobs:                          # jobs <-> proxy, relay et gateway du runner ; aucune sortie directe
+    name: ${COMPOSE_PROJECT_NAME:-fabrique-runner}-jobs
+    internal: true
+
+volumes:
+  jeton-lanceur:                 # token partagé runner <-> launcher, créé par le launcher : rien à générer
+
+services:
+  runner:
+    <<: *durci
+    image: ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-runner:${FABRIQUE_TAG:-latest}
+    depends_on: [launcher, proxy]
+    tmpfs: [/tmp]
+    mem_limit: 1g
+    cap_add: [SETUID, SETGID, KILL]            # changer d'utilisateur pour les opérations dans l'workspace
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      FABRIQUE_URL: ${FABRIQUE_URL:?donne l'adresse du dashboard (FABRIQUE_URL)}
+      FABRIQUE_RUNNER_TOKEN: ${FABRIQUE_RUNNER_TOKEN:?donne le token du runner (Runners → Nouveau runner)}
+      RUNNER_HOST: ${RUNNER_HOST:-runner-1}
+      RUNNER_TAGS: ${RUNNER_TAGS:-docker}
+      CAPACITY: ${CAPACITY:-2}
+      EXECUTOR: docker
+      LAUNCHER_URL: http://launcher:7080
+      LAUNCHER_TOKEN_FILE: /jeton-lanceur/jeton
+      RELAY_HOST: 0.0.0.0
+      RELAY_PUBLIC_URL: http://runner:7071
+      GATEWAY_PUBLIC_URL: http://runner:7072
+      JOB_PROXY: http://proxy:3128
+      GIT_AUTHOR: ${GIT_AUTHOR:-Agent Fabrique <fabrique-bot@noreply.invalid>}
+    volumes:
+      - ${FABRIQUE_WORK_DIR:-/opt/fabrique/travail}:/work
+      - jeton-lanceur:/jeton-lanceur:ro
+    networks: [launcher, jobs, default]
+
+  launcher:
+    <<: *durci
+    image: ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-runner:${FABRIQUE_TAG:-latest}
+    command: ["python", "-m", "lanceur.main"]
+    mem_limit: 256m
+    environment:
+      LAUNCHER_TOKEN_FILE: /jeton-lanceur/jeton
+      # Liste blanche des images de jobs : le runner ne choisit qu'un NOM de cette liste.
+      ATELIER_IMAGES: python=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-python:${FABRIQUE_TAG:-latest},node=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-node:${FABRIQUE_TAG:-latest},go=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-go:${FABRIQUE_TAG:-latest},java=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-java:${FABRIQUE_TAG:-latest}
+      JOBS_NETWORK: ${COMPOSE_PROJECT_NAME:-fabrique-runner}-jobs
+      JOBS_PREFIX: ${COMPOSE_PROJECT_NAME:-fabrique-runner}-job
+      WORK_HOST: ${FABRIQUE_WORK_DIR:-/opt/fabrique/travail}     # le même dossier que /work du runner, vu de l'hôte
+      JOB_MEMORY: ${JOB_MEMORY:-4g}
+      JOB_CPUS: ${JOB_CPUS:-2}
+      JOB_PIDS: ${JOB_PIDS:-512}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock                # SEUL composant avec l'accès Docker
+      - jeton-lanceur:/jeton-lanceur
+    networks: [launcher]
+
+  proxy:
+    <<: *durci
+    image: ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-proxy:${FABRIQUE_TAG:-latest}
+    tmpfs: [/tmp]
+    mem_limit: 128m
+    environment:
+      # Noms d'hôtes joignables par les jobs (expressions régulières ancrées). Rien d'autre ne sort.
+      PROXY_ALLOW: ${PROXY_ALLOW:-^pypi\.org$$,^files\.pythonhosted\.org$$,^registry\.npmjs\.org$$,^proxy\.golang\.org$$,^sum\.golang\.org$$,^repo\.maven\.apache\.org$$,^repo1\.maven\.org$$,^services\.gradle\.org$$,^downloads\.gradle\.org$$,^plugins\.gradle\.org$$,^plugins-artifacts\.gradle\.org$$}
+      # Derrière un proxy d'entreprise : les requêtes autorisées lui sont envoyées (voir docs/configuration.md).
+      PROXY_UPSTREAM: ${PROXY_UPSTREAM:-}
+      PROXY_NO_UPSTREAM: ${PROXY_NO_UPSTREAM:-}
+    networks: [jobs, default]

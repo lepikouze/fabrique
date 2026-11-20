@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% from "_macros.html" import empty %}
+{% block title %}Activité{% endblock %}
+{% block h1 %}Audit log{% endblock %}
+{% block counters %}{% endblock %}
+{% block content %}
+<div class="pad" data-live="activity">
+<p class="lead">Tout ce qui s'est passé, qui l'a fait et quand : connexions, demandes, réponses, décisions de merge, settings.</p>
+{% if not rows %}{{ empty('Aucune activité.', 'La première connexion ou la première demande apparaîtra ici.') }}{% else %}
+<table class="tbl audit-tbl"><thead><tr><th>Quand</th><th>Qui</th><th>Action</th><th class="col-ref">Job</th><th>Détail</th></tr></thead><tbody>
+{% for a in rows %}<tr><td class="mono nowrap">{{ a.at|quand }} {{ a.at|hms if (a.at|quand) != (a.at|hm) else '' }}</td><td class="mono">{{ a.actor }}</td><td><b>{{ a.action }}</b></td>
+<td>{% if a.ref %}<a class="mono link" href="/jobs?job={{a.ref}}">{{ a.ref }}</a>{% endif %}</td><td class="muted">{% if a.target %}<span class="mono">{{ a.target }}</span> {% endif %}{{ a.detail }}</td></tr>{% endfor %}
+</tbody></table>
+{% endif %}
+</div>
+{% endblock %}
+{% block foot %}{{ rows|length }} entrée{{'s' if rows|length != 1}} récentes{% endblock %}
