@@ -7,6 +7,7 @@
 | `app/` | Dashboard: FastAPI, Jinja templates, SQLAlchemy Core, Alembic migrations, live refresh over SSE |
 | `app/work.py` | Runners' order queue, events, gates |
 | `app/jobs.py`, `app/auth.py` | Jobs and repos; OIDC sign-in and roles |
+| `app/diffview.py`, `app/pdf.py` | Splitting a job's diff by file for display; study report as PDF (a small Markdown converter on reportlab) |
 | `app/providers.py`, `app/notify.py` | Model providers (encrypted keys); notifications |
 | `runner/main.py` | Runner loop and the steps of a job |
 | `runner/agent.py`, `runner/review.py` | Starting the agents (Claude Code, Codex); reviewers |
@@ -37,6 +38,11 @@ checks that the agent instructions keep their essential rules.
 
 SQLAlchemy Core, with no engine-specific SQL. Alembic migrations (`app/migrations`) are applied at start-up. Creating
 a migration: `alembic revision --autogenerate -m "…"`. A test checks that the migrations and the schema match.
+
+**Reads per page.** Inside a page request (`GET`), `db.cached(key, load)` keeps the result of a read for the duration
+of that request: the list of jobs, the repos, the runners and the settings are read once, however many parts of the page
+use them. Nothing is cached between requests, nor for requests that write. A test bounds the number of queries of the
+main pages (`tests/test_diff_pdf_perf.py`): if it fails, a read is being repeated.
 
 ## Images and continuous integration
 

@@ -51,6 +51,7 @@ REVIEW_TIMEOUT = int(_env("REVIEW_TIMEOUT", "600"))     # par relecteur ; au-del
 # Le mode direct vaut pour les modèles locaux et pour Anthropic avec clé d'API ; sinon le runner repasse en mode agent.
 REVIEW_MODE = _env("REVIEW_MODE", "direct")
 REVIEW_MAX_DIFF = int(_env("REVIEW_MAX_DIFF", "60000"))  # caractères de diff envoyés aux relecteurs
+DIFF_MAX = int(_env("FABRIQUE_DIFF_MAX", "400000"))    # caractères de diff envoyés au dashboard pour la lecture humaine ; 0 : aucun envoi
 STUDY_MAX = 40000   # taille maximale d'un rapport d'étude (caractères)
 REVIEW_MAX_TOKENS = int(_env("REVIEW_MAX_TOKENS", "8000"))  # réponse du relecteur, réflexion comprise ; coupée : 2e essai sans réflexion
 ANTHROPIC_API_URL = _env("ANTHROPIC_API_URL", "https://api.anthropic.com")

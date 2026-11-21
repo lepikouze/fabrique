@@ -156,14 +156,60 @@
     $$(".board, .col-b, .fcol, .p-body, .list, .events", root).forEach(function (el, i) { st.scroll.push([i, el.scrollLeft, el.scrollTop]); });
     if (root.scrollTop || root.scrollLeft) st.self = [root.scrollLeft, root.scrollTop];
     $$("details", root).forEach(function (d, i) { st.open[keyOf(d, i)] = d.open; });
+    st.typed = [];   // texte saisi et pas encore envoyé : une réponse en cours ne doit jamais disparaître
+    $$("textarea[name], input[type=text][name]", root).forEach(function (t) {
+      if (t.value !== t.defaultValue) st.typed.push([fieldKey(t), t.value]);
+    });
     return st;
   }
+  function fieldKey(t) { var f = t.form; return (f ? f.getAttribute("action") || "" : "") + "|" + t.name; }
   function restoreState(root, st) {
+    // Les sections d'abord, le défilement ensuite : tant qu'une section ouverte par le lecteur est encore repliée, la zone
+    // est plus courte et le navigateur borne la position demandée (on se retrouvait en haut ou en bas du job).
+    $$("details", root).forEach(function (d, i) { var k = keyOf(d, i); if (k in st.open) d.open = st.open[k]; });
     var els = $$(".board, .col-b, .fcol, .p-body, .list, .events", root);
     st.scroll.forEach(function (x) { var el = els[x[0]]; if (el) { el.scrollLeft = x[1]; el.scrollTop = x[2]; } });
     if (st.self) { root.scrollLeft = st.self[0]; root.scrollTop = st.self[1]; }
-    $$("details", root).forEach(function (d, i) { var k = keyOf(d, i); if (k in st.open) d.open = st.open[k]; });
+    (st.typed || []).forEach(function (x) {
+      var t = $$("textarea[name], input[type=text][name]", root).filter(function (e) { return fieldKey(e) === x[0]; })[0];
+      if (t && t.value === t.defaultValue) t.value = x[1];
+    });
   }
+
+  // ---- Diff d'un job : chargé à l'ouverture de « Lire le diff », gardé en mémoire pour survivre aux rafraîchissements ----
+  var diffCache = {};
+  function fillDiffs(root) {   // après le remplacement d'une zone : remet le diff déjà chargé, avant de restaurer les <details>
+    $$("details[data-diff]", root || document).forEach(function (d) {
+      var body = d.querySelector("[data-diff-body]"), html = diffCache[d.dataset.diff];
+      if (body && html && !body.dataset.loaded) { body.innerHTML = html; body.dataset.loaded = "1"; }
+    });
+  }
+  function loadDiff(d) {
+    var body = d.querySelector("[data-diff-body]"), url = d.dataset.diff;
+    if (!body || body.dataset.loaded || body.dataset.loading) return Promise.resolve();
+    if (diffCache[url]) { fillDiffs(d.parentNode); return Promise.resolve(); }
+    body.dataset.loading = "1";
+    return fetch(url, { headers: { "Accept": "text/html" }, credentials: "same-origin" }).then(function (r) {
+      if (r.status === 401) { location.reload(); return; }
+      return r.text().then(function (html) { if (r.ok) diffCache[url] = html; body.innerHTML = html; body.dataset.loaded = "1"; });
+    }).catch(function () { body.textContent = "Diff indisponible pour le moment."; }).then(function () { delete body.dataset.loading; });
+  }
+  document.addEventListener("toggle", function (e) {
+    var d = e.target;
+    if (d && d.matches && d.matches("details[data-diff]") && d.open) loadDiff(d);
+  }, true);
+  document.addEventListener("click", function (e) {   // un fichier de la liste : ouvre le diff, déplié sur ce fichier
+    var a = e.target.closest && e.target.closest("[data-diff-file]");
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    var sec = a.closest(".sec"), d = sec && sec.querySelector("details[data-diff]");
+    if (!d) return;
+    e.preventDefault();
+    d.open = true;
+    loadDiff(d).then(function () {
+      var f = d.querySelectorAll("details.dfile")[+a.dataset.diffFile];
+      if (f) { f.open = true; f.scrollIntoView({ block: "start", behavior: "smooth" }); }
+    });
+  });
 
   function loadPanel(ref, push) {
     if (!panel || (kind !== "job" && kind !== "inbox")) return false;
@@ -174,8 +220,10 @@
         var same = openRef === ref && !push;
         var typing = panel.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName) && document.activeElement.value;
         if (!push && typing) return;   // ne jamais écraser une réponse en cours de saisie
+        if (same && panel._served === html) return;   // rien n'a changé dans ce job : on ne touche pas à la fiche
         var st = same ? saveState(panel) : null;
-        panel.innerHTML = html; panel.hidden = false; wire(panel);
+        panel.innerHTML = html; panel._served = html; panel.hidden = false; wire(panel);
+        fillDiffs(panel);
         if (st) restoreState(panel, st);
         openRef = ref; markSelected(ref);
         if (push) history.pushState({ ref: ref }, "", pageUrl(ref));
@@ -184,7 +232,7 @@
   }
   function closePanel(push) {
     if (!panel) return;
-    panel.hidden = true; panel.innerHTML = ""; openRef = null; markSelected(null);
+    panel.hidden = true; panel.innerHTML = ""; panel._served = null; openRef = null; markSelected(null);
     if (push) history.pushState({ ref: null }, "", pageUrl(null));
   }
   function wire(root) {
@@ -235,7 +283,7 @@
   });
 
   // ---- Temps réel : à chaque changement en base, on rafraîchit les zones [data-live] et le panneau ouvert ----
-  var live = $("#live");
+  var live = $("#live") || ($("[data-live]") ? document.createElement("span") : null);   // vue en grand : pas de voyant, mais du direct
   var pending = null, busy = false;
   function refresh() {
     if (busy) { pending = pending || setTimeout(refresh, 600); return; }
@@ -249,10 +297,11 @@
           var fresh = doc.querySelector('[data-live="' + el.dataset.live + '"]');
           if (!fresh) return;
           if (el.contains(document.activeElement) && /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) return;
-          if (el.innerHTML === fresh.innerHTML) return;   // rien n'a changé : on ne touche à rien
+          if ((el._served || el.innerHTML) === fresh.innerHTML) return;   // rien n'a changé : on ne touche à rien
           var st = saveState(el), main = $("#main"), mainScroll = main ? [main.scrollLeft, main.scrollTop] : null;
           var focusRef = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ref : null;
-          el.innerHTML = fresh.innerHTML;
+          el.innerHTML = fresh.innerHTML; el._served = fresh.innerHTML;   // (un diff chargé à la demande s'ajoute ensuite)
+          fillDiffs(el);
           if (fresh.className !== el.className && el.classList.contains("jobs-wrap")) el.className = fresh.className;
           restoreState(el, st);
           if (main && mainScroll) { main.scrollLeft = mainScroll[0]; main.scrollTop = mainScroll[1]; }

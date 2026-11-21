@@ -8,7 +8,7 @@ hijacked. Fabrique assumes that **anything running in a job may be hostile**, an
 
 | Part | What it holds | What it cannot do |
 |---|---|---|
-| **Dashboard** | the database, the decisions, the audit | touch the code or the repos |
+| **Dashboard** | the database, the decisions, the audit, a read-only copy of each job's diff | touch the code or the repos |
 | **Runner** | the dashboard token, Git tokens, model keys for the duration of a job | talk to Docker; execute a repo's code |
 | **Launcher** | the only access to Docker | anything other than create, exec into and stop **its own** job containers, with a fixed policy |
 | **Job container** | this job's workspace | read a secret; reach the Git host, the dashboard, the launcher, the local network or the Internet outside the allowlist |
@@ -69,6 +69,28 @@ The agent writes the whole workspace, `.git` folder included. So the runner neve
 The instructions given to the agent, and the hook that filters its commands in Claude Code (`runner/garde.py`), reduce
 mistakes; they are not security boundaries. The boundaries are the container, the network, the absence of secrets and
 the verifications done by the runner and the dashboard.
+
+## Code kept by the dashboard
+
+The dashboard never clones a repo and holds no Git token of its own use. Since 0.7.5 it does keep **text that comes
+from the repos**, sent by the runner: the diff of each job's verified commit, so that a reviewer can read it in place.
+
+- **Where**: the `diffs` table of the dashboard's database, one row per job (the latest diff replaces the previous
+  one), capped at 500,000 characters. It follows the database: same volume, same backups.
+- **Who can read it**: whoever can read the job. A requester sees the diffs of their own requests; reviewers and
+  admins see all of them.
+- **How long**: as long as the job exists. Deleting a job deletes its diff.
+- **What it is used for**: display only. It is escaped like any other text from a repo or an agent (strict content
+  security policy, no inline script), and no gate reads it.
+- **Turning it off for a confidential repo**: untick « Afficher le diff dans la Fabrique » in the repo's settings
+  (admins only, on by default). From then on the runner sends no diff for that repo, the dashboard refuses to store one
+  even if a runner sends it, and the diffs already stored for that repo are deleted at once (the audit log says how
+  many). The job page says the diff is not kept and links to the pull request: the review happens on the Git host.
+- **Turning it off for a whole runner**: `FABRIQUE_DIFF_MAX=0` on that runner. Nothing is sent for its jobs, whatever
+  the repo's setting.
+
+Check outputs, the agent's messages and study reports were already kept in the same database; they too can quote the
+repo.
 
 ## Sign-in and secrets
 

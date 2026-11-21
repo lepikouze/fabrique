@@ -50,11 +50,14 @@ Le chemin d'une demande, de son repo au merge :
 - **Demandes et suivi** : formulaire de demande, tableau ou liste des jobs, chronologie, événements en direct, coûts et
   tokens par job, inbox (questions de l'agent, PR à relire, échecs, repos à créer).
 - **Études** : une demande de type « Étude » fait lire le repo à l'agent, qui rend un rapport (analyse, chiffrage,
-  options) sans rien modifier — ni branche, ni PR ; le rapport peut ensuite devenir une demande de code.
+  options) sans rien modifier — ni branche, ni PR ; le rapport se télécharge en PDF ou en Markdown et peut ensuite
+  devenir une demande de code.
 - **Onboarding d'un repo** : un agent lit le repo et écrit sa *recipe* (`.fabrique/setup.json` : image, installation,
   checks) ; le runner la rejoue dans un conteneur neuf ; un humain le merge.
 - **Vérification** : code et sécurité toujours, architecture et infrastructure selon les fichiers touchés. Un point
   bloquant doit venir avec une preuve que le runner rejoue.
+- **Diff sur place** : le reviewer lit le diff du commit vérifié dans le job lui-même, fichier par fichier, avec les
+  chemins protégés signalés. C'est le runner qui l'envoie ; le dashboard ne touche toujours pas au code.
 - **Contrôle de sécurité à l'écriture** : à chaque fichier écrit par l'agent, recherche de secrets en dur (Betterleaks)
   et de paquets introuvables ou tout juste publiés (nom inventé par le modèle). L'agent corrige aussitôt ; un rapport
   sur tout le job s'ajoute aux preuves, à titre d'information.

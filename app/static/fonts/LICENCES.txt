@@ -3,3 +3,5 @@ JetBrains Mono (variable, sous-ensemble latin) — Copyright 2020 The JetBrains 
 Fichiers obtenus depuis les paquets @fontsource-variable/inter et @fontsource-variable/jetbrains-mono 5.2.8.
 Jost (graisse 600, sous-ensemble latin) — Copyright 2020 The Jost Project Authors — SIL Open Font License 1.1 (LICENCE-jost.txt)
 Fichier obtenu depuis Google Fonts (fonts.gstatic.com), version 20.
+DejaVu Sans, Sans Bold, Sans Oblique et Sans Mono 2.37 (sous-ensembles : latin, grec, ponctuation, flèches, symboles) — Copyright 2003 Bitstream, Inc. (Bitstream Vera) ; modifications DejaVu dans le domaine public — licence Bitstream Vera, permissive (LICENCE-dejavu.txt)
+Fichiers .ttf tirés de dejavu-fonts-ttf-2.37 (github.com/dejavu-fonts/dejavu-fonts), réduits avec pyftsubset. Ils servent au rapport d'étude en PDF, pas à l'interface.

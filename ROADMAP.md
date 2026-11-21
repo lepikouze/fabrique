@@ -18,17 +18,15 @@ coming for the interface, with a language choice per account; other languages la
 
 `English` `Spanish` `Per-account choice` `Documentation`
 
-### Study report as PDF
-Download a study's report as a PDF, in addition to Markdown, to share it outside Fabrique.
-
-`PDF` `Sharing` `Studies`
-
-### Faster pages
-Fewer database queries per page, to keep the interface responsive when the database sits on network storage.
-
-`Performance` `Database`
-
 ## Under study
+
+### Project mode
+Build a whole application from one request. A request of type "Project" has the agent write a specification, a
+technical plan and an ordered list of tasks into the repo (`specs/`), in the spirit of spec-driven development. A human
+approves that pull request; Fabrique then creates one request per task and runs them in order, each job reading the
+spec and the plan first. A project page shows progress, and a budget caps the whole project.
+
+`Specification` `Plan` `Task list` `Chained jobs` `Human approval`
 
 ### Requests from an issue
 A `fabrique` label on a GitHub, GitLab or Forgejo issue creates an incoming request in the inbox. Nothing starts
@@ -76,13 +74,6 @@ with end-to-end tests in a browser does not have the needs of a small service.
 `Memory` `Admission` `Queue` `OOM` `E2E tests`
 
 ## Ideas
-
-### Diff inside Fabrique
-A « Afficher les changements » (show changes) button in the job: the PR's diff, fetched on demand from the Git
-provider and shown in Fabrique, file by file, in the order of the review guide. Unified view first; then, if usage
-calls for it, side-by-side view, syntax highlighting and a per-file "viewed" mark.
-
-`Review` `Diff` `Without leaving the job`
 
 ### Stronger isolation
 Each job in a disposable virtual machine, on top of the container or the Pod.

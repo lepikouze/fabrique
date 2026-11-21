@@ -10,3 +10,24 @@
 {% if profs %}<optgroup label="Profils : un modèle par rôle">{% for p in profs %}{% set am = models|selectattr('id', 'equalto', p.roles.agent.model)|first %}<option value="p:{{ p.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(am)|join(' ') if am else 'claude-code' }}"{% endif %} {{ 'selected' if sel_profile == p.id }}>{{ p.name }}</option>{% endfor %}</optgroup>{% endif %}
 <optgroup label="Modèles : un seul pour tout">{% for m in models %}<option value="m:{{ m.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(m)|join(' ') }}"{% endif %} {{ 'selected' if not sel_profile and sel_model == m.id }}>{{ m.name }}</option>{% endfor %}</optgroup>
 {% endmacro %}
+{# Changements d'un job : liste des fichiers et diff du commit vérifié, envoyé par le runner et lu ici même. Le diff est
+   chargé à l'ouverture (app.js) ; rien ne s'affiche tant que le runner n'en a pas envoyé pour le commit vérifié. #}
+{% macro changes(j) %}
+{% set p = PATCH(j) %}
+{% if p %}
+<section class="sec changes">
+ <h3>Changements <span class="muted right mono">{{ p.sha }}</span></h3>
+ <p class="muted small">{{ p.n }} fichier(s), <span class="ok">+{{ p.add }}</span> <span class="bad">−{{ p.rem }}</span> · diff du commit vérifié, envoyé par le runner{% if p.truncated %} · <b class="amber">tronqué</b>{% endif %}</p>
+ <ul class="dfiles">{% for f in p.files %}<li><a href="/jobs/{{ j.ref }}/diff?sha={{ p.sha }}" class="mono dpath" data-diff-file="{{ loop.index0 }}" title="Lire le diff de ce fichier">{{ f.path }}</a>{% if f.status == 'added' %}<span class="pill">ajouté</span>{% elif f.status == 'deleted' %}<span class="pill">supprimé</span>{% elif f.status == 'binary' %}<span class="pill">binaire</span>{% endif %}<span class="mono right"><span class="ok">+{{ f.add }}</span> <span class="bad">−{{ f.rem }}</span></span></li>{% endfor %}</ul>
+ <details class="diffbox" data-key="diff-{{ j.ref }}" data-diff="/jobs/{{ j.ref }}/diff?sha={{ p.sha }}">
+  <summary><b>Lire le diff</b><span class="muted">sans quitter la Fabrique</span></summary>
+  <div class="diff-body" data-diff-body><p class="muted small">Chargement du diff…</p></div>
+ </details>
+</section>
+{% elif DIFF_OFF(j) and j.source != 'étude' and (j.pr_url or j.verified_sha) %}
+<section class="sec changes">
+ <h3>Changements</h3>
+ <p class="muted small">Le diff n'est pas conservé dans la Fabrique pour ce repo (réglage du repo).{% set u = CHANGES_URL(j) %}{% if u %} <a class="link" href="{{ u }}" target="_blank" rel="noopener noreferrer">Lire les changements sur la forge {{ ic('ext') }}</a>{% endif %}</p>
+</section>
+{% endif %}
+{% endmacro %}

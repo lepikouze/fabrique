@@ -825,3 +825,63 @@ def test_runner_purges_only_finished_workspaces(tmp_path, monkeypatch):
         run.purge(ref)
     left = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.iterdir())
     assert left == [".miroirs", "FAB-2", "autre"] and [p.name for p in (tmp_path / ".miroirs").iterdir()] == ["FAB-2.git"]
+
+
+def test_runner_sends_the_diff_of_the_verified_commit(setup, repo, monkeypatch):
+    """0.7.5 : avec la PR, le runner envoie le diff du commit vérifié (lu dans son miroir) ; le dashboard l'affiche."""
+    r, forge, panel = setup
+    ref = jobs.create(REQ, "Réparer ok()", "ok() doit renvoyer True", "le check passe", repo)
+    step(r, panel)
+    j = jobs.get(ADMIN, ref)
+    p = jobs.patch_info(j)
+    assert j["stage"] == "pr" and p and p["sha"] == j["verified_sha"] and [f["path"] for f in p["files"]] == ["carnet.py"] and not p["truncated"]
+    lines = [l for h in jobs.diff_view(VERIF, ref)["files"][0]["hunks"] for l in h["lines"]]
+    assert any(k == "rem" and "False" in t for k, _, _, t in lines) and any(k == "add" and "True" in t for k, _, _, t in lines)
+    assert (p["add"], p["rem"]) == (j["diff"]["additions"], j["diff"]["deletions"])     # mêmes compteurs que ceux des barrières
+    # Vérification relancée : le diff est renvoyé, coupé au plafond du runner et signalé.
+    monkeypatch.setattr(rconf, "DIFF_MAX", 120)
+    jobs.rereview(VERIF, ref)
+    step(r, panel)
+    with db.tx() as c:
+        row = db.one(c, select(db.diffs))
+    assert row["truncated"] and len(row["text"]) <= 120 and row["sha"] == jobs.get(ADMIN, ref)["verified_sha"]
+
+
+def test_a_dashboard_that_refuses_the_diff_does_not_stop_the_job(setup, repo, monkeypatch):
+    """Un dashboard plus ancien ne connaît pas l'événement « diff » : le job va quand même jusqu'à sa PR."""
+    r, forge, panel = setup
+    real = panel.event
+    monkeypatch.setattr(panel, "event", lambda ref, **ev: None if ev.get("type") == "diff" else real(ref, **ev), raising=False)
+    ref = jobs.create(REQ, "Réparer ok()", "ok() doit renvoyer True", "le check passe", repo)
+    step(r, panel)
+    j = jobs.get(ADMIN, ref)
+    assert j["stage"] == "pr" and j["merge_state"] == "ready" and jobs.patch_info(j) is None
+
+
+def test_confidential_repo_sends_no_diff(setup, repo):
+    """Réglage du repo « Afficher le diff dans la Fabrique » décoché : le runner n'envoie rien, le job aboutit quand même."""
+    r, forge, panel = setup
+    with db.tx() as c:
+        s0 = dict(db.one(c, select(db.repos.c.settings).where(db.repos.c.id == repo))["settings"] or {})
+        c.execute(update(db.repos).where(db.repos.c.id == repo).values(settings={**s0, "diff": False}))
+    sent = []
+    real = panel.event
+    panel.event = lambda ref, **ev: (sent.append(ev.get("type")), real(ref, **ev))[1]
+    ref = jobs.create(REQ, "Réparer ok()", "ok() doit renvoyer True", "le check passe", repo)
+    step(r, panel)
+    j = jobs.get(ADMIN, ref)
+    assert j["stage"] == "pr" and jobs.patch_info(j) is None and "pr" in sent and "diff" not in sent
+    with db.tx() as c:
+        assert db.rows(c, select(db.diffs)) == []
+
+
+def test_diff_max_zero_sends_no_diff(setup, repo, monkeypatch):
+    """FABRIQUE_DIFF_MAX=0 : aucun diff ne quitte le runner (repos dont le code ne doit pas être copié) ; le job aboutit."""
+    r, forge, panel = setup
+    monkeypatch.setattr(rconf, "DIFF_MAX", 0)
+    ref = jobs.create(REQ, "Réparer ok()", "ok() doit renvoyer True", "le check passe", repo)
+    step(r, panel)
+    j = jobs.get(ADMIN, ref)
+    assert j["stage"] == "pr" and jobs.patch_info(j) is None
+    with db.tx() as c:
+        assert db.rows(c, select(db.diffs)) == []

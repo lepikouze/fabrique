@@ -93,6 +93,9 @@
    <label for="rs-name">Nom affiché</label><input id="rs-name" name="name" value="{{ cur.name }}" maxlength="120">
    <label for="rs-tags">Tags de runner exigées <small class="muted">séparées par des virgules ; vide = n'importe quel runner</small></label><input id="rs-tags" name="tags" maxlength="200" class="mono" value="{{ (s.tags or [])|join(', ') }}" placeholder="interne, docker">
    <label class="check-row"><input type="checkbox" name="accepts_jobs" value="1" {{'checked' if cur.accepts_jobs}}> Accepte les nouvelles demandes</label>
+   <input type="hidden" name="diff_field" value="1">
+   <label class="check-row"><input type="checkbox" name="diff" value="1" {{'checked' if s.diff is not false}}> Afficher le diff dans la Fabrique</label>
+   <small class="help">À décocher pour un repo confidentiel, dont le code ne doit pas être copié dans la base de la Fabrique : le runner n'envoie plus le diff, ceux déjà enregistrés pour ce repo sont supprimés, et la relecture se fait sur la forge.</small>
    <div class="grid2">
     <div><label for="rs-h">Agent</label><select id="rs-h" name="harness"><option value="">Réglage global ({{ HARNESSES[agents_s.harness] }})</option>{% for k, v in HARNESSES.items() %}<option value="{{k}}" {{'selected' if s.harness == k}} {{ 'disabled' if k not in READY }}>{{v}}{{ ' (bientôt)' if k not in READY }}</option>{% endfor %}</select></div>
     {% set gp = profs|selectattr('id', 'equalto', agents_s.profile)|first %}

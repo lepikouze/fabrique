@@ -56,6 +56,7 @@ rather than opening up.
 | `REVIEW_MODE` | `direct` | `direct`: one request to the model per reviewer; `agent`: read-only agent, on an export of the verified commit |
 | `CLAUDE_BIN`, `CODEX_BIN` | `/usr/local/bin/claude`, `/usr/local/bin/codex` | Agent programs, by absolute path (never looked up in a job's `PATH`) |
 | `REVIEW_MAX_DIFF`, `REVIEW_MAX_TOKENS` | `60000`, `8000` | Size of the diff sent and of the reviewers' answer |
+| `FABRIQUE_DIFF_MAX` | `400000` | Characters of diff sent to the dashboard for human reading, with the pull request. `0`: nothing is sent (the reviewer reads the diff on the Git host) |
 | `ANTHROPIC_API_URL`, **`ANTHROPIC_API_KEY`** | api.anthropic.com, — | Optional: key on the runner rather than in the dashboard. An API key is required: a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`) is not supported, since no credential of the runner is handed to a job |
 | `PRICE_IN`, `PRICE_OUT`, `PRICE_CACHE_READ` | `5`, `25`, `0.5` | Default prices ($ per million tokens) for a model with no known pricing |
 

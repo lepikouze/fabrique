@@ -26,7 +26,8 @@ new accounts.
 5. **Review.** Read-only reviewers read the diff: code and security always, architecture and infrastructure depending
    on the files touched. A blocking verdict must come with an evidence command, which the runner replays; without
    evidence that holds, it is downgraded to "to be looked at". A proven blocker earns one round of fixes.
-6. **Pull request.** The runner pushes the branch and opens the PR, with the evidence and the agent's opinion.
+6. **Pull request.** The runner pushes the branch and opens the PR, with the evidence and the agent's opinion. It also
+   sends the dashboard the diff of the verified commit, so that the reviewer can read it without leaving Fabrique.
 7. **Decision.** The dashboard evaluates the gates and applies the repo's policy.
 8. **Merge.** Pinned to the verified commit: if the PR has moved since, the merge is refused.
 
@@ -81,13 +82,36 @@ job waits and retries by itself.
 
 A job stopped by a human, or an onboarding, is never merged automatically.
 
+## Reading the diff in Fabrique
+
+The job page (side panel, full view and inbox) has a « Changements » section: the list of files with their added and
+removed lines, and « Lire le diff », which shows the unified diff file by file. Files fold and unfold; a file on a
+protected path carries a « protégé » label; a binary file is named but not shown.
+
+- The dashboard never reads the repo. The **runner** computes the diff in its own mirror, between the pinned base and
+  the verified commit, and sends it with the pull request (and again when a review is rerun).
+- The diff shown is always the one of the **verified commit**: after a new commit, the previous diff is hidden until
+  the runner sends the new one.
+- It is **capped**: 400,000 characters sent by the runner (`FABRIQUE_DIFF_MAX`), 500,000 kept by the dashboard. Beyond
+  that the diff is cut and marked « tronqué »; the rest is read on the Git host. The gates never rely on this text:
+  they use the list of files and the line counts, as before.
+- It is read with the **same rights as the job**, and it is deleted with the job.
+- A **confidential repo** can opt out: untick « Afficher le diff dans la Fabrique » in the repo's settings. Its code is
+  then never copied into Fabrique's database: the runner sends nothing, the dashboard stores nothing, and what was
+  already stored for that repo is deleted. The job page links to the pull request instead.
+- `FABRIQUE_DIFF_MAX=0` on a runner turns the feature off for all the jobs of that runner: no diff leaves it. The links
+  to the pull request stay.
+
 ## Studies
 
 In **Nouvelle demande** (new request), the « Étude » type asks for an analysis instead of a change: understanding a
 behaviour, estimating a piece of work, comparing options. The agent works in the same disposable container as an
 ordinary job and can run the repo's tests, but the runner captures no commit, pushes nothing and opens no PR: whatever
 the agent writes in its workspace stays there. Its only deliverable is a report (`RAPPORT_ETUDE.md`), which the runner
-reads and the dashboard shows as plain text in the job, at the « Étude rendue » step.
+reads and the dashboard shows as plain text in the job, at the « Étude rendue » step. The report can be downloaded
+as **PDF** (Markdown rendered: headings, lists, tables, code blocks; pages numbered) or as the original Markdown, from
+the job and from the inbox. Either download can be turned off in Settings → Budgets et barrières (« Rapports d'étude »): the button
+disappears and the address answers 404; the report stays readable in Fabrique.
 
 A study follows the same rules as a job: budget, watchdog, question to the requester, stop. There are no checks, no
 review and no gates, since there is nothing to merge. The « En faire une demande » button opens the form prefilled with

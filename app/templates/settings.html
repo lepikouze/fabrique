@@ -193,6 +193,11 @@
     <input id="l-aa" name="auto_archive_days" type="number" min="0" max="3650" value="{{ lim.auto_archive_days or 0 }}" style="max-width:160px">
     <small class="help">Archive seuls les jobs mergés et les études déjà lues. Les échecs et les PR refusées restent visibles. Un job archivé se retrouve et se restaure depuis la page Archives.</small>
     <small class="help">Le budget par jour est appliqué par le dashboard : au-delà, les nouveaux travaux attendent le lendemain ; les merges déjà décidées passent.</small>
+    <span class="lbl-like">Rapports d'étude</span>
+    <input type="hidden" name="report_fields" value="1">
+    <label class="check-row"><input type="checkbox" name="report_pdf" value="1" {{'checked' if lim.report_pdf is not false}}> Rapport téléchargeable en PDF</label>
+    <label class="check-row"><input type="checkbox" name="report_md" value="1" {{'checked' if lim.report_md is not false}}> Rapport téléchargeable en Markdown</label>
+    <small class="help">Décochée, une case retire le bouton du job et de l'inbox, et le téléchargement est refusé. Le rapport reste lisible dans la Fabrique.</small>
     <label for="l-pp">Protected paths par défaut <small>un motif par ligne</small></label>
     <textarea id="l-pp" name="protected_paths" rows="8" class="mono">{{ lim.protected_paths|join('\n') }}</textarea>
     <small class="help">Une PR qui touche l'un d'eux ne merge jamais seule. La recipe de la Fabrique (.fabrique/**) et la CI en font toujours partie.</small>

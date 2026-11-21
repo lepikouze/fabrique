@@ -9,5 +9,7 @@ itsdangerous==2.2.0
 sqlalchemy==2.0.44
 alembic==1.17.2
 cryptography==50.0.2
+reportlab==5.1.0
+pillow==13.0.0
 docker==7.1.0
 pytest==9.2.0

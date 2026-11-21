@@ -68,27 +68,37 @@ def _visible(user):
 
 
 def _repo_names(c):
-    return {r["id"]: r for r in db.rows(c, select(db.repos))}
+    return db.cached("repos", lambda: {r["id"]: r for r in db.rows(c, select(db.repos))})
+
+
+def _runners(c):
+    return db.cached("runners", lambda: {r["id"]: r for r in db.rows(c, select(db.runners))})
 
 
 def listing(user, repo=None, archived=False):
+    """Jobs visibles, du plus récemment modifié au plus ancien. Dans une requête de page, la liste n'est lue qu'une fois :
+    la page, les compteurs du pied et l'inbox s'en servent tous (lecture seule : personne ne la modifie)."""
+    key = ("jobs", user.get("user"), user.get("role"), repo or None, bool(archived))
+    return db.cached(key, lambda: _listing(user, repo, archived))
+
+
+def _listing(user, repo, archived):
     with db.tx() as c:
         q = select(db.jobs).where(_visible(user), db.jobs.c.archived == archived)
         if repo:
             q = q.where(db.jobs.c.repo_id == repo)
         js = db.rows(c, q.order_by(db.jobs.c.updated_at.desc()))
         repos = _repo_names(c)
-        runners = {r["id"]: r for r in db.rows(c, select(db.runners))}
-        open_q = {r["job_id"] for r in db.rows(c, select(db.questions.c.job_id).where(db.questions.c.answer.is_(None)))}
+        runners = _runners(c)
         ag = {}
         for r in db.rows(c, select(db.agents.c.job_id, func.count().label("n")).where(db.agents.c.state == "running").group_by(db.agents.c.job_id)):
             ag[r["job_id"]] = r["n"]
         lastq = {}
-        for r in db.rows(c, select(db.questions).where(db.questions.c.answer.is_(None))):
+        for r in db.rows(c, select(db.questions.c.job_id, db.questions.c.question).where(db.questions.c.answer.is_(None)).order_by(db.questions.c.id)):
             lastq[r["job_id"]] = r["question"]
     for j in js:
         _decorate(j, repos, runners)
-        j["open_question"] = lastq.get(j["id"]) if j["id"] in open_q else None
+        j["open_question"] = lastq.get(j["id"])
         j["agents_running"] = ag.get(j["id"], 0)
     return js
 
@@ -144,7 +154,7 @@ def get(user, ref):
         if not j:
             return None
         jid = j["id"]
-        _decorate(j, _repo_names(c), {r["id"]: r for r in db.rows(c, select(db.runners))})
+        _decorate(j, _repo_names(c), _runners(c))
         j["questions"] = db.rows(c, select(db.questions).where(db.questions.c.job_id == jid).order_by(db.questions.c.asked_at))
         tl = db.rows(c, select(db.timeline).where(db.timeline.c.job_id == jid).order_by(db.timeline.c.at))
         j["agents"] = db.rows(c, select(db.agents).where(db.agents.c.job_id == jid).order_by(db.agents.c.id))
@@ -154,9 +164,64 @@ def get(user, ref):
         j["audit"] = db.rows(c, select(db.audit).where(db.audit.c.job_id == jid).order_by(db.audit.c.at.desc()))
         j["events"] = db.rows(c, select(db.events).where(db.events.c.job_id == jid, db.events.c.kind != "audit")
                               .order_by(db.events.c.id.desc()).limit(200))
+        # Diff envoyé par le runner : seulement son résumé ici (le texte est lu à la demande, voir diff_view).
+        j["patch"] = db.one(c, select(db.diffs.c.sha, db.diffs.c.truncated, db.diffs.c.files, db.diffs.c.at).where(db.diffs.c.job_id == jid))
     j["open_question"] = next((q for q in j["questions"] if q["answer"] is None), None)
     j["timeline"] = _timeline(j, tl)
     return j
+
+
+def patch_info(j):
+    """Résumé du diff à afficher dans la fiche du job, ou None : il doit correspondre au commit vérifié (un diff plus ancien
+    ne se montre pas), et une étude n'en a pas."""
+    p = j.get("patch")
+    if not p or not j.get("verified_sha") or p["sha"] != j["verified_sha"] or j.get("source") == "étude" or diff_off(j):
+        return None
+    files = p["files"] or []
+    return {"sha": p["sha"], "truncated": p["truncated"], "files": files, "n": len(files), "add": sum(f.get("add", 0) for f in files),
+            "rem": sum(f.get("rem", 0) for f in files)}
+
+
+def repo_keeps_diff(settings):
+    """Réglage du repo « Afficher le diff dans la Fabrique » : activé par défaut. Désactivé pour un repo confidentiel, dont
+    le code ne doit pas être copié dans la base de la Fabrique : le runner n'envoie rien et le dashboard ne garde rien."""
+    return (settings or {}).get("diff") is not False
+
+
+def diff_off(j):
+    """Vrai si le repo du job ne conserve pas de diff (la fiche le dit, et renvoie vers la PR)."""
+    return not repo_keeps_diff((j.get("repo") or {}).get("settings"))
+
+
+def report_formats(c=None):
+    """Formats dans lesquels un rapport d'étude se télécharge (Settings → Budgets et barrières) : les deux par défaut."""
+    def load(cx):
+        lim = db.get_setting(cx, "limits")[0] or {}
+        return {"md": lim.get("report_md") is not False, "pdf": lim.get("report_pdf") is not False}
+    if c is not None:
+        return load(c)
+    with db.tx() as cx:
+        return load(cx)
+
+
+def diff_view(user, ref, sha=""):
+    """Diff complet d'un job, découpé par fichier, avec les fichiers protégés signalés. Mêmes droits que la lecture du job ;
+    None si le job n'est pas visible, n'a pas de diff, ou si le diff ne correspond plus au commit vérifié."""
+    from . import diffview, work
+    with db.tx() as c:
+        j = db.one(c, select(db.jobs.c.id, db.jobs.c.repo_id, db.jobs.c.verified_sha, db.jobs.c.source).where(db.jobs.c.ref == ref, _visible(user)))
+        if not j or not j["verified_sha"] or j["source"] == "étude":
+            return None
+        row = db.one(c, select(db.diffs).where(db.diffs.c.job_id == j["id"]))
+        if not row or row["sha"] != j["verified_sha"] or (sha and sha != row["sha"]):
+            return None
+        repo = db.one(c, select(db.repos.c.settings).where(db.repos.c.id == j["repo_id"])) or {}
+        if not repo_keeps_diff(repo.get("settings")):
+            return None
+        limits, _ = db.get_setting(c, "limits")
+    patterns = ((repo.get("settings") or {}).get("protected_paths") or limits["protected_paths"]) + [".fabrique/**"]
+    paths = [f["path"] for f in (row["files"] or [])]
+    return diffview.view(row, work.protected_hits(paths, patterns))
 
 
 def _timeline(j, tl):
@@ -283,9 +348,11 @@ def inbox(user):
 
 
 def access_requests():
-    """Demandes d'accès en attente (vues par les admins)."""
-    with db.tx() as c:
-        return db.rows(c, select(db.users).where(db.users.c.requested_role.is_not(None)).order_by(db.users.c.requested_at))
+    """Demandes d'accès en attente (vues par les admins). Lue une fois par page : le compteur du menu et l'inbox s'en servent."""
+    def load():
+        with db.tx() as c:
+            return db.rows(c, select(db.users).where(db.users.c.requested_role.is_not(None)).order_by(db.users.c.requested_at))
+    return db.cached("access_requests", load)
 
 
 def counters(user):
@@ -561,8 +628,8 @@ def can_decide_repo(user, repo):
 
 
 def repo_requests():
-    with db.tx() as c:
-        return db.rows(c, select(db.repos).where(db.repos.c.onboarding == "requested").order_by(db.repos.c.created_at))
+    with db.tx() as c:   # tirées de la liste des repos déjà lue pour la page, quand il y en a une
+        return sorted((r for r in _repo_names(c).values() if r["onboarding"] == "requested"), key=lambda r: r["created_at"])
 
 
 def decide_repo(user, rid, approve, note=""):
@@ -721,7 +788,7 @@ def search_archives(user, q="", repo=0, state="", regex=False, page=1):
             sel = sel.where(db.jobs.c.repo_id == repo)
         js = db.rows(c, sel.order_by(db.jobs.c.updated_at.desc()))
         repos = _repo_names(c)
-        runners = {r["id"]: r for r in db.rows(c, select(db.runners))}
+        runners = _runners(c)
     for j in js:
         _decorate(j, repos, runners)
         j["outcome"] = outcome(j)

@@ -1,7 +1,7 @@
 """Base de données : SQLAlchemy Core (aucun SQL propre à un moteur), migrations Alembic (app/migrations).
 SQLite au départ ; PostgreSQL plus tard en changeant seulement DATABASE_URL."""
 import logging
-import json, os, time
+import contextvars, copy, json, os, time
 from contextlib import contextmanager
 from sqlalchemy import (JSON, Boolean, Column, Float, ForeignKey, Index, Integer, MetaData, String, Table, Text, UniqueConstraint,
                         create_engine, event, false, insert, select, update)
@@ -214,6 +214,18 @@ reviews = Table(
     Column("at", Float, nullable=False),
 )
 
+# Diff du job au sha vérifié, envoyé par le runner avec la PR (le dashboard ne lit jamais le code lui-même). Texte plafonné ;
+# « files » résume chaque fichier pour l'affichage sans relire tout le texte. Une ligne par job : le dernier diff remplace l'ancien.
+diffs = Table(
+    "diffs", meta,
+    Column("job_id", Integer, ForeignKey("jobs.id"), primary_key=True),
+    Column("sha", String(40), nullable=False),
+    Column("text", Text, nullable=False, default=""),
+    Column("truncated", Boolean, nullable=False, default=False),
+    Column("files", JSON, nullable=False, default=list),     # [{"path", "add", "rem", "status"}]
+    Column("at", Float, nullable=False),
+)
+
 # File de commandes panneau -> runners (idempotentes, avec bail) : démarrer, reprendre après une réponse, fusionner.
 intents = Table(
     "intents", meta,
@@ -348,7 +360,51 @@ DEFAULTS = {
 }
 
 
+# Cache d'une requête HTTP de lecture (GET) : une page appelle plusieurs fois les mêmes lectures (réglages, liste des jobs
+# pour la page, les compteurs et l'inbox). Chaque lecture coûte cher quand la base est sur un stockage réseau : on la fait
+# une fois par requête. Hors requête (runner, simulateur, tests directs) et pour toute requête qui modifie : pas de cache.
+_request = contextvars.ContextVar("fabrique_request_cache", default=None)
+
+
+class RequestCache:
+    """Middleware ASGI : ouvre un cache de lectures pour la durée d'une requête GET de page."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") not in ("GET", "HEAD") or scope.get("path", "").startswith(("/events/", "/api/", "/static/")):
+            return await self.app(scope, receive, send)
+        token = _request.set({})
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request.reset(token)
+
+
+def cached(key, load):
+    """Résultat de load(), gardé pour la requête en cours ; simple appel hors requête."""
+    box = _request.get()
+    if box is None:
+        return load()
+    if key not in box:
+        box[key] = load()
+    return box[key]
+
+
+def forget_cache():
+    box = _request.get()
+    if box:
+        box.clear()
+
+
 def get_setting(c, key):
+    if _request.get() is not None:   # dans une requête de page : tous les réglages en une seule lecture (la table est petite)
+        allv = cached("settings", lambda: {r["key"]: r for r in rows(c, select(settings))})
+        r = allv.get(key)
+        if r is None:
+            return copy.deepcopy(DEFAULTS.get(key)), None
+        r = copy.deepcopy(r)         # l'appelant peut modifier ce qu'il reçoit sans toucher au cache
+        return r["value"], r
     r = one(c, select(settings).where(settings.c.key == key))
     if r is None:
         return DEFAULTS.get(key), None
@@ -356,6 +412,7 @@ def get_setting(c, key):
 
 
 def set_setting(c, key, value, by):
+    forget_cache()
     t = now()
     if one(c, select(settings.c.key).where(settings.c.key == key)):
         c.execute(update(settings).where(settings.c.key == key).values(value=value, updated_by=by, updated_at=t))

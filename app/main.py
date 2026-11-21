@@ -97,7 +97,7 @@ def _git_name(repo):
         return forges.label(c, dict(repo))
 
 
-templates.env.globals.update(GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
+templates.env.globals.update(GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, PATCH=jobs.patch_info, DIFF_OFF=jobs.diff_off, REPORT_FORMATS=jobs.report_formats, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
                              can=auth.can, PROVIDERS={"forgejo": "Forgejo", "gitea": "Gitea", "gitlab": "GitLab", "github": "GitHub"},
                              ONB={"pending": ("Onboarding", "var(--blue)"), "analyzing": ("Onboarding", "var(--blue)"),
                                   "requested": ("Création à valider", "var(--amber)"), "creating": ("Création", "var(--blue)"),
@@ -112,6 +112,7 @@ SECURITY_HEADERS = {
                                "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 }
 app.add_middleware(auth.AuthLayer)
+app.add_middleware(db.RequestCache)   # ajouté en dernier : le plus à l'extérieur, il couvre aussi l'authentification
 app.include_router(auth.router)
 
 
@@ -526,10 +527,43 @@ def study_report(request: Request, ref: str):
         return Response("Job introuvable.", status_code=404, media_type="text/plain; charset=utf-8")
     if not j or not j.get("report"):
         return Response("Ce job n'a pas de rapport.", status_code=404, media_type="text/plain; charset=utf-8")
+    if not jobs.report_formats()["md"]:
+        return Response("Le téléchargement en Markdown est désactivé.", status_code=404, media_type="text/plain; charset=utf-8")
     body = f"# {j['title']}\n\n_{j['ref']} · étude rendue par la Fabrique_\n\n{j['report']}\n"
     name = re.sub(r"[^A-Za-z0-9-]", "", j["ref"]) + "-etude.md"
     return Response(body, media_type="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@app.get("/jobs/{ref}/rapport.pdf")
+def study_report_pdf(request: Request, ref: str):
+    """Rapport d'une étude, en PDF, à télécharger (mêmes droits que la lecture du job)."""
+    u = user_of(request)
+    try:
+        j = jobs.get(u, ref)
+    except jobs.Refused:
+        j = None
+    if not j or not j.get("report"):
+        return Response("Ce job n'a pas de rapport.", status_code=404, media_type="text/plain; charset=utf-8")
+    if not jobs.report_formats()["pdf"]:
+        return Response("Le téléchargement en PDF est désactivé.", status_code=404, media_type="text/plain; charset=utf-8")
+    from . import pdf
+    lt = time.localtime(j["updated_at"])
+    meta = " · ".join(x for x in ((j.get("repo") or {}).get("slug"), j["ref"], f"étude rendue le {lt.tm_mday} {MOIS[lt.tm_mon - 1]} {lt.tm_year}") if x)
+    data = pdf.report(j["title"], meta, j["report"], footer=f"Fabrique · {j['ref']}")
+    name = re.sub(r"[^A-Za-z0-9-]", "", j["ref"]) + "-etude.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@app.get("/jobs/{ref}/diff", response_class=HTMLResponse)
+def job_diff(request: Request, ref: str, sha: str = ""):
+    """Diff du job au commit vérifié, découpé par fichier (fragment chargé par la fiche du job ; mêmes droits que le job)."""
+    u = user_of(request)
+    d = jobs.diff_view(u, ref, sha[:12])
+    if not d:
+        return HTMLResponse('<p class="muted">Ce diff n\'est plus disponible : le commit vérifié a changé. Recharge la page.</p>', status_code=404)
+    return templates.TemplateResponse(request, "_diff.html", {"d": d, "ref": ref}, headers={"Cache-Control": "private, no-store"})
 
 
 @app.post("/jobs/{ref}/seen")
@@ -782,6 +816,17 @@ async def repo_save(request: Request, rid: int):
         paths = [p.strip() for p in str(f.get("protected_paths") or "").splitlines() if p.strip()][:100]
         s.update(harness=harness, model=model, profile=prof, merge_policy=policy, size_limit=size or None, budget_job=budget or None, protected_paths=paths,
                  tags=work.clean_tags(f.get("tags")))
+        dropped = 0
+        if f.get("diff_field") == "1":   # la case est dans ce formulaire : décochée, elle n'est pas envoyée
+            keep = f.get("diff") == "1"
+            if not keep and jobs.repo_keeps_diff(s):
+                # Repo déclaré confidentiel : ce qui a déjà été copié dans la base est supprimé tout de suite.
+                ids = select(db.jobs.c.id).where(db.jobs.c.repo_id == rid)
+                dropped = c.execute(db.diffs.delete().where(db.diffs.c.job_id.in_(ids))).rowcount or 0
+                db.log_audit(c, u["user"], "Diff désactivé pour le repo", target=r["slug"], detail=f"{dropped} diff(s) supprimé(s) de la base")
+            elif keep and not jobs.repo_keeps_diff(s):
+                db.log_audit(c, u["user"], "Diff activé pour le repo", target=r["slug"])
+            s["diff"] = keep
         name = str(f.get("name") or r["name"]).strip()[:120] or r["name"]
         c.execute(update(db.repos).where(db.repos.c.id == rid).values(settings=s, name=name, accepts_jobs=f.get("accepts_jobs") == "1"))
         db.log_audit(c, u["user"], "Settings du repo", target=r["slug"], detail=f"merge : {jobs.POLICIES[policy][0]}")
@@ -957,6 +1002,11 @@ async def settings_save(request: Request, section: str):
                        "max_parallel": int(f.get("max_parallel")), "size_limit": int(f.get("size_limit")),
                        "watchdog_min": int(f.get("watchdog_min") or 10), "auto_archive_days": int(f.get("auto_archive_days") or 0),
                        "protected_paths": [p.strip() for p in str(f.get("protected_paths") or "").splitlines() if p.strip()][:100]}
+                old = db.get_setting(c, "limits")[0] or {}
+                if f.get("report_fields") == "1":   # les deux cases sont dans ce formulaire : décochée, une case n'est pas envoyée
+                    lim["report_md"], lim["report_pdf"] = f.get("report_md") == "1", f.get("report_pdf") == "1"
+                else:
+                    lim["report_md"], lim["report_pdf"] = old.get("report_md") is not False, old.get("report_pdf") is not False
             except (TypeError, ValueError):
                 return back(url, err="Les budgets et limites doivent être des nombres.")
             if not (0 < lim["budget_job"] <= lim["budget_day"] <= 10000 and 1 <= lim["max_parallel"] <= 64 and 1 <= lim["size_limit"] <= 100000

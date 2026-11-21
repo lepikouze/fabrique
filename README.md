@@ -51,11 +51,14 @@ The path of a request, from its repo to the merge:
 - **Requests and tracking**: request form, board or list of jobs, timeline, live events, cost and tokens per job, inbox
   (questions from the agent, PRs to review, failures, repos to create).
 - **Studies**: a request of type « Étude » (study) has the agent read the repo and return a report (analysis,
-  estimate, options) without changing anything — no branch, no PR; the report can then become a code request.
+  estimate, options) without changing anything — no branch, no PR; the report downloads as PDF or Markdown and can
+  then become a code request.
 - **Repo onboarding**: an agent reads the repo and writes its *recipe* (`.fabrique/setup.json`: image, install,
   checks); the runner replays it in a fresh container; a human merges it.
 - **Review**: code and security always, architecture and infrastructure depending on the files touched. A blocking
   finding must come with evidence that the runner replays.
+- **Diff in place**: the reviewer reads the diff of the verified commit in the job itself, file by file, with
+  protected paths labelled. The runner sends it; the dashboard still never touches the code.
 - **Security check on write**: every time the agent writes a file, a search for hard-coded secrets (Betterleaks) and
   for packages that do not exist or were only just published (a name made up by the model). The agent fixes it on the
   spot; a report covering the whole job is added to the evidence, for information.

@@ -5,7 +5,7 @@ Un runner s'authentifie par son token (empreinte en base), prend une commande av
 jobs dont il détient une commande. Un bail expiré (runner muet) remet la commande en file ; après 3 essais, le job échoue."""
 import os, hashlib, re, secrets, time
 from sqlalchemy import and_, insert, or_, select, update
-from . import config, db, jobs, notify
+from . import config, db, diffview, jobs, notify
 
 LEASE = 600            # secondes ; prolongé à chaque battement de cœur du runner
 MAX_ATTEMPTS = 3
@@ -301,7 +301,8 @@ def claim(runner):
             "repo": {"provider": repo["provider"], "slug": repo["slug"], "default_branch": repo["default_branch"],
                      "description": str(rs.get("description") or "")[:300],
                      "protected_paths": rs.get("protected_paths") or limits["protected_paths"],
-                     "size_limit": rs.get("size_limit") or limits["size_limit"]},
+                     "size_limit": rs.get("size_limit") or limits["size_limit"],
+                     "diff": jobs.repo_keeps_diff(rs)},   # False : repo confidentiel, le runner n'envoie pas le diff
             "limits": {"watchdog_min": int(limits.get("watchdog_min") or 10)}}
 
 
@@ -541,6 +542,22 @@ def report(runner, ref, ev):
             _stage(c, j, "pr", _txt(ev.get("summary"), 300) or f"PR #{n} ouverte, {len(diff['files'])} fichier(s), +{diff['additions']} −{diff['deletions']}.",
                    status)
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(activity="idle"))
+        elif kind == "diff":
+            # Diff du commit vérifié, pour la lecture dans le dashboard. Du texte, rangé tel quel et plafonné : il ne sert à
+            # aucune barrière (celles-ci s'appuient sur la liste des fichiers de l'événement « pr »).
+            sha = _txt(ev.get("sha"), 40)
+            if not re.fullmatch(r"[0-9a-f]{7,40}", sha) or not isinstance(ev.get("text"), str):
+                raise Denied("diff invalide")
+            rs = db.one(c, select(db.repos.c.settings).where(db.repos.c.id == j["repo_id"])) or {}
+            # Repo dont le code ne doit pas être copié ici (réglage du repo) : rien n'est gardé, même si un runner l'envoie
+            # (réglage changé pendant le job, runner modifié). Accepté sans erreur : le job continue.
+            if jobs.repo_keeps_diff(rs.get("settings")):
+                text, cut = diffview.clip(ev["text"])
+                vals = dict(sha=sha[:12], text=text, truncated=bool(cut or ev.get("truncated")), files=diffview.summary(text), at=t)
+                if db.one(c, select(db.diffs.c.job_id).where(db.diffs.c.job_id == jid)):
+                    c.execute(update(db.diffs).where(db.diffs.c.job_id == jid).values(**vals))
+                else:
+                    c.execute(insert(db.diffs).values(job_id=jid, **vals))
         elif kind == "usage":
             cost, tok = float(ev.get("cost") or 0), int(ev.get("tokens") or 0)
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(cost=max(0.0, cost), tokens=max(0, tok), updated_at=t,

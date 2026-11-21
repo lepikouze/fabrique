@@ -82,3 +82,28 @@ def test_0014_links_repos_to_their_git_provider_and_allows_the_same_path_twice(t
         assert repos["a/b"]["git_id"] == "forge-de-l-equipe" and repos["g/p"]["git_id"] == "gitlab-interne"
         c.execute(db.repos.insert().values(provider="gitlab", git_id="autre-gitlab", slug="g/p", name="p", onboarding="ready",
                                            settings={}, created_at=t))                                      # même chemin, autre provider
+
+
+def test_0015_adds_the_diff_table_and_can_be_undone(tmp_path):
+    """0.7.5 : une table à part pour le diff du job (une ligne par job) ; le retour arrière la retire sans toucher aux jobs."""
+    import os, time
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect, insert, select
+    from app import config, db
+    cfg = Config(); cfg.set_main_option("script_location", os.path.join(os.path.dirname(db.__file__), "migrations"))
+    cfg.set_main_option("sqlalchemy.url", config.DATABASE_URL)
+    assert "diffs" in inspect(db.engine()).get_table_names()
+    command.downgrade(cfg, "0014")
+    db.reset_engine()
+    assert "diffs" not in inspect(db.engine()).get_table_names() and "jobs" in inspect(db.engine()).get_table_names()
+    command.upgrade(cfg, "head")
+    db.reset_engine()
+    t = time.time()
+    with db.tx() as c:
+        rid = c.execute(insert(db.repos).values(provider="forgejo", slug="a/b", name="B", onboarding="ready", settings={}, created_at=t)).inserted_primary_key[0]
+        jid = c.execute(insert(db.jobs).values(ref="FAB-1", title="T", request="R", requester="alice", repo_id=rid, branch="fabrique/FAB-1",
+                                               created_at=t, updated_at=t)).inserted_primary_key[0]
+        c.execute(insert(db.diffs).values(job_id=jid, sha="abcdef123456", at=t))
+        row = db.one(c, select(db.diffs))
+    assert row["text"] == "" and row["truncated"] is False and row["files"] == []

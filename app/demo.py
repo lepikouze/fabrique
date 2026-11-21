@@ -3,7 +3,7 @@ avancer les jobs d'étape en étape, écrit chronologie, événements, agents, p
 en mouvement. Tout ce qu'il produit est fictif ; un bandeau le signale dans l'interface."""
 import hashlib, logging, random, threading, time
 from sqlalchemy import func, insert, select, update
-from . import config, db, jobs
+from . import config, db, diffview, jobs
 
 log = logging.getLogger("fabrique.demo")
 RNG = random.Random(7)
@@ -38,11 +38,99 @@ def _sha(s):
     return hashlib.sha1(s.encode()).hexdigest()[:7]
 
 
+DEMO_DIFF = """diff --git a/carnet/export.py b/carnet/export.py
+new file mode 100644
+index 0000000..3b1f2aa
+--- /dev/null
++++ b/carnet/export.py
+@@ -0,0 +1,14 @@
++# @TITRE@ (job @REF@, données fictives de démonstration).
++import csv, io
++
++COLONNES = ("titre", "adresse", "tags", "date")
++
++
++def en_csv(liens):
++    # Les liens en CSV : s'ouvre dans un tableur avec les accents corrects.
++    sortie = io.StringIO()
++    w = csv.writer(sortie, delimiter=";")
++    w.writerow(COLONNES)
++    for l in liens:
++        w.writerow([l.titre, l.adresse, ",".join(l.tags), l.date.isoformat()])
++    return sortie.getvalue()
+diff --git a/carnet/vues.py b/carnet/vues.py
+index 7c2d9e1..a90b4f3 100644
+--- a/carnet/vues.py
++++ b/carnet/vues.py
+@@ -1,6 +1,7 @@
+ from fastapi import APIRouter, Response
+
+ from . import depot
++from .export import en_csv
+
+ routeur = APIRouter()
+
+@@ -18,3 +19,9 @@ def liste(tag: str = ""):
+     liens = depot.tous(tag=tag or None)
+-    return {"liens": liens}
++    return {"liens": liens, "total": len(liens)}
++
++
++@routeur.get("/liens.csv")
++def export():
++    return Response(en_csv(depot.tous()), media_type="text/csv; charset=utf-8",
++                    headers={"Content-Disposition": "attachment; filename=liens.csv"})
+diff --git a/tests/test_export.py b/tests/test_export.py
+new file mode 100644
+index 0000000..5d0c1be
+--- /dev/null
++++ b/tests/test_export.py
+@@ -0,0 +1,11 @@
++from datetime import date
++from types import SimpleNamespace as Lien
++
++from carnet.export import en_csv
++
++
++def test_les_accents_et_les_tags_sont_gardes():
++    liens = [Lien(titre="Café de l'équipe", adresse="https://exemple.org", tags=["veille", "à lire"], date=date(2026, 11, 3))]
++    lignes = en_csv(liens).splitlines()
++    assert lignes[0].endswith("titre;adresse;tags;date")
++    assert lignes[1] == "Café de l'équipe;https://exemple.org;veille,à lire;2026-11-03"
+"""
+
+
+def _demo_diff(c, j, sha, t):
+    """Diff fictif d'un job de démonstration : même forme que celui d'un vrai runner (texte, résumé, compteurs du job)."""
+    text = DEMO_DIFF.replace("@TITRE@", j["title"]).replace("@REF@", j["ref"])
+    files = diffview.summary(text)
+    c.execute(db.diffs.delete().where(db.diffs.c.job_id == j["id"]))
+    c.execute(insert(db.diffs).values(job_id=j["id"], sha=sha, text=text, truncated=False, files=files, at=t))
+    return {"files": [f["path"] for f in files], "truncated": False, "additions": sum(f["add"] for f in files),
+            "deletions": sum(f["rem"] for f in files)}
+
+
+def backfill_diffs():
+    """Base de démonstration créée avant la 0.7.5 : les jobs fictifs qui ont déjà une PR reçoivent leur diff fictif."""
+    t = time.time()
+    with db.tx() as c:
+        have = {r["job_id"] for r in db.rows(c, select(db.diffs.c.job_id))}
+        for j in db.rows(c, select(db.jobs).where(db.jobs.c.source == "démo", db.jobs.c.pr_number.is_not(None), db.jobs.c.verified_sha.is_not(None))):
+            if j["id"] not in have:
+                c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(diff=_demo_diff(c, j, j["verified_sha"], t)))
+
+
 def seed():
     """Remplit une base vide avec des repos, deux runners et une douzaine de jobs à toutes les étapes."""
     with db.tx() as c:
         if c.execute(select(func.count()).select_from(db.repos)).scalar():
-            return False
+            seeded = True
+        else:
+            seeded = False
+    if seeded:
+        backfill_diffs()
+        return False
+    with db.tx() as c:
         t = time.time()
         base = {"merge_policy": "confident", "size_limit": 300}
         r1 = c.execute(insert(db.repos).values(provider="forgejo", slug="equipe/carnet-de-liens", name="Carnet de liens (essai)", is_default=True,
@@ -132,6 +220,8 @@ def step(ref, stage, runner_id=None, seed_index=None):
         if stage == "pr":
             n = 10 + jid
             vals.update(pr_number=n, pr_url=f"https://git.exemple.org/{repo['slug']}/pulls/{n}")
+            if j["verified_sha"]:
+                vals["diff"] = _demo_diff(c, j, j["verified_sha"], t)
             policy = (repo["settings"] or {}).get("merge_policy", "off")
             size = RNG.randint(40, 260)
             limits = [{"name": "Checks verts", "ok": True, "detail": f"{j['checks_ok'] or 4}/{j['checks_total'] or 4} au sha {j['verified_sha'] or '—'}"},

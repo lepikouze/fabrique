@@ -198,10 +198,11 @@ def appeared(path, wait=None, sleep=time.sleep):
         sleep(0.5)
 
 
-def mgit(ctx, args, secret_env=None, check=True, timeout=300):
-    """Git dans le miroir du runner (jamais dans l'espace de l'agent), seul endroit où le token est donné à git."""
+def mgit(ctx, args, secret_env=None, check=True, timeout=300, errors=None):
+    """Git dans le miroir du runner (jamais dans l'espace de l'agent), seul endroit où le token est donné à git.
+    errors="replace" : pour une sortie qui peut contenir autre chose que de l'UTF-8 (le contenu d'un fichier du repo)."""
     env = {"PATH": SYS_PATH, "HOME": ctx.mirror, "LANG": "C.UTF-8", **outbound_proxy_env(), **git_env(provider_cfg(secret_env))}
-    p = subprocess.run([GIT, "--git-dir", ctx.mirror, *args], env=env, capture_output=True, text=True, timeout=timeout, cwd=ctx.mirror)
+    p = subprocess.run([GIT, "--git-dir", ctx.mirror, *args], env=env, capture_output=True, text=True, errors=errors, timeout=timeout, cwd=ctx.mirror)
     if check and p.returncode:
         raise Failed(f"git {args[0]} : {(p.stderr or p.stdout).strip()[-400:]}")
     return p
@@ -964,6 +965,7 @@ class Runner:
         g = self.git(ctx)
         mgit(ctx, ["push", "-q", "--force", "--no-follow-tags", g.clone_url(ctx.repo["slug"]), f"{sha}:refs/heads/{ctx.branch}"], secret_env=g.git_env())
         files, add, rem = numstat(ctx, base, sha)
+        self.send_diff(ctx, base, sha)
         d = ctx.decision or {}
         # Tout texte venu de l'agent ou du demandeur est rendu inerte (pas de mention, de fermeture de ticket, d'image ni de
         # lien) : la PR est écrite et fusionnée avec le compte du runner.
@@ -982,6 +984,24 @@ class Runner:
                                deletions=rem, attempts=attempt, **({"recipe": ctx.recipe} if ctx.onboarding else {})) or {}
         self.comment(ctx, n, res)
         self.panel.event(ctx.ref, type="intent_done", note=f"PR #{n}", attempts=attempt)
+
+    def send_diff(self, ctx, base, sha):
+        """Envoie au dashboard le diff du commit vérifié, pour qu'un humain le lise sans quitter la Fabrique. Lu dans le
+        miroir du runner (attributs de la base, aucun programme externe), plafonné, et seulement informatif : un échec
+        d'envoi n'arrête pas le job, la PR sur la forge fait foi."""
+        # Aucun diff ne quitte le runner si son réglage le coupe (FABRIQUE_DIFF_MAX=0) ou si le repo est déclaré confidentiel
+        # dans le dashboard (« Afficher le diff dans la Fabrique » décoché) : le code n'est alors copié nulle part.
+        if config.DIFF_MAX <= 0 or ctx.repo.get("diff") is False:
+            return
+        try:
+            text = mgit(ctx, ["-c", "core.quotepath=off"] + diff_args(base) + ["--no-renames", "--no-color", f"{base}...{sha}"],
+                        errors="replace").stdout
+            cut = len(text) > config.DIFF_MAX
+            if cut:
+                text = text[:text.rfind("\n", 0, config.DIFF_MAX) + 1 or config.DIFF_MAX]
+            self.panel.event(ctx.ref, type="diff", sha=sha, text=text, truncated=cut)
+        except Exception as e:   # jamais bloquant
+            log.warning("%s : diff non envoyé au dashboard (%s)", ctx.ref, e)
 
     def comment(self, ctx, n, res):
         dec = (res or {}).get("decision")
@@ -1003,6 +1023,7 @@ class Runner:
         base = ctx.base_sha
         self.reviews(ctx, head, base)
         files, add, rem = numstat(ctx, base, head)
+        self.send_diff(ctx, base, head)
         res = self.panel.event(ctx.ref, type="pr", number=n, url=ctx.job.get("pr_url") or self.git(ctx).pr_url(ctx.repo["slug"], n),
                                files=files, additions=add, deletions=rem, attempts=ctx.job.get("attempts") or 1,
                                summary=f"Vérification relancée au sha {want} ; barrières réévaluées.") or {}

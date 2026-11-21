@@ -6,6 +6,50 @@ Notable changes to Fabrique, most recent first. The format follows
 
 The interface is still in French: its labels are quoted here as they appear on screen.
 
+## [0.7.5] - 2026-11-21
+
+Chart 0.4.5. Database migration 0015 (a new `diffs` table), applied at start-up.
+
+### Added
+- **Diff inside Fabrique**: the job page (side panel, full view and inbox) has a « Changements » section with the list
+  of files and their added and removed lines, and « Lire le diff », the unified diff file by file: coloured, foldable,
+  with protected paths labelled. The dashboard still never touches the code: the runner sends the diff of the verified
+  commit with the pull request. It is capped (400,000 characters, marked « tronqué » beyond), shown only for the
+  verified commit, read with the same rights as the job and deleted with it. A runner older than 0.7.5 sends no diff:
+  the section simply does not appear.
+- **No diff for a confidential repo**: a repo setting, « Afficher le diff dans la Fabrique », on by default. Unticked,
+  the code of that repo is never copied into Fabrique's database: the runner sends no diff, the dashboard refuses to
+  store one, the diffs already stored for the repo are deleted at once, and the job page links to the pull request
+  instead. `FABRIQUE_DIFF_MAX=0` on a runner turns the diff off for all its jobs.
+- **Study report as PDF**: « Télécharger le rapport (PDF) » next to the Markdown download, in the job and in the inbox.
+  The Markdown is rendered (headings, lists, tables, code blocks, links), with the request's title, the repo, the job
+  reference and the date at the top, and numbered pages. Accents, arrows and common symbols come out right (embedded
+  DejaVu font).
+- **Report downloads can be turned off**, PDF and Markdown separately (Settings → Budgets et barrières, « Rapports
+  d'étude », both on by default): the button disappears and the address answers 404.
+
+### Changed
+- **Faster pages**: a page read the list of jobs three times (page, footer counters, inbox badge) and the settings up
+  to 28 times. Each read is now done once per request. Database queries per page: Jobs 21 → 8, Inbox 33 → 17,
+  Settings 45 → 11, Repos 25 → 10, New request 24 → 8. The gain is small on a local disk and large when the database
+  sits on network storage, where every query costs a round trip.
+- **Roadmap**: "Project mode" under study (a specification, a plan and a task list written into the repo, then one
+  job per task, run in order). "Study report as PDF", "Diff inside Fabrique" and "Faster pages" shipped.
+
+### Fixed
+- **The job page jumped to its top or bottom a few seconds after being opened**, when a section had been unfolded (a
+  check's output, a long text, and now the diff) and the page scrolled. On each live refresh the page was rebuilt with
+  its sections folded, the scroll position was put back while the page was still short, and only then were the
+  sections reopened. Sections are now reopened first. The side panel is also left untouched when nothing changed in the
+  job, so a finished job no longer flickers while other jobs move.
+
+- **The full view of a job did not update live** since 0.7.3: a running job stayed frozen there until the page was
+  reloaded. It now refreshes like the side panel.
+
+### Dependencies
+- `reportlab` 5.1.0 (BSD) and `pillow` 13.0.0 (MIT-CMU), for the PDF. DejaVu fonts 2.37 (Bitstream Vera licence,
+  permissive), as subsets, in `app/static/fonts`.
+
 ## [0.7.4] - 2026-11-20
 
 No change to the application itself: documentation and licence only. Chart 0.4.4.

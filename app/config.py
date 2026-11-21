@@ -59,7 +59,7 @@ JOB_PREFIX = _env("FABRIQUE_PREFIX", "FAB")
 # API des runners refusée quand la requête est passée par un proxy inverse (cas du tout-en-un, où le runner est sur le
 # réseau interne) ; 0 quand les runners sont sur d'autres machines et arrivent par le proxy inverse.
 RUNNER_API_INTERNAL = _env("FABRIQUE_RUNNER_API_INTERNAL", "1") == "1"
-APP_VERSION = "0.7.4"                                   # numéro de lot livré
+APP_VERSION = "0.7.5"                                   # numéro de lot livré
 BUILD = _env("FABRIQUE_VERSION", "dev")              # sha du commit, donné à la construction de l'image
 VERSION = f"v{APP_VERSION} · {BUILD}"
 
