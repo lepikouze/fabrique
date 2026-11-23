@@ -2,331 +2,357 @@
 {% block title %}Settings{% endblock %}
 {% block h1 %}Settings{% endblock %}
 {% block counters %}{% endblock %}
-{% macro trace(row) %}{% if row %}<p class="trace">Enregistré par <b>{{ row.updated_by }}</b> le {{ row.updated_at|date_longue }}.</p>{% else %}<p class="trace">Valeurs par défaut, jamais modifiées.</p>{% endif %}{% endmacro %}
-{% macro lockmark(k) %}{% if k in oidc_locked %}<span class="lock" title="Fixé par l'environnement ({{ k|upper }})">{{ ic('lock') }}environnement</span>{% endif %}{% endmacro %}
+{% macro trace(row) %}{% if row %}<p class="trace">Saved by <b>{{ row.updated_by }}</b> on {{ row.updated_at|long_date }}.</p>{% else %}<p class="trace">Default values, never changed.</p>{% endif %}{% endmacro %}
+{% macro lockmark(k) %}{% if k in oidc_locked %}<span class="lock" title="Set by the environment ({{ k|upper }})">{{ ic('lock') }}environment</span>{% endif %}{% endmacro %}
 {% block content %}
 <div class="settings">
- <nav class="tabs" aria-label="Sections des settings">{% for k, lbl in sections %}<a href="?tab={{k}}" class="{{'on' if tab == k}}" {% if tab == k %}aria-current="page"{% endif %}>{{ lbl }}</a>{% endfor %}</nav>
+ <nav class="tabs" aria-label="Settings sections">{% for k, lbl in sections %}<a href="?tab={{k}}" class="{{'on' if tab == k}}" {% if tab == k %}aria-current="page"{% endif %}>{{ lbl }}</a>{% endfor %}</nav>
  <div class="tab-body">
  {% if tab == 'agents' %}{% set ag, row = data.agents %}{% set models = data.models[0] %}
   <section class="box">
-   <h2>Agent et modèle par défaut</h2>
-   <p class="muted">Les nouveaux jobs démarrent avec ces settings. Un repo peut les remplacer, et une demande peut préciser les siens (la demande l'emporte sur le repo, qui l'emporte sur ces settings). Choisis un <b>modèle</b> (un seul pour tout) ou un <b>profil</b> (un modèle par rôle, défini plus bas).</p>
-   {% if default_problem %}<div class="callout c-amber"><b class="ct">Aucun job ne peut démarrer</b><p>{{ default_problem }}</p></div>{% endif %}
+   <h2>Default agent and model</h2>
+   <p class="muted">New jobs start with these settings. A repo can replace them, and a request can specify its own (the request wins over the repo, which wins over these settings). Choose a <b>model</b> (a single one for everything) or a <b>profile</b> (one model per role, defined below).</p>
+   {% if default_problem %}<div class="callout c-amber"><b class="ct">No job can start</b><p>{{ default_problem }}</p></div>{% endif %}
    {% set gp = profs|selectattr('id', 'equalto', ag.profile)|first %}
-   {% if gp %}<p class="now">Les nouveaux jobs démarrent sur <b>{{ HARNESSES[ag.harness] }}</b> avec le profil <b>{{ gp.name }}</b>.</p>
-   {% elif ag.model %}<p class="now">Les nouveaux jobs démarrent sur <b>{{ HARNESSES[ag.harness] }}</b> avec <b>{{ (models|selectattr('id', 'equalto', ag.model)|first or {'name': ag.model}).name }}</b> <span class="mono muted">({{ ag.harness }} · {{ ag.model }})</span>.</p>{% endif %}
+   {% if gp %}<p class="now">New jobs start on <b>{{ HARNESSES[ag.harness] }}</b> with profile <b>{{ gp.name }}</b>.</p>
+   {% elif ag.model %}<p class="now">New jobs start on <b>{{ HARNESSES[ag.harness] }}</b> with <b>{{ (models|selectattr('id', 'equalto', ag.model)|first or {'name': ag.model}).name }}</b> <span class="mono muted">({{ ag.harness }} · {{ ag.model }})</span>.</p>{% endif %}
    <form method="post" action="/settings/agents" class="frm">
     <div class="grid2">
-     <div><label for="s-h">Agent (harnais)</label><select id="s-h" name="harness" data-compat-harness>{% for k, v in HARNESSES.items() %}<option value="{{k}}" data-api="{{ HARNESS_API.get(k, 'anthropic') }}" {{'selected' if ag.harness == k}} {{ 'disabled' if k not in READY }}>{{v}}{{ ' (bientôt)' if k not in READY }}</option>{% endfor %}</select><small class="help">Claude Code : Claude, ou un modèle local (llama.cpp, vLLM). Codex : modèles d'OpenAI uniquement.</small></div>
-     <div><label for="s-m">Modèle ou profil</label><select id="s-m" name="choice" data-compat-model required>{% if not ag.model %}<option value="" selected disabled>{{ 'Choisir un modèle' if models else 'Ajoute d’abord un provider ci-dessous' }}</option>{% endif %}{{ model_or_profile(profs, models, ag.model, ag.profile, compat=True) }}</select></div>
+     <div><label for="s-h">Agent (harness)</label><select id="s-h" name="harness" data-compat-harness>{% for k, v in HARNESSES.items() %}<option value="{{k}}" data-api="{{ HARNESS_API.get(k, 'anthropic') }}" {{'selected' if ag.harness == k}} {{ 'disabled' if k not in READY }}>{{v}}{{ ' (soon)' if k not in READY }}</option>{% endfor %}</select><small class="help">Claude Code: Claude, or a local model (llama.cpp, vLLM). Codex: OpenAI models only.</small></div>
+     <div><label for="s-m">Model or profile</label><select id="s-m" name="choice" data-compat-model required>{% if not ag.model %}<option value="" selected disabled>{{ 'Choose a model' if models else 'First add a provider below' }}</option>{% endif %}{{ model_or_profile(profs, models, ag.model, ag.profile, compat=True) }}</select></div>
     </div>
     {{ trace(row) }}
-    <div class="row-end"><button class="btn primary">Enregistrer</button></div>
+    <div class="row-end"><button class="btn primary">Save</button></div>
    </form>
   </section>
   {% macro mname(x) %}{{ (models|selectattr('id', 'equalto', x)|first or {'name': x}).name }}{% endmacro %}
-  <section class="box" id="profils">
-   <h2>Profils de modèles</h2>
-   <p class="muted">Un modèle par rôle, réutilisable d'un repo à l'autre. Chaque rôle nomme son modèle, même s'il est identique à celui d'un autre rôle. Un profil se choisit à la place d'un modèle : ci-dessus par défaut, dans un repo, ou sur une demande.</p>
-   <table class="tbl"><thead><tr><th>Profil</th>{% for k, (lbl, help) in ROLES.items() %}<th>{{ lbl }}</th>{% endfor %}<th>Utilisé par</th><th></th></tr></thead><tbody>
+  <section class="box" id="translation">{% set trm, trow = data.translation %}
+   <h2>Translation model</h2>
+   <p class="muted">When a job was written in a language other than the reader's, a “Translate” button appears on its page. This model then translates the texts written by the agents (understanding, assumptions, opinion, questions, study report, review points). Nothing is translated unless asked; never code, a diff or the output of a command. With no model chosen, the button does not appear.</p>
+   <form method="post" action="/settings/translation" class="frm">
+    <label for="tr-m">Model</label>
+    <select id="tr-m" name="model" style="max-width:420px"><option value="">None: no translation offered</option>{% for m in models %}<option value="{{ m.id }}"{% if trm.model == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+    <small class="help">A fast local model is fine. With a billed model, the cost of each translation is shown on the job's page and in the audit log.</small>
+    {{ trace(trow) }}
+    <div class="row-end"><button class="btn primary">Save</button></div>
+   </form>
+  </section>
+  <section class="box" id="profiles">
+   <h2>Model profiles</h2>
+   <p class="muted">One model per role, reusable from one repo to another. Each role names its model, even when it is the same as another role's. A profile is chosen in place of a model: above as the default, in a repo, or on a request.</p>
+   <table class="tbl"><thead><tr><th>Profile</th>{% for k, (lbl, help) in ROLES.items() %}<th>{{ lbl }}</th>{% endfor %}<th>Used by</th><th></th></tr></thead><tbody>
    {% for p in profs %}{% set us = prof_usage[p.id] %}
     <tr><td><b>{{ p.name }}</b></td>
      {% for k in ROLES %}{% set r = p.roles[k] %}<td>{% if r.model %}{{ mname(r.model) }}{% else %}<span class="muted">= agent</span>{% endif %}</td>{% endfor %}
-     <td>{% if us.global %}<span class="pill">par défaut</span> {% endif %}{% if us.repos %}<span class="muted small">{{ us.repos|join(', ') }}</span>{% elif not us.global %}<span class="muted">—</span>{% endif %}</td>
-     <td class="actions"><a class="btn sm" href="/settings?tab=agents&profile={{ p.id }}#profil">Modifier</a>
-      <form method="post" action="/settings/profiles" data-confirm="Retirer le profil « {{ p.name }} » ? Les repos qui l'utilisent reviennent à leur modèle."><input type="hidden" name="action" value="remove"><input type="hidden" name="pid" value="{{ p.id }}"><button class="btn sm ghostb" aria-label="Retirer {{ p.name }}">Retirer</button></form></td></tr>
-   {% else %}<tr><td colspan="{{ ROLES|length + 3 }}" class="muted">Aucun profil : chaque job utilise un seul modèle, celui du repo ou celui par défaut.</td></tr>{% endfor %}
+     <td>{% if us.global %}<span class="pill">default</span> {% endif %}{% if us.repos %}<span class="muted small">{{ us.repos|join(', ') }}</span>{% elif not us.global %}<span class="muted">—</span>{% endif %}</td>
+     <td class="actions"><a class="btn sm" href="/settings?tab=agents&profile={{ p.id }}#profile">Edit</a>
+      <form method="post" action="/settings/profiles" data-confirm="Remove profile “{{ p.name }}”? The repos using it go back to their model."><input type="hidden" name="action" value="remove"><input type="hidden" name="pid" value="{{ p.id }}"><button class="btn sm ghostb" aria-label="Remove {{ p.name }}">Remove</button></form></td></tr>
+   {% else %}<tr><td colspan="{{ ROLES|length + 3 }}" class="muted">No profile: each job uses a single model, the repo's or the default one.</td></tr>{% endfor %}
    </tbody></table>
-   <details class="add-prov" id="profil"{% if prof_edit %} open{% endif %}><summary class="btn">{% if prof_edit %}Modifier « {{ prof_edit.name }} »{% else %}{{ ic('plus') }}Ajouter un profil{% endif %}</summary>
+   <details class="add-prov" id="profile"{% if prof_edit %} open{% endif %}><summary class="btn">{% if prof_edit %}Edit “{{ prof_edit.name }}”{% else %}{{ ic('plus') }}Add a profile{% endif %}</summary>
    <form method="post" action="/settings/profiles" class="frm inline-form" autocomplete="off">
     <input type="hidden" name="action" value="save">
     {% if prof_edit %}<input type="hidden" name="pid" value="{{ prof_edit.id }}"><input type="hidden" name="edit" value="1">{% endif %}
-    <label for="pf-name">Nom du profil</label><input id="pf-name" name="name" required maxlength="60" placeholder="Mixte : local et Claude" value="{{ prof_edit.name if prof_edit else '' }}">
-    <table class="tbl roles"><thead><tr><th>Rôle</th><th>Modèle</th></tr></thead><tbody>
+    <label for="pf-name">Profile name</label><input id="pf-name" name="name" required maxlength="60" placeholder="Mixed: local and Claude" value="{{ prof_edit.name if prof_edit else '' }}">
+    <table class="tbl roles"><thead><tr><th>Role</th><th>Model</th></tr></thead><tbody>
     {% for k, (lbl, help) in ROLES.items() %}{% set r = (prof_edit.roles[k] if prof_edit else {'model': '', 'effort': 'provider'}) %}
-     <tr><td><label for="pf-m-{{k}}"><b>{{ lbl }}</b></label><br><small class="muted">{{ help }}</small><br><small class="example">Exemple : {{ EXAMPLES[k] }}</small></td>
-      <td><span class="m-lbl muted small">Modèle</span><select id="pf-m-{{k}}" name="model:{{k}}" required><option value="" {{ 'selected' if not r.model }} disabled>Choisir un modèle</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
+     <tr><td><label for="pf-m-{{k}}"><b>{{ lbl }}</b></label><br><small class="muted">{{ help }}</small><br><small class="example">Example: {{ EXAMPLES[k] }}</small></td>
+      <td><span class="m-lbl muted small">Model</span><select id="pf-m-{{k}}" name="model:{{k}}" required><option value="" {{ 'selected' if not r.model }} disabled>Choose a model</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
 </tr>
     {% endfor %}
     </tbody></table>
-    <p class="muted small">L'agent garde un seul modèle pour toute sa session : rien ne se perd entre le tri et l'implémentation. Les relecteurs partent toujours d'un contexte neuf (le diff et la demande) : un autre modèle leur donne un second regard. Le niveau d'effort d'un modèle local se règle sur son provider, plus bas.</p>
-    <div class="row-end">{% if prof_edit %}<a class="btn" href="/settings?tab=agents#profils">Annuler</a>{% endif %}<button class="btn primary">Enregistrer le profil</button></div>
+    <p class="muted small">The agent keeps a single model for its whole session: nothing is lost between triage and implementation. Reviewers always start from a fresh context (the diff and the request): another model gives them a second opinion. A local model's effort level is set on its provider, further down.</p>
+    <div class="row-end">{% if prof_edit %}<a class="btn" href="/settings?tab=agents#profiles">Cancel</a>{% endif %}<button class="btn primary">Save the profile</button></div>
    </form>
    </details>
   </section>
   <section class="box">
-   <h2>Providers de modèles</h2>
-   <p class="muted">Déclare un provider, colle sa clé, puis coche les modèles à proposer : la liste vient du provider lui-même. Les clés sont en écriture seule : chiffrées dans la base, jamais réaffichées, transmises au runner seulement (sa key gateway les garde ; le conteneur du job ne les voit jamais).</p>
-   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Clé maître absente</b><p>La variable FABRIQUE_SECRET_KEY n'est pas définie : impossible d'enregistrer une clé d'API (un serveur local sans clé reste possible).</p></div>{% endif %}
-   <table class="tbl"><thead><tr><th>Provider</th><th>Type</th><th>Adresse</th><th>Clé</th><th>Modèles</th><th></th></tr></thead><tbody>
+   <h2>Model providers</h2>
+   <p class="muted">Declare a provider, paste its key, then tick the models to offer: the list comes from the provider itself. Keys are write-only: encrypted in the database, never shown again, passed to the runner only (its key gateway keeps them; the job's container never sees them).</p>
+   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Master key missing</b><p>The FABRIQUE_SECRET_KEY variable is not set: an API key cannot be stored (a local server without a key is still possible).</p></div>{% endif %}
+   <table class="tbl"><thead><tr><th>Provider</th><th>Type</th><th>Address</th><th>Key</th><th>Models</th><th></th></tr></thead><tbody>
    {% for p in provs %}{% set n = models|selectattr('provider_id', 'equalto', p.id)|list|length %}
-    <tr><td><b>{{ p.name }}</b> <span class="mono muted">{{ p.id }}</span></td><td>{{ ptypes[p.type][0] }}</td><td class="mono muted">{{ p.base_url }}{% if p.type == 'compatible' and p.effort %}<br><small>effort : {{ p.effort }}</small>{% endif %}</td>
-     <td>{% if p.has_key %}<span class="ok">définie</span>{% elif p.type == 'compatible' %}<span class="muted">aucune</span>{% else %}<span class="bad">manquante</span>{% endif %}</td>
+    <tr><td><b>{{ p.name }}</b> <span class="mono muted">{{ p.id }}</span></td><td>{{ ptypes[p.type][0] }}</td><td class="mono muted">{{ p.base_url }}{% if p.type == 'compatible' and p.effort %}<br><small>effort: {{ p.effort }}</small>{% endif %}</td>
+     <td>{% if p.has_key %}<span class="ok">set</span>{% elif p.type == 'compatible' %}<span class="muted">none</span>{% else %}<span class="bad">missing</span>{% endif %}</td>
      <td>{{ n }}</td>
-     <td class="actions"><a class="btn sm" href="/settings?tab=agents&load={{ p.id }}#modeles">Choisir les modèles</a>
-      <a class="btn sm" href="/settings?tab=agents&edit={{ p.id }}#fournisseur">Modifier</a>
-      <form method="post" action="/settings/providers"><input type="hidden" name="action" value="remove"><input type="hidden" name="pid" value="{{p.id}}"><button class="btn sm ghostb" aria-label="Retirer {{p.name}}">Retirer</button></form></td></tr>
-   {% else %}<tr><td colspan="6" class="muted">Aucun provider.</td></tr>{% endfor %}
+     <td class="actions"><a class="btn sm" href="/settings?tab=agents&load={{ p.id }}#models">Choose the models</a>
+      <a class="btn sm" href="/settings?tab=agents&edit={{ p.id }}#provider">Edit</a>
+      <form method="post" action="/settings/providers"><input type="hidden" name="action" value="remove"><input type="hidden" name="pid" value="{{p.id}}"><button class="btn sm ghostb" aria-label="Remove {{p.name}}">Remove</button></form></td></tr>
+   {% else %}<tr><td colspan="6" class="muted">No provider.</td></tr>{% endfor %}
    </tbody></table>
    {% if load_pid %}{% set lp = provs|selectattr('id', 'equalto', load_pid)|first %}
-   <div class="box sub" id="modeles">
-    <h3>Modèles de {{ lp.name if lp else load_pid }}</h3>
-    {% if load_err %}<div class="callout c-red"><b class="ct">Liste impossible</b><p>{{ load_err }}</p></div>
+   <div class="box sub" id="models">
+    <h3>Models of {{ lp.name if lp else load_pid }}</h3>
+    {% if load_err %}<div class="callout c-red"><b class="ct">Cannot list</b><p>{{ load_err }}</p></div>
     {% elif loaded is not none %}
     <form method="post" action="/settings/providers" class="frm">
      <input type="hidden" name="pid" value="{{ load_pid }}">
-     <p class="muted small">Coche les modèles à proposer dans la Fabrique. Pour un serveur compatible, « Tester » fait un vrai appel d'outil par chaque API et dit quel agent saura l'utiliser.</p>
-     <table class="tbl"><thead><tr><th></th><th>Modèle</th><th>Agents compatibles</th><th></th></tr></thead><tbody>
+     <p class="muted small">Tick the models to offer in Fabrique. For a compatible server, “Test” makes a real tool call through each API and says which agent will be able to use it.</p>
+     <p class="muted small">“Simultaneous jobs” limits how many jobs use a model at the same time, for a local server that cannot serve several: the others wait in the queue. Leave it empty for no limit.</p>
+     <table class="tbl"><thead><tr><th></th><th>Model</th><th>Compatible agents</th><th title="Jobs that may use this model as their agent's model at the same time. Empty: no limit. The others wait in the queue.">Simultaneous jobs</th><th></th></tr></thead><tbody>
      {% set on = models|selectattr('provider_id', 'equalto', load_pid)|map(attribute='id')|list %}
      {% for m in loaded %}{% set pr = (probes.get(load_pid) or {}).get(m.id) %}
       <tr><td><input type="checkbox" name="model" value="{{ m.id }}" id="mm-{{loop.index}}" {{ 'checked' if m.id in on }}><input type="hidden" name="name:{{ m.id }}" value="{{ m.name }}"></td>
        <td><label for="mm-{{loop.index}}" class="mono">{{ m.id }}</label>{% if m.name != m.id %} <span class="muted">{{ m.name }}</span>{% endif %}</td>
-       <td>{% if lp.type == 'anthropic' %}Claude Code{% elif lp.type == 'openai' %}Codex{% elif pr %}{{ 'Claude Code ✓' if pr.anthropic else 'Claude Code ✗ (appel d’outil raté)' }}{% else %}<span class="muted">Claude Code (non testé)</span>{% endif %}</td>
-       <td>{% if lp.type == 'compatible' %}<button class="btn sm" name="probe" value="{{ m.id }}" title="Charge le modèle sur le serveur : peut prendre une minute">Tester</button>{% endif %}</td></tr>
-     {% else %}<tr><td colspan="4" class="muted">Le provider ne liste aucun modèle.</td></tr>{% endfor %}
+       <td>{% if lp.type == 'anthropic' %}Claude Code{% elif lp.type == 'openai' %}Codex{% elif pr %}{{ 'Claude Code ✓' if pr.anthropic else 'Claude Code ✗ (tool call failed)' }}{% else %}<span class="muted">Claude Code (not tested)</span>{% endif %}</td>
+       <td>{% set cur = models|selectattr('id', 'equalto', m.id)|list %}<input type="number" min="1" max="99" step="1" name="max:{{ m.id }}" value="{{ (cur[0].max_jobs if cur and cur[0].max_jobs else '') }}" placeholder="no limit" aria-label="Simultaneous jobs" style="max-width:110px"></td>
+       <td>{% if lp.type == 'compatible' %}<button class="btn sm" name="probe" value="{{ m.id }}" title="Loads the model on the server: may take a minute">Test</button>{% endif %}</td></tr>
+     {% else %}<tr><td colspan="5" class="muted">The provider lists no model.</td></tr>{% endfor %}
      </tbody></table>
-     <div class="row-end"><button class="btn primary" name="action" value="enable">Proposer les modèles cochés</button></div>
+     <div class="row-end"><button class="btn primary" name="action" value="enable">Offer the ticked models</button></div>
     </form>
     {% endif %}
    </div>
    {% endif %}
-   <details class="add-prov" id="provider"{% if not provs or edit %} open{% endif %}><summary class="btn">{% if edit %}Modifier « {{ edit.name }} »{% else %}{{ ic('plus') }}Ajouter un provider{% endif %}</summary>
+   <details class="add-prov" id="provider"{% if not provs or edit %} open{% endif %}><summary class="btn">{% if edit %}Edit “{{ edit.name }}”{% else %}{{ ic('plus') }}Add a provider{% endif %}</summary>
    <form method="post" action="/settings/providers" class="frm inline-form" autocomplete="off" data-provider-form>
     <input type="hidden" name="action" value="save">
     <div class="grid4">
      <div><label for="p-type">Type</label><select id="p-type" name="type">{% for k, v in ptypes.items() %}<option value="{{k}}" data-base="{{ v[1] }}" {{ 'selected' if edit and edit.type == k }}>{{ v[0] }}</option>{% endfor %}</select></div>
-     <div><label for="p-id">Identifiant</label>{% if edit %}<input id="p-id" value="{{ edit.id }}" class="mono" disabled><input type="hidden" name="pid" value="{{ edit.id }}">{% else %}<input id="p-id" name="pid" required maxlength="40" pattern="[a-z0-9][a-z0-9-]*" class="mono" placeholder="anthropic">{% endif %}</div>
-     <div><label for="p-name">Nom affiché</label><input id="p-name" name="name" required maxlength="80" placeholder="Anthropic" value="{{ edit.name if edit else '' }}"></div>
-     <div><label for="p-base">Adresse de l'API</label><input id="p-base" name="base_url" maxlength="200" class="mono" placeholder="https://api.anthropic.com" value="{{ edit.base_url if edit else '' }}"></div>
+     <div><label for="p-id">Identifier</label>{% if edit %}<input id="p-id" value="{{ edit.id }}" class="mono" disabled><input type="hidden" name="pid" value="{{ edit.id }}">{% else %}<input id="p-id" name="pid" required maxlength="40" pattern="[a-z0-9][a-z0-9-]*" class="mono" placeholder="anthropic">{% endif %}</div>
+     <div><label for="p-name">Display name</label><input id="p-name" name="name" required maxlength="80" placeholder="Anthropic" value="{{ edit.name if edit else '' }}"></div>
+     <div><label for="p-base">API address</label><input id="p-base" name="base_url" maxlength="200" class="mono" placeholder="https://api.anthropic.com" value="{{ edit.base_url if edit else '' }}"></div>
     </div>
-    <label for="p-key">Clé d'API <small class="muted">{% if edit and edit.has_key %}une clé est définie : laisse vide pour la garder, ou colles-en une nouvelle pour la remplacer{% else %}écriture seule ; facultative pour un serveur local{% endif %}</small></label>
-    <input id="p-key" name="key" type="password" maxlength="400" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ '•••••••• (clé définie)' if edit and edit.has_key else '' }}">
-    {% if edit and edit.has_key %}<label class="check-row"><input type="checkbox" name="clear_key" value="1"> Supprimer la clé enregistrée</label>{% endif %}
+    <label for="p-key">API key <small class="muted">{% if edit and edit.has_key %}a key is set: leave empty to keep it, or paste a new one to replace it{% else %}write-only; optional for a local server{% endif %}</small></label>
+    <input id="p-key" name="key" type="password" maxlength="400" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ '•••••••• (key set)' if edit and edit.has_key else '' }}">
+    {% if edit and edit.has_key %}<label class="check-row"><input type="checkbox" name="clear_key" value="1"> Delete the stored key</label>{% endif %}
     <div data-only-type="compatible" {% if not edit or edit.type != 'compatible' %}hidden{% endif %}>
-     <label for="p-effort">Niveau d'effort <small class="muted">serveurs locaux seulement : durée de réflexion du modèle avant chaque action</small></label>
+     <label for="p-effort">Effort level <small class="muted">local servers only: how long the model thinks before each action</small></label>
      <select id="p-effort" name="effort">{% for k, v in efforts.items() %}<option value="{{k}}" {{ 'selected' if (edit.effort if edit and 'effort' in edit else 'medium') == k }}>{{ v }}</option>{% endfor %}</select>
-     <p class="muted small">Plus l'effort est bas, plus l'agent répond vite. Les valeurs acceptées dépendent du serveur (vLLM avec Qwen3 : low, medium, xhigh). Par défaut : moyen. Avec « Défaut du serveur », la Fabrique n'envoie aucun niveau.</p>
+     <p class="muted small">The lower the effort, the faster the agent answers. Accepted values depend on the server (vLLM with Qwen3: low, medium, xhigh). Default: medium. With “Server default”, Fabrique sends no level.</p>
     </div>
-    <div class="row-end">{% if edit %}<a class="btn" href="/settings?tab=agents">Annuler</a>{% endif %}<button class="btn primary">{{ 'Enregistrer' if edit else 'Enregistrer et charger les modèles' }}</button></div>
+    <div class="row-end">{% if edit %}<a class="btn" href="/settings?tab=agents">Cancel</a>{% endif %}<button class="btn primary">{{ 'Save' if edit else 'Save and load the models' }}</button></div>
    </form>
    </details>
   </section>
 
  {% elif tab == 'git' %}{% set git, row = data.git %}
   <section class="box">
-   <h2>Providers Git</h2>
-   <p class="muted">Où vivent les repos. Plusieurs providers du même type sont possibles (deux GitLab, ou le même GitLab avec deux comptes robots) : chacun a son nom, et chaque repo est rattaché à l'un d'eux. Deux providers peuvent avoir la même adresse, pas le même token. Le token est celui d'un <b>compte robot</b> dédié à la Fabrique : il clone, pousse des branches, ouvre et merge des PR. Il est chiffré, jamais réaffiché, et remis au runner pour chaque job. Protège la branche principale de tes repos : le robot doit pouvoir merger une PR, pas pousser directement. Sans token ici, le runner utilise ses variables d'environnement (GIT_TOKEN, GITLAB_TOKEN, GITHUB_TOKEN).</p>
-   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Clé maître absente</b><p>FABRIQUE_SECRET_KEY n'est pas définie : impossible d'enregistrer un token.</p></div>{% endif %}
-   <table class="tbl"><thead><tr><th>Nom</th><th>Type</th><th>Adresse</th><th>Token</th><th>Nouveaux repos</th><th></th></tr></thead><tbody>
-   {% for g in git %}<tr><td>{{ g.name }}</td><td>{{ PROVIDERS[g.type] }}</td><td class="mono">{{ g.base_url }}</td><td>{% if g.token %}<span class="ok">défini</span>{% else %}<span class="muted">variable du runner</span>{% endif %}</td><td>{% if g.creation %}créés dans <span class="mono">{{ g.creation }}</span>{% else %}<span class="muted">création désactivée</span>{% endif %}</td>
-    <td class="actions"><a class="btn sm" href="/settings?tab=git&editgit={{ g.id }}#git-form">Modifier</a>    <form method="post" action="/settings/git" data-confirm="Retirer {{ g.name }} ?"><input type="hidden" name="remove" value="{{ g.id }}"><button class="btn sm ghostb" aria-label="Retirer {{g.name}}">Retirer</button></form></td></tr>
-   {% else %}<tr><td colspan="6" class="muted">Aucun provider.</td></tr>{% endfor %}
+   <h2>Git providers</h2>
+   <p class="muted">Where the repos live. Several providers of the same type are possible (two GitLab instances, or the same GitLab with two bot accounts): each has its name, and each repo is attached to one of them. Two providers may share an address, not a token. The token belongs to a <b>bot account</b> dedicated to Fabrique: it clones, pushes branches, opens and merges PRs. It is encrypted, never shown again, and handed to the runner for each job. Protect the main branch of your repos: the bot must be able to merge a PR, not push directly. Without a token here, the runner uses its environment variables (GIT_TOKEN, GITLAB_TOKEN, GITHUB_TOKEN).</p>
+   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Master key missing</b><p>FABRIQUE_SECRET_KEY is not set: a token cannot be stored.</p></div>{% endif %}
+   <table class="tbl"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Token</th><th>New repos</th><th></th></tr></thead><tbody>
+   {% for g in git %}<tr><td>{{ g.name }}</td><td>{{ PROVIDERS[g.type] }}</td><td class="mono">{{ g.base_url }}</td><td>{% if g.token %}<span class="ok">set</span>{% else %}<span class="muted">runner variable</span>{% endif %}</td><td>{% if g.creation %}created in <span class="mono">{{ g.creation }}</span>{% else %}<span class="muted">creation disabled</span>{% endif %}</td>
+    <td class="actions"><a class="btn sm" href="/settings?tab=git&editgit={{ g.id }}#git-form">Edit</a>    <form method="post" action="/settings/git" data-confirm="Remove {{ g.name }}?"><input type="hidden" name="remove" value="{{ g.id }}"><button class="btn sm ghostb" aria-label="Remove {{g.name}}">Remove</button></form></td></tr>
+   {% else %}<tr><td colspan="6" class="muted">No provider.</td></tr>{% endfor %}
    </tbody></table>
    <form method="post" action="/settings/git" class="frm inline-form" autocomplete="off" id="git-form" data-git-form>
-    {% if git_edit %}<p class="muted"><b>Modifier « {{ git_edit.name }} ».</b> Change ce que tu veux ; laisse le token vide pour garder l'actuel, sauf si l'adresse change (il faut alors le saisir à nouveau). <a class="link" href="/settings?tab=git">Annuler</a></p>
-    {% else %}<p class="muted">Ajouter un provider. Pour changer le nom, l'adresse, le token ou l'organisation d'un provider existant, utilise « Modifier » sur sa ligne.</p>{% endif %}
+    {% if git_edit %}<p class="muted"><b>Edit “{{ git_edit.name }}”.</b> Change what you want; leave the token empty to keep the current one, unless the address changes (it must then be entered again). <a class="link" href="/settings?tab=git">Cancel</a></p>
+    {% else %}<p class="muted">Add a provider. To change the name, address, token or organization of an existing provider, use “Edit” on its row.</p>{% endif %}
     <div class="grid4">
      <div><label for="g-type">Type</label>{% if git_edit %}<input type="hidden" name="gid" value="{{ git_edit.id }}"><input type="hidden" name="type" value="{{ git_edit.type }}"><input id="g-type" value="{{ PROVIDERS[git_edit.type] }}" disabled>{% else %}<select id="g-type" name="type">{% for k, v in PROVIDERS.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}</select>{% endif %}</div>
-     <div><label for="g-name">Nom</label><input id="g-name" name="name" required maxlength="80" placeholder="Forge de l'équipe" value="{{ git_edit.name if git_edit }}"></div>
-     <div><label for="g-base">Adresse</label><input id="g-base" name="base_url" required maxlength="200" class="mono" placeholder="https://git.exemple.org" value="{{ git_edit.base_url if git_edit }}"></div>
-     <div><label for="g-tok">Token du compte robot</label><input id="g-tok" name="token" type="password" maxlength="500" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ 'inchangé si vide' if git_edit and git_edit.token }}"></div>
+     <div><label for="g-name">Name</label><input id="g-name" name="name" required maxlength="80" placeholder="Team Git host" value="{{ git_edit.name if git_edit }}"></div>
+     <div><label for="g-base">Address</label><input id="g-base" name="base_url" required maxlength="200" class="mono" placeholder="https://git.example.org" value="{{ git_edit.base_url if git_edit }}"></div>
+     <div><label for="g-tok">Bot account token</label><input id="g-tok" name="token" type="password" maxlength="500" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ 'unchanged if empty' if git_edit and git_edit.token }}"></div>
     </div>
-    <label for="g-cr">Organisation des nouveaux repos <small class="muted">facultatif</small></label>
+    <label for="g-cr">Organization for new repos <small class="muted">optional</small></label>
     <input id="g-cr" name="creation" maxlength="100" class="mono" placeholder="fabrique" value="{{ git_edit.creation if git_edit }}">
-    <p class="muted small">La Fabrique peut <b>créer</b> un repo à la demande : un reviewer le demande depuis la page Repos, une seconde personne valide, et le repo est créé chez ce provider. Indique ici dans quelle organisation (Forgejo, GitHub) ou quel groupe (GitLab) ces repos doivent être créés ; le compte robot doit avoir le droit d'y créer des repos. Laisse vide si tu ne veux pas que la Fabrique crée de repos.</p>
+    <p class="muted small">Fabrique can <b>create</b> a repo on request: a reviewer asks for it from the Repos page, a second person approves, and the repo is created at this provider. Say here in which organization (Forgejo, GitHub) or group (GitLab) these repos must be created; the bot account must be allowed to create repos there. Leave empty if you do not want Fabrique to create repos.</p>
     {{ trace(row) }}
     <p class="git-test" data-git-test-out role="status" aria-live="polite" hidden></p>
-    <div class="row-end"><small class="muted">Le test se connecte à la forge avec ce token, sans rien enregistrer.</small><button type="button" class="btn" data-git-test>Tester</button><button class="btn primary">Enregistrer le provider</button></div>
+    <div class="row-end"><small class="muted">The test connects to the Git host with this token, without saving anything.</small><button type="button" class="btn" data-git-test>Test</button><button class="btn primary">Save the provider</button></div>
    </form>
   </section>
 
 {% elif tab == 'oidc' %}{% set stored, row = data.oidc %}
   <section class="box">
-   <h2>Connexion (OIDC)</h2>
-   <p class="muted">N'importe quel provider OpenID Connect (Keycloak, Authentik, Entra ID…). Les rôles se choisissent dans Utilisateurs et rôles ; la correspondance avec des groupes du provider est facultative.</p>
+   <h2>Sign-in (OIDC)</h2>
+   <p class="muted">Any OpenID Connect provider (Keycloak, Authentik, Entra ID…). Roles are chosen in Users and roles; mapping them to the provider's groups is optional.</p>
    <div class="status-line">
-   {% if mode == 'on' %}<span class="pill on">{{ dot('var(--ok)') }}Connexion active</span>
-   {% elif mode == 'off' %}<span class="pill off">{{ dot('var(--amber)') }}Mode ouvert (FABRIQUE_OPEN=1) : sans connexion, développement seulement</span>
-   {% else %}<span class="pill bad">{{ dot('var(--bad)') }}Configuration incomplète : dashboard fermé</span>{% endif %}
+   {% if mode == 'on' %}<span class="pill on">{{ dot('var(--ok)') }}Sign-in active</span>
+   {% elif mode == 'off' %}<span class="pill off">{{ dot('var(--amber)') }}Open mode (FABRIQUE_OPEN=1): no sign-in, development only</span>
+   {% else %}<span class="pill bad">{{ dot('var(--bad)') }}Incomplete configuration: dashboard closed</span>{% endif %}
    </div>
-   {% if oidc_problems %}<div class="callout c-red"><b class="ct">À corriger</b><ul class="bul">{% for p in oidc_problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
-   {% if mode == 'off' %}<div class="callout c-amber"><b class="ct">Avant de renseigner l'émetteur</b><p>Dès qu'un émetteur est enregistré, la connexion devient obligatoire. Vérifie que OIDC_CLIENT_SECRET et SESSION_SECRET sont dans l'environnement, et que ton compte est dans un groupe admin (ou dans FABRIQUE_ADMINS), sinon tu ne pourras plus revenir ici.</p></div>{% endif %}
+   {% if oidc_problems %}<div class="callout c-red"><b class="ct">To fix</b><ul class="bul">{% for p in oidc_problems %}<li>{{ p }}</li>{% endfor %}</ul></div>{% endif %}
+   {% if mode == 'off' %}<div class="callout c-amber"><b class="ct">Before entering the issuer</b><p>As soon as an issuer is saved, sign-in becomes mandatory. Check that OIDC_CLIENT_SECRET and SESSION_SECRET are in the environment, and that your account is in an admin group (or in FABRIQUE_ADMINS), otherwise you will not be able to come back here.</p></div>{% endif %}
    <form method="post" action="/settings/oidc" class="frm">
-    <label for="o-iss">Émetteur (issuer) {{ lockmark('issuer') }}</label>
-    <input id="o-iss" name="issuer" value="{{ oidc.issuer }}" maxlength="300" class="mono" placeholder="https://auth.exemple.fr/realms/interne" {{'disabled' if 'issuer' in oidc_locked}}>
+    <label for="o-iss">Issuer {{ lockmark('issuer') }}</label>
+    <input id="o-iss" name="issuer" value="{{ oidc.issuer }}" maxlength="300" class="mono" placeholder="https://auth.example.org/realms/internal" {{'disabled' if 'issuer' in oidc_locked}}>
     <div class="grid2">
-     <div><label for="o-cid">Identifiant client {{ lockmark('client_id') }}</label><input id="o-cid" name="client_id" value="{{ oidc.client_id }}" maxlength="300" class="mono" {{'disabled' if 'client_id' in oidc_locked}}></div>
-     <div><label for="o-sec">Secret client {% if secret_env %}{{ ic('lock') }}{% endif %} <small class="muted">{% if secret_env %}fixé par la variable OIDC_CLIENT_SECRET{% elif secret_set %}défini : laisse vide pour le garder{% else %}à saisir (chiffré, jamais réaffiché){% endif %}</small></label><input id="o-sec" name="client_secret" type="password" maxlength="500" class="mono" autocomplete="new-password" placeholder="{{ '•••••••• (défini)' if secret_set else '' }}" {{ 'disabled' if secret_env }}></div>
+     <div><label for="o-cid">Client ID {{ lockmark('client_id') }}</label><input id="o-cid" name="client_id" value="{{ oidc.client_id }}" maxlength="300" class="mono" {{'disabled' if 'client_id' in oidc_locked}}></div>
+     <div><label for="o-sec">Client secret {% if secret_env %}{{ ic('lock') }}{% endif %} <small class="muted">{% if secret_env %}set by the OIDC_CLIENT_SECRET variable{% elif secret_set %}set: leave empty to keep it{% else %}to be entered (encrypted, never shown again){% endif %}</small></label><input id="o-sec" name="client_secret" type="password" maxlength="500" class="mono" autocomplete="new-password" placeholder="{{ '•••••••• (set)' if secret_set else '' }}" {{ 'disabled' if secret_env }}></div>
      <div><label for="o-sc">Scopes {{ lockmark('scopes') }}</label><input id="o-sc" name="scopes" value="{{ oidc.scopes }}" maxlength="300" class="mono" {{'disabled' if 'scopes' in oidc_locked}}></div>
-     <div><label for="o-gc">Revendication des groupes {{ lockmark('groups_claim') }}</label><input id="o-gc" name="groups_claim" value="{{ oidc.groups_claim }}" maxlength="80" class="mono" {{'disabled' if 'groups_claim' in oidc_locked}}><small class="help">« groups » pour Authentik ; Keycloak : ajouter un mappeur « Group Membership ».</small></div>
+     <div><label for="o-gc">Groups claim {{ lockmark('groups_claim') }}</label><input id="o-gc" name="groups_claim" value="{{ oidc.groups_claim }}" maxlength="80" class="mono" {{'disabled' if 'groups_claim' in oidc_locked}}><small class="help">“groups” for Authentik; Keycloak: add a “Group Membership” mapper.</small></div>
     </div>
-    <h3>Groupes → rôles <small class="muted">facultatif ; un groupe par ligne. Vide : les rôles se gèrent dans Utilisateurs et rôles</small></h3>
+    <h3>Groups → roles <small class="muted">optional; one group per line. Empty: roles are managed in Users and roles</small></h3>
     <div class="grid3">
      <div><label for="o-ga">Admin {{ lockmark('admin_groups') }}</label><textarea id="o-ga" name="admin_groups" rows="3" class="mono" {{'disabled' if 'admin_groups' in oidc_locked}}>{{ oidc.admin_groups|join('\n') }}</textarea></div>
-     <div><label for="o-gv">Reviewer {{ lockmark('verifier_groups') }}</label><textarea id="o-gv" name="verifier_groups" rows="3" class="mono" {{'disabled' if 'verifier_groups' in oidc_locked}}>{{ oidc.verifier_groups|join('\n') }}</textarea></div>
-     <div><label for="o-gr">Requester {{ lockmark('requester_groups') }}</label><textarea id="o-gr" name="requester_groups" rows="3" class="mono" {{'disabled' if 'requester_groups' in oidc_locked}}>{{ oidc.requester_groups|join('\n') }}</textarea><small class="help">Si rempli, seuls ces groupes peuvent entrer.</small></div>
+     <div><label for="o-gv">Reviewer {{ lockmark('reviewer_groups') }}</label><textarea id="o-gv" name="reviewer_groups" rows="3" class="mono" {{'disabled' if 'reviewer_groups' in oidc_locked}}>{{ oidc.reviewer_groups|join('\n') }}</textarea></div>
+     <div><label for="o-gr">Requester {{ lockmark('requester_groups') }}</label><textarea id="o-gr" name="requester_groups" rows="3" class="mono" {{'disabled' if 'requester_groups' in oidc_locked}}>{{ oidc.requester_groups|join('\n') }}</textarea><small class="help">If filled in, only these groups can get in.</small></div>
     </div>
-    <dl class="kv"><dt>Adresse de retour à déclarer</dt><dd class="mono">{{ callback }}</dd><dt>Retour après déconnexion</dt><dd class="mono">{{ callback|replace('/auth/callback', '/auth/login?out=1') }}</dd>
-     <dt>Secret de session</dt><dd>{{ 'défini' if session_set else 'manquant (SESSION_SECRET, 32 caractères au moins)' }}</dd>
-     <dt>Comptes de secours</dt><dd class="mono">{{ admins_env|join(', ') or 'aucun (FABRIQUE_ADMINS)' }}</dd></dl>
+    <dl class="kv"><dt>Redirect URI to declare</dt><dd class="mono">{{ callback }}</dd><dt>Post-logout redirect</dt><dd class="mono">{{ callback|replace('/auth/callback', '/auth/login?out=1') }}</dd>
+     <dt>Session secret</dt><dd>{{ 'set' if session_set else 'missing (SESSION_SECRET, at least 32 characters)' }}</dd>
+     <dt>Fallback accounts</dt><dd class="mono">{{ admins_env|join(', ') or 'none (FABRIQUE_ADMINS)' }}</dd></dl>
     {{ trace(row) }}
     <p class="git-test" data-oidc-test-out role="status" aria-live="polite" hidden></p>
-    <div class="row-end"><button type="button" class="btn" data-oidc-test>Tester la découverte</button><button class="btn primary">Enregistrer</button></div>
+    <div class="row-end"><button type="button" class="btn" data-oidc-test>Test discovery</button><button class="btn primary">Save</button></div>
    </form>
   </section>
 
  {% elif tab == 'limits' %}{% set lim, row = data.limits %}
   <section class="box">
-   <h2>Budgets et barrières</h2>
-   <p class="muted">Imposés par le runner et par le dashboard, jamais par un prompt. Un repo peut avoir des valeurs plus strictes.</p>
+   <h2>Budgets and gates</h2>
+   <p class="muted">Enforced by the runner and by the dashboard, never by a prompt. A repo can have stricter values.</p>
    <form method="post" action="/settings/limits" class="frm">
     <div class="grid4">
-     <div><label for="l-bj">Budget par job <small>$</small></label><input id="l-bj" name="budget_job" type="number" step="0.5" min="0.5" value="{{ lim.budget_job }}"></div>
-     <div><label for="l-bd">Budget par jour <small>$</small></label><input id="l-bd" name="budget_day" type="number" step="1" min="1" value="{{ lim.budget_day }}"></div>
-     <div><label for="l-mp">Jobs en parallèle</label><input id="l-mp" name="max_parallel" type="number" min="1" max="64" value="{{ lim.max_parallel }}"></div>
-     <div><label for="l-sz">Taille max d'une PR <small>lignes</small></label><input id="l-sz" name="size_limit" type="number" min="1" value="{{ lim.size_limit }}"></div>
+     <div><label for="l-bj">Budget per job <small>$</small></label><input id="l-bj" name="budget_job" type="number" step="0.5" min="0.5" value="{{ lim.budget_job }}"></div>
+     <div><label for="l-bd">Budget per day <small>$</small></label><input id="l-bd" name="budget_day" type="number" step="1" min="1" value="{{ lim.budget_day }}"></div>
+     <div><label for="l-mp">Parallel jobs</label><input id="l-mp" name="max_parallel" type="number" min="1" max="64" value="{{ lim.max_parallel }}"></div>
+     <div><label for="l-sz">Max size of a PR <small>lines</small></label><input id="l-sz" name="size_limit" type="number" min="1" value="{{ lim.size_limit }}"></div>
     </div>
-    <label for="l-wd">Watchdog <small>minutes sans activité avant de relancer l'agent (une fois), puis d'arrêter le job</small></label>
+    <label for="l-wd">Watchdog <small>minutes without activity before restarting the agent (once), then stopping the job</small></label>
     <input id="l-wd" name="watchdog_min" type="number" min="2" max="240" value="{{ lim.watchdog_min or 10 }}" style="max-width:160px">
-    <label for="l-aa">Archivage automatique <small>jours après la fin d'un job ; 0 = jamais</small></label>
+    <label for="l-aa">Automatic archiving <small>days after a job ends; 0 = never</small></label>
     <input id="l-aa" name="auto_archive_days" type="number" min="0" max="3650" value="{{ lim.auto_archive_days or 0 }}" style="max-width:160px">
-    <small class="help">Archive seuls les jobs mergés et les études déjà lues. Les échecs et les PR refusées restent visibles. Un job archivé se retrouve et se restaure depuis la page Archives.</small>
-    <small class="help">Le budget par jour est appliqué par le dashboard : au-delà, les nouveaux travaux attendent le lendemain ; les merges déjà décidées passent.</small>
-    <span class="lbl-like">Rapports d'étude</span>
+    <small class="help">Archives only merged jobs and studies already read. Failures and refused PRs stay visible. An archived job can be found and restored from the Archives page.</small>
+    <small class="help">The daily budget is enforced by the dashboard: beyond it, new work waits for the next day; merges already decided go through.</small>
+    <span class="lbl-like">Study reports</span>
     <input type="hidden" name="report_fields" value="1">
-    <label class="check-row"><input type="checkbox" name="report_pdf" value="1" {{'checked' if lim.report_pdf is not false}}> Rapport téléchargeable en PDF</label>
-    <label class="check-row"><input type="checkbox" name="report_md" value="1" {{'checked' if lim.report_md is not false}}> Rapport téléchargeable en Markdown</label>
-    <small class="help">Décochée, une case retire le bouton du job et de l'inbox, et le téléchargement est refusé. Le rapport reste lisible dans la Fabrique.</small>
-    <label for="l-pp">Protected paths par défaut <small>un motif par ligne</small></label>
+    <label class="check-row"><input type="checkbox" name="report_pdf" value="1" {{'checked' if lim.report_pdf is not false}}> Report downloadable as PDF</label>
+    <label class="check-row"><input type="checkbox" name="report_md" value="1" {{'checked' if lim.report_md is not false}}> Report downloadable as Markdown</label>
+    <small class="help">Unticked, a box removes the button from the job and the inbox, and the download is refused. The report stays readable in Fabrique.</small>
+    <label for="l-pp">Default protected paths <small>one pattern per line</small></label>
     <textarea id="l-pp" name="protected_paths" rows="8" class="mono">{{ lim.protected_paths|join('\n') }}</textarea>
-    <small class="help">Une PR qui touche l'un d'eux ne merge jamais seule. La recipe de la Fabrique (.fabrique/**) et la CI en font toujours partie.</small>
+    <small class="help">A PR that touches one of them never merges on its own. Fabrique's recipe (.fabrique/**) and the CI are always among them.</small>
     {{ trace(row) }}
-    <div class="row-end"><button class="btn primary">Enregistrer</button></div>
+    <div class="row-end"><button class="btn primary">Save</button></div>
    </form>
   </section>
 
  {% elif tab == 'notifications' %}{% set e = ch_edit %}{% set ec = (e.cfg if e else {}) %}
   <section class="box">
-   <h2>Channels de notification</h2>
-   <p class="muted">Chaque channel choisit ses événements. Les envois passent par une file : un channel en panne ne bloque jamais un job, et l'envoi est retenté (30 s, 2 min, 10 min, 30 min). Les secrets (adresse du webhook Teams, tokens, mots de passe) sont en écriture seule, chiffrés dans la base.</p>
-   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Clé maître absente</b><p>FABRIQUE_SECRET_KEY n'est pas définie : impossible d'enregistrer les secrets d'un channel.</p></div>{% endif %}
-   <table class="tbl"><thead><tr><th>Channel</th><th>Type</th><th>Événements</th><th>État</th><th></th></tr></thead><tbody>
+   <h2>Notification channels</h2>
+   <p class="muted">Each channel picks its events. Deliveries go through a queue: a broken channel never blocks a job, and delivery is retried (30 s, 2 min, 10 min, 30 min). Secrets (Teams webhook address, tokens, passwords) are write-only, encrypted in the database.</p>
+   {% if not secret_key_set %}<div class="callout c-amber"><b class="ct">Master key missing</b><p>FABRIQUE_SECRET_KEY is not set: a channel's secrets cannot be stored.</p></div>{% endif %}
+   <table class="tbl"><thead><tr><th>Channel</th><th>Type</th><th>Events</th><th>Status</th><th></th></tr></thead><tbody>
    {% for c in chans %}<tr><td><b>{{ c.name }}</b> <span class="mono muted">{{ c.id }}</span></td><td>{{ notif_types[c.type] }}</td>
-    <td class="small">{% for ev in c.events %}{{ notif_events[ev] }}{{ ', ' if not loop.last }}{% else %}<span class="muted">aucun</span>{% endfor %}</td>
-    <td>{% if c.enabled %}<span class="ok">actif</span>{% else %}<span class="muted">en pause</span>{% endif %}</td>
-    <td class="actions"><form method="post" action="/settings/channels/{{ c.id }}/test"><button class="btn sm">Envoyer un test</button></form>
-     <a class="btn sm" href="/settings?tab=notifications&chan={{ c.id }}#canal">Modifier</a>
-     <form method="post" action="/settings/channels" data-confirm="Retirer le channel {{ c.name }} ?"><input type="hidden" name="action" value="remove"><input type="hidden" name="cid" value="{{ c.id }}"><button class="btn sm ghostb">Retirer</button></form></td></tr>
-   {% else %}<tr><td colspan="5" class="muted">Aucun channel.</td></tr>{% endfor %}
+    <td class="small">{% for ev in c.events %}{{ notif_events[ev] }}{{ ', ' if not loop.last }}{% else %}<span class="muted">none</span>{% endfor %}</td>
+    <td>{% if c.enabled %}<span class="ok">active</span>{% else %}<span class="muted">paused</span>{% endif %}</td>
+    <td class="actions"><form method="post" action="/settings/channels/{{ c.id }}/test"><button class="btn sm">Send a test</button></form>
+     <a class="btn sm" href="/settings?tab=notifications&chan={{ c.id }}#channel">Edit</a>
+     <form method="post" action="/settings/channels" data-confirm="Remove the channel {{ c.name }}?"><input type="hidden" name="action" value="remove"><input type="hidden" name="cid" value="{{ c.id }}"><button class="btn sm ghostb">Remove</button></form></td></tr>
+   {% else %}<tr><td colspan="5" class="muted">No channel.</td></tr>{% endfor %}
    </tbody></table>
-   <details class="add-prov" id="channel"{% if not chans or e %} open{% endif %}><summary class="btn">{% if e %}Modifier « {{ e.name }} »{% else %}{{ ic('plus') }}Ajouter un channel{% endif %}</summary>
+   <details class="add-prov" id="channel"{% if not chans or e %} open{% endif %}><summary class="btn">{% if e %}Edit “{{ e.name }}”{% else %}{{ ic('plus') }}Add a channel{% endif %}</summary>
    <form method="post" action="/settings/channels" class="frm inline-form" autocomplete="off" data-channel-form>
     <div class="grid4">
      <div><label for="c-type">Type</label><select id="c-type" name="type" {{ 'disabled' if e }}>{% for k, v in notif_types.items() %}<option value="{{k}}" {{ 'selected' if e and e.type == k }}>{{ v }}</option>{% endfor %}</select>{% if e %}<input type="hidden" name="type" value="{{ e.type }}">{% endif %}</div>
      {% if e %}<input type="hidden" name="cid" value="{{ e.id }}">{% endif %}
-     <div><label for="c-name">Nom de notification</label><input id="c-name" name="name" required maxlength="80" value="{{ e.name if e else '' }}" placeholder="Nom canal de notification"></div>
-     <div><label class="check-row"><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}> Actif</label></div>
+     <div><label for="c-name">Notification name</label><input id="c-name" name="name" required maxlength="80" value="{{ e.name if e else '' }}" placeholder="Notification channel name"></div>
+     <div><label class="check-row"><input type="checkbox" name="enabled" value="1" {{ 'checked' if not e or e.enabled }}> Active</label></div>
     </div>
-    <fieldset class="evts"><legend>Événements</legend>{% for k, v in notif_events.items() %}<label class="check-row"><input type="checkbox" name="events" value="{{k}}" {{ 'checked' if (e and k in e.events) or (not e and k in ('question', 'ready', 'failed')) }}> {{ v }}</label>{% endfor %}</fieldset>
-    {% macro sec(name, label, help='') %}<label for="c-{{name}}">{{ label }} <small class="muted">{% if e and (e.secret_keys or {}).get(name) %}défini : laisse vide pour garder{% else %}{{ help }}{% endif %}</small></label><input id="c-{{name}}" name="{{name}}" type="password" maxlength="2000" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ '•••••••• (défini)' if e and (e.secret_keys or {}).get(name) else '' }}">{% endmacro %}
-    <div data-for="webhook">{{ sec('url', 'Adresse du webhook (https)', 'reçoit un POST JSON') }}{{ sec('hmac', 'Secret de signature', 'facultatif : en-tête X-Fabrique-Signature (HMAC-SHA256)') }}</div>
-    <div data-for="teams">{{ sec('url', 'Adresse du webhook Teams', 'Workflows de Teams : « Publier dans un channel lorsqu’une requête webhook est reçue »') }}</div>
+    <fieldset class="evts"><legend>Events</legend>{% for k, v in notif_events.items() %}<label class="check-row"><input type="checkbox" name="events" value="{{k}}" {{ 'checked' if (e and k in e.events) or (not e and k in ('question', 'ready', 'failed')) }}> {{ v }}</label>{% endfor %}</fieldset>
+    {% macro sec(name, label, help='') %}<label for="c-{{name}}">{{ label }} <small class="muted">{% if e and (e.secret_keys or {}).get(name) %}set: leave empty to keep{% else %}{{ help }}{% endif %}</small></label><input id="c-{{name}}" name="{{name}}" type="password" maxlength="2000" class="mono" autocomplete="new-password" spellcheck="false" placeholder="{{ '•••••••• (set)' if e and (e.secret_keys or {}).get(name) else '' }}">{% endmacro %}
+    <div data-for="webhook">{{ sec('url', 'Webhook address (https)', 'receives a JSON POST') }}{{ sec('hmac', 'Signing secret', 'optional: X-Fabrique-Signature header (HMAC-SHA256)') }}</div>
+    <div data-for="teams">{{ sec('url', 'Teams webhook address', 'Teams Workflows: “Post to a channel when a webhook request is received”') }}</div>
     <div data-for="jira">
      <div class="grid4">
-      <div><label for="c-jb">Adresse Jira</label><input id="c-jb" name="base_url" maxlength="300" class="mono" value="{{ ec.base_url }}" placeholder="https://exemple.atlassian.net"></div>
-      <div><label for="c-ja">Type</label><select id="c-ja" name="auth"><option value="cloud" {{ 'selected' if ec.auth != 'datacenter' }}>Cloud (e-mail + token)</option><option value="datacenter" {{ 'selected' if ec.auth == 'datacenter' }}>Data Center (token personnel)</option></select></div>
-      <div><label for="c-ju">E-mail du compte</label><input id="c-ju" name="user" maxlength="200" value="{{ ec.user }}" placeholder="bot@exemple.fr"></div>
-      <div><label for="c-jp">Projet</label><input id="c-jp" name="project" maxlength="20" class="mono" value="{{ ec.project }}" placeholder="FAB"></div>
+      <div><label for="c-jb">Jira address</label><input id="c-jb" name="base_url" maxlength="300" class="mono" value="{{ ec.base_url }}" placeholder="https://example.atlassian.net"></div>
+      <div><label for="c-ja">Type</label><select id="c-ja" name="auth"><option value="cloud" {{ 'selected' if ec.auth != 'datacenter' }}>Cloud (e-mail + token)</option><option value="datacenter" {{ 'selected' if ec.auth == 'datacenter' }}>Data Center (personal token)</option></select></div>
+      <div><label for="c-ju">Account e-mail</label><input id="c-ju" name="user" maxlength="200" value="{{ ec.user }}" placeholder="bot@example.org"></div>
+      <div><label for="c-jp">Project</label><input id="c-jp" name="project" maxlength="20" class="mono" value="{{ ec.project }}" placeholder="FAB"></div>
      </div>
-     {{ sec('token', 'Token d’API', 'token du compte (Cloud) ou token personnel (Data Center)') }}
-     <label class="check-row"><input type="checkbox" name="create" value="1" {{ 'checked' if ec.create == '1' }}> Créer un ticket quand la demande ne cite aucun ticket du projet <small class="muted">(sinon : commentaire seulement sur le ticket cité, par ex. « FAB-12 » dans le titre)</small></label>
-     <label for="c-jt">Type de ticket créé</label><input id="c-jt" name="issue_type" maxlength="40" value="{{ ec.issue_type or 'Task' }}">
+     {{ sec('token', 'API token', 'account token (Cloud) or personal token (Data Center)') }}
+     <label class="check-row"><input type="checkbox" name="create" value="1" {{ 'checked' if ec.create == '1' }}> Create a ticket when the request cites no ticket of the project <small class="muted">(otherwise: comment only on the cited ticket, e.g. “FAB-12” in the title)</small></label>
+     <label for="c-jt">Type of ticket created</label><input id="c-jt" name="issue_type" maxlength="40" value="{{ ec.issue_type or 'Task' }}">
     </div>
     <div data-for="smtp">
      <div class="grid4">
-      <div><label for="c-sh">Serveur SMTP</label><input id="c-sh" name="host" maxlength="200" class="mono" value="{{ ec.host }}" placeholder="smtp.exemple.fr"></div>
-      <div><label for="c-ss">Sécurité</label><select id="c-ss" name="security">{% for k, v in (('starttls', 'STARTTLS (587)'), ('ssl', 'SSL/TLS (465)'), ('none', 'Aucune (25)')) %}<option value="{{k}}" {{ 'selected' if ec.security == k }}>{{ v }}</option>{% endfor %}</select></div>
+      <div><label for="c-sh">SMTP server</label><input id="c-sh" name="host" maxlength="200" class="mono" value="{{ ec.host }}" placeholder="smtp.example.org"></div>
+      <div><label for="c-ss">Security</label><select id="c-ss" name="security">{% for k, v in (('starttls', 'STARTTLS (587)'), ('ssl', 'SSL/TLS (465)'), ('none', 'None (25)')) %}<option value="{{k}}" {{ 'selected' if ec.security == k }}>{{ v }}</option>{% endfor %}</select></div>
       <div><label for="c-sp">Port</label><input id="c-sp" name="port" maxlength="5" class="mono" value="{{ ec.port }}" placeholder="auto"></div>
-      <div><label for="c-su">Identifiant</label><input id="c-su" name="user" maxlength="200" value="{{ ec.user }}" placeholder="facultatif"></div>
+      <div><label for="c-su">Username</label><input id="c-su" name="user" maxlength="200" value="{{ ec.user }}" placeholder="optional"></div>
      </div>
-     {{ sec('password', 'Mot de passe', 'facultatif') }}
-     <div class="grid2"><div><label for="c-sf">Expéditeur</label><input id="c-sf" name="sender" maxlength="200" value="{{ ec.sender }}" placeholder="fabrique@exemple.fr"></div>
-      <div><label for="c-st">Destinataires</label><input id="c-st" name="to" maxlength="300" value="{{ ec.to }}" placeholder="moi@exemple.fr, equipe@exemple.fr"></div></div>
+     {{ sec('password', 'Password', 'optional') }}
+     <div class="grid2"><div><label for="c-sf">Sender</label><input id="c-sf" name="sender" maxlength="200" value="{{ ec.sender }}" placeholder="fabrique@example.org"></div>
+      <div><label for="c-st">Recipients</label><input id="c-st" name="to" maxlength="300" value="{{ ec.to }}" placeholder="me@example.org, team@example.org"></div></div>
     </div>
-    <div class="row-end">{% if e %}<a class="btn" href="/settings?tab=notifications">Annuler</a>{% endif %}<button class="btn primary">Enregistrer</button></div>
+    <div class="row-end">{% if e %}<a class="btn" href="/settings?tab=notifications">Cancel</a>{% endif %}<button class="btn primary">Save</button></div>
    </form>
    </details>
   </section>
   <section class="box">
-   <h2>Derniers envois</h2>
-   <table class="tbl"><thead><tr><th>Quand</th><th>Channel</th><th>Événement</th><th>Message</th><th>État</th></tr></thead><tbody>
+   <h2>Latest deliveries</h2>
+   <table class="tbl"><thead><tr><th>When</th><th>Channel</th><th>Event</th><th>Message</th><th>Status</th></tr></thead><tbody>
    {% for n in notif_recent %}<tr><td class="mono small">{{ n.created_at|hms }}</td><td class="mono">{{ n.channel }}</td><td>{{ notif_events.get(n.event, n.event) }}</td><td>{{ n.payload.title }}</td>
-    <td>{% if n.state == 'sent' %}<span class="ok">envoyé</span>{% elif n.state == 'failed' %}<span class="bad" title="{{ n.last_error }}">échec</span> <span class="muted small">{{ n.last_error }}</span>{% else %}<span class="amber">en file</span>{% if n.last_error %} <span class="muted small">({{ n.attempts }} essai(s) : {{ n.last_error }})</span>{% endif %}{% endif %}</td></tr>
-   {% else %}<tr><td colspan="5" class="muted">Aucun envoi pour l'instant.</td></tr>{% endfor %}
+    <td>{% if n.state == 'sent' %}<span class="ok">sent</span>{% elif n.state == 'failed' %}<span class="bad" title="{{ n.last_error }}">failed</span> <span class="muted small">{{ n.last_error }}</span>{% else %}<span class="amber">queued</span>{% if n.last_error %} <span class="muted small">({{ n.attempts }} attempt(s): {{ n.last_error }})</span>{% endif %}{% endif %}</td></tr>
+   {% else %}<tr><td colspan="5" class="muted">No delivery yet.</td></tr>{% endfor %}
    </tbody></table>
   </section>
 
  {% elif tab == 'users' %}{% set acc, accrow = data.access %}
   <section class="box">
-   <h2>Utilisateurs et rôles</h2>
-   <p class="muted">Les rôles se choisissent ici. Toute personne qui se connecte via le provider d'identité apparaît dans cette liste ; un rôle choisi ici l'emporte sur les groupes OIDC (facultatifs, réglés dans Connexion) et s'applique sans reconnexion. « Déconnecter » ferme toutes les sessions ouvertes d'un compte, sur tous ses navigateurs.</p>
-   {% if generated %}<div class="callout c-amber"><b class="ct">Secrets générés automatiquement</b><p>{{ generated|join(', ') }} : absent{{ 's' if generated|length > 1 }} de l'environnement, donc généré{{ 's' if generated|length > 1 }} et gardé{{ 's' if generated|length > 1 }} dans le dossier des données, à côté de la base. Une sauvegarde de ce dossier contient alors la base <b>et</b> la clé qui la déchiffre. Pour les séparer, fournis ces valeurs par des variables d'environnement.</p></div>{% endif %}
-   <table class="tbl users-tbl"><thead><tr><th>Compte</th><th>Rôle</th><th>Origine</th><th>Dernière connexion</th><th></th></tr></thead><tbody>
+   <h2>Users and roles</h2>
+   <p class="muted">Roles are chosen here. Anyone who signs in through the identity provider appears in this list; a role chosen here wins over OIDC groups (optional, set in Sign-in) and applies without signing in again. “Sign out” closes all open sessions of an account, on all its browsers.</p>
+   {% if generated %}<div class="callout c-amber"><b class="ct">Automatically generated secrets</b><p>{{ generated|join(', ') }}{{ COLON() }}{{ nb(generated|length, "missing from the environment, so generated and kept", "missing from the environment, so generated and kept", generated|length > 1) }} in the data directory, next to the database. A backup of that directory then contains the database <b>and</b> the key that decrypts it. To keep them apart, supply these values through environment variables.</p></div>{% endif %}
+   <table class="tbl users-tbl"><thead><tr><th>Account</th><th>Role</th><th>Origin</th><th>Last sign-in</th><th></th></tr></thead><tbody>
    {% for u in users %}<tr id="u-{{u.id}}" class="{{ 'req' if u.requested_role }}">
-    <td><b>{{ u.name }}</b> <span class="mono muted">{{ u.username }}</span>{% if u.requested_role %}<div class="reqline">Demande : <b>{{ ROLE_LABEL[u.requested_role] }}</b>{% if u.request_note %} · « {{ u.request_note }} »{% endif %}</div>{% endif %}</td>
-    <td>{% if u.username == user.user %}<span class="pill role-{{u.role}}">{{ ROLE_LABEL[u.role] }}</span> <small class="muted">toi</small>
+    <td><b>{{ u.name }}</b> <span class="mono muted">{{ u.username }}</span>{% if u.requested_role %}<div class="reqline">Request: <b>{{ ROLE_LABEL[u.requested_role] }}</b>{% if u.request_note %} · “{{ u.request_note }}”{% endif %}</div>{% endif %}</td>
+    <td>{% if u.username == user.user %}<span class="pill role-{{u.role}}">{{ ROLE_LABEL[u.role] }}</span> <small class="muted">you</small>
      {% else %}<form method="post" action="/users/{{u.id}}/role" class="inline">
-      <label class="sr" for="role-{{u.id}}">Rôle de {{ u.name }}</label>
-      <select id="role-{{u.id}}" name="role" data-autosubmit>{% for r in ('none', 'requester', 'verifier', 'admin') %}<option value="{{r}}" {{'selected' if (u.requested_role or u.role) == r}}>{{ ROLE_LABEL[r] }}{{ ' (demandé)' if u.requested_role == r }}</option>{% endfor %}</select>
+      <label class="sr" for="role-{{u.id}}">Role of {{ u.name }}</label>
+      <select id="role-{{u.id}}" name="role" data-autosubmit>{% for r in ('none', 'requester', 'reviewer', 'admin') %}<option value="{{r}}" {{'selected' if (u.requested_role or u.role) == r}}>{{ ROLE_LABEL[r] }}{{ ' (requested)' if u.requested_role == r }}</option>{% endfor %}</select>
       <noscript><button class="btn sm">OK</button></noscript>
-     </form>{% if u.requested_role %}<div class="req-acts"><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="role" value="{{u.requested_role}}"><button class="btn sm primary">Accorder</button></form><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="refuse" value="1"><button class="btn sm">Refuser</button></form></div>{% endif %}{% endif %}</td>
-    <td class="muted">{{ u.role_source }}</td><td class="mono">{{ u.last_login|quand if u.last_login else '—' }}</td>
-    <td>{% if u.username != user.user and u.last_login %}<form method="post" action="/users/{{u.id}}/logout" data-confirm="Fermer toutes les sessions de {{ u.name or u.username }} ? Il faudra se reconnecter."><button class="btn sm ghostb" title="Ferme toutes les sessions ouvertes de ce compte, sur tous ses navigateurs">Déconnecter</button></form>{% endif %}</td></tr>
-   {% else %}<tr><td colspan="5" class="muted">Personne ne s'est encore connecté{{ ' (mode local : pas de comptes)' if mode == 'off' }}.</td></tr>{% endfor %}
+     </form>{% if u.requested_role %}<div class="req-acts"><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="role" value="{{u.requested_role}}"><button class="btn sm primary">Grant</button></form><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="refuse" value="1"><button class="btn sm">Refuse</button></form></div>{% endif %}{% endif %}</td>
+    <td class="muted">{{ u.role_source }}</td><td class="mono">{{ u.last_login|when if u.last_login else '—' }}</td>
+    <td>{% if u.username != user.user and u.last_login %}<form method="post" action="/users/{{u.id}}/logout" data-confirm="Close all sessions of {{ u.name or u.username }}? They will have to sign in again."><button class="btn sm ghostb" title="Closes all open sessions of this account, on all its browsers">Sign out</button></form>{% endif %}</td></tr>
+   {% else %}<tr><td colspan="5" class="muted">{% if mode == 'off' %}Nobody has signed in yet (local mode: no accounts).{% else %}Nobody has signed in yet.{% endif %}</td></tr>{% endfor %}
    </tbody></table>
-     <details class="add-prov" {{ 'open' if lu.login or lu.name }}><summary class="btn">{{ ic('plus') }}Créer un compte local</summary>
+     <details class="add-prov" {{ 'open' if lu.login or lu.name }}><summary class="btn">{{ ic('plus') }}Create a local account</summary>
    <form method="post" action="/users/local" class="frm inline-form" autocomplete="off">
-    <p class="muted">Un compte local se connecte avec un identifiant et un mot de passe, sans passer par la connexion unique. Garde au moins un compte admin local : c'est le compte de secours si le provider d'identité est indisponible.</p>
+    <p class="muted">A local account signs in with a username and a password, without going through single sign-on. Keep at least one local admin account: it is the fallback account if the identity provider is unavailable.</p>
     <div class="grid4">
-     <div><label for="lu-login">Identifiant</label><input id="lu-login" name="login" required minlength="3" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" class="mono" value="{{ lu.login }}"></div>
-     <div><label for="lu-name">Nom affiché</label><input id="lu-name" name="name" maxlength="120" value="{{ lu.name }}"></div>
-     <div><label for="lu-role">Rôle</label><select id="lu-role" name="role">{% for r in ('requester', 'verifier', 'admin') %}<option value="{{r}}" {{ 'selected' if lu.role == r }}>{{ ROLE_LABEL[r] }}</option>{% endfor %}</select></div>
-     <div><label for="lu-pw">Mot de passe</label><input id="lu-pw" name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password" aria-describedby="lu-pw-h"></div>
+     <div><label for="lu-login">Username</label><input id="lu-login" name="login" required minlength="3" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" class="mono" value="{{ lu.login }}"></div>
+     <div><label for="lu-name">Display name</label><input id="lu-name" name="name" maxlength="120" value="{{ lu.name }}"></div>
+     <div><label for="lu-role">Role</label><select id="lu-role" name="role">{% for r in ('requester', 'reviewer', 'admin') %}<option value="{{r}}" {{ 'selected' if lu.role == r }}>{{ ROLE_LABEL[r] }}</option>{% endfor %}</select></div>
+     <div><label for="lu-pw">Password</label><input id="lu-pw" name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password" aria-describedby="lu-pw-h"></div>
     </div>
-    <p class="muted small" id="lu-pw-h"><b>Mot de passe :</b> {{ PW_RULE }}</p>
-    <div class="row-end"><button class="btn primary">Créer le compte</button></div>
+    <p class="muted small" id="lu-pw-h"><b>Password:</b> {{ PW_RULE }}</p>
+    <div class="row-end"><button class="btn primary">Create the account</button></div>
    </form></details>
-   {% if user.get('via') == 'local' %}<p><a class="btn" href="/account">Changer mon mot de passe</a></p>{% endif %}
+   {% if user.get('via') == 'local' %}<p><a class="btn" href="/account">Change my password</a></p>{% endif %}
   </section>
   <section class="box">
-   <h2>Nouveaux comptes</h2>
+   <h2>New accounts</h2>
    <form method="post" action="/settings/access" class="frm">
-    <div class="radios" role="radiogroup" aria-label="Rôle d'un nouveau compte">
-     <label class="radio"><input type="radio" name="default_role" value="requester" {{'checked' if acc.default_role != 'none'}}><span><b>Requester directement</b><small>Toute personne authentifiée peut déposer des demandes et suivre les siennes.</small></span></label>
-     <label class="radio"><input type="radio" name="default_role" value="none" {{'checked' if acc.default_role == 'none'}}><span><b>En attente de validation</b><small>Le compte n'a accès qu'à « Mon accès » jusqu'à ce qu'un admin lui donne un rôle.</small></span></label>
+    <div class="radios" role="radiogroup" aria-label="Role of a new account">
+     <label class="radio"><input type="radio" name="default_role" value="requester" {{'checked' if acc.default_role != 'none'}}><span><b>Requester straight away</b><small>Anyone authenticated can file requests and follow their own.</small></span></label>
+     <label class="radio"><input type="radio" name="default_role" value="none" {{'checked' if acc.default_role == 'none'}}><span><b>Waiting for approval</b><small>The account only has access to “My access” until an admin gives it a role.</small></span></label>
     </div>
     {{ trace(accrow) }}
-    <div class="row-end"><button class="btn primary">Enregistrer</button></div>
+    <div class="row-end"><button class="btn primary">Save</button></div>
    </form>
-   <dl class="kv roles"><dt>Requester</dt><dd>Dépose des demandes, suit les siennes, répond aux questions qui le concernent.</dd>
-    <dt>Reviewer</dt><dd>Voit tout, répond aux questions, valide les specs, approuve ou refuse les merges, archive.</dd>
-    <dt>Admin</dt><dd>En plus : repos, runners, agents et modèles, budgets, connexion, rôles.</dd>
-    <dt>Secours</dt><dd class="mono">{{ admins_env|join(', ') or 'aucun (FABRIQUE_ADMINS)' }}</dd></dl>
+   <dl class="kv roles"><dt>Requester</dt><dd>Files requests, follows their own, answers the questions that concern them.</dd>
+    <dt>Reviewer</dt><dd>Sees everything, answers questions, approves specs, approves or refuses merges, archives.</dd>
+    <dt>Admin</dt><dd>In addition: repos, runners, agents and models, budgets, sign-in, roles.</dd>
+    <dt>Fallback</dt><dd class="mono">{{ admins_env|join(', ') or 'none (FABRIQUE_ADMINS)' }}</dd></dl>
   </section>
+ {% elif tab == 'lang' %}{% set lg, lrow = data.languages %}
+  <section class="box">
+   <h2>Job language</h2>
+   <p class="muted">Everyone chooses their interface language in the menu at the bottom left. This page sets the job language: the language of texts written for other readers.</p>
+   <form method="post" action="/settings/lang" class="frm">
+    <label for="lg-j">Job language</label>
+    <select id="lg-j" name="jobs" style="max-width:320px">{% for code, label in LANGS.items() %}<option value="{{ code }}"{% if (lg.jobs or 'en') == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    <p class="muted small">In this language: what agents and reviewers write for people (understanding, assumptions, opinion, questions, study report, review points), what Fabrique writes on the Git host (PR, review guide, comments, initialization commits) and notifications. A repo can choose its own in its settings. Each reader keeps the interface in their own language, and can have a job's texts translated.</p>
+    {{ trace(lrow) }}
+    <div class="row-end"><button class="btn primary">Save</button></div>
+   </form>
+  </section>
+
  {% elif tab == 'demo' %}{% set dv, drow = data.demo %}
   <section class="box">
-   <h2>Données de démonstration</h2>
-   {% if not demo_mode %}<p class="muted">Le mode démonstration n'est pas activé sur cette instance (FABRIQUE_DEMO).</p>
+   <h2>Demo data</h2>
+   {% if not demo_mode %}<p class="muted">Demo mode is not enabled on this instance (FABRIQUE_DEMO).</p>
    {% else %}
-   <p class="muted">Des jobs, runners et repos fictifs, animés par un simulateur, pour présenter la Fabrique sans faire tourner d'agent. Masquées, elles disparaissent des jobs, de la inbox, des compteurs et de l'activité, et le simulateur s'arrête. Les vrais jobs ne sont jamais touchés.</p>
+   <p class="muted">Made-up jobs, runners and repos, driven by a simulator, to present Fabrique without running any agent. Hidden, they disappear from the jobs, the inbox, the counters and the activity, and the simulator stops. Real jobs are never touched.</p>
    <form method="post" action="/settings/demo" class="frm">
-    <div class="radios" role="radiogroup" aria-label="Données de démonstration">
-     <label class="radio"><input type="radio" name="visible" value="0" {{'checked' if not dv.visible}}><span><b>Masquées</b><small>Seuls les vrais jobs apparaissent ; les compteurs ne reflètent que le travail réel.</small></span></label>
-     <label class="radio"><input type="radio" name="visible" value="1" {{'checked' if dv.visible}}><span><b>Affichées</b><small>Pour une présentation : le simulateur fait vivre le tableau. Un bandeau le signale.</small></span></label>
+    <div class="radios" role="radiogroup" aria-label="Demo data">
+     <label class="radio"><input type="radio" name="visible" value="0" {{'checked' if not dv.visible}}><span><b>Hidden</b><small>Only real jobs appear; the counters reflect real work only.</small></span></label>
+     <label class="radio"><input type="radio" name="visible" value="1" {{'checked' if dv.visible}}><span><b>Shown</b><small>For a presentation: the simulator keeps the board alive. A banner says so.</small></span></label>
     </div>
     {{ trace(drow) }}
-    <div class="row-end"><button class="btn primary">Enregistrer</button></div>
+    <div class="row-end"><button class="btn primary">Save</button></div>
    </form>
    {% endif %}
   </section>

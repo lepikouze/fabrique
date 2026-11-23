@@ -1,25 +1,26 @@
-"""Profils de modèles : un modèle par rôle, réutilisable d'un repo à l'autre (l'effort est celui du provider du modèle).
+"""Model profiles: one model per role, reusable from one repo to another (the effort is that of the model provider).
 
-Rôles : l'agent (tri, enquête, implémentation, corrections, dans une seule session), les relecteurs (vérifications
-code, sécurité, architecture, infra), les études et l'onboarding. Chaque rôle nomme son modèle : on voit tout d'un coup
-d'œil. (Un profil d'avant cette règle, avec un rôle vide, reprend le modèle de l'agent pour ce rôle.)
-Le profil est facultatif : sans profil, un job démarre comme avant, avec le modèle du repo ou le modèle global.
+Roles: the agent (triage, investigation, implementation, corrections, in a single session), reviewers (code,
+security, architecture, infra reviews), studies, and onboarding. Each role names its model: everything is visible
+at a glance. (A profile before this rule, with an empty role, uses the agent model for that role.)
+The profile is optional: without a profile, a job starts as before, with the repo model or the global model.
 
-Ordre pour le modèle principal d'un job : choix sur la demande > profil (demande, repo, puis global) > modèle du repo >
-modèle global. Ce qui est retenu est figé à la création du job (jobs.model et jobs.models)."""
+Order for a job's main model: choice on the request > profile (request, repo, then global) > repo model >
+global model. What is selected is frozen at job creation (jobs.model and jobs.models)."""
+from .i18n import M
 import re
 from . import db
 
-ROLES = {"agent": ("Agent", "Tri, enquête, implémentation, corrections : une seule session, un seul modèle"),
-         "review": ("Relecteurs", "Vérifications code, sécurité, architecture et infra, avec un contexte neuf"),
-         "study": ("Études", "Rapports d'étude : beaucoup de lecture, aucune modification"),
-         "onboarding": ("Onboarding", "Lecture d'un repo et écriture de sa recipe, rejouée ensuite par le runner")}
-# Exemples affichés sous chaque rôle : le modèle le plus en rapport avec le travail demandé (Claude, puis local).
-EXAMPLES = {"agent": "Claude Opus 5.5 · en local : Qwen3.8 27B. Le travail le plus long et le plus exigeant.",
-            "review": "Claude Sonnet 5.5 · en local : Gemma 4 26B. Idéalement une autre famille que l'agent : un second regard.",
-            "study": "Claude Sonnet 5.5, ou Opus pour une étude difficile · en local : Qwen3.8 27B.",
-            "onboarding": "Claude Haiku 5.5 · en local : Gemma 4 26B. Tâche simple, vérifiée par le runner."}
-INHERIT = "provider"   # effort : réglage du provider (le niveau défini sur le provider compatible)
+ROLES = {"agent": ("Agent", M("Triage, investigation, implementation, fixes: one session, one model")),
+         "review": (M("Reviewers"), M("Code, security, architecture and infrastructure reviews, with a fresh context")),
+         "study": (M("Studies"), M("Study reports: a lot of reading, no change")),
+         "onboarding": ("Onboarding", M("Reading a repo and writing its recipe, then replayed by the runner"))}
+# Examples displayed under each role: the model most relevant to the requested work (Claude, then local).
+EXAMPLES = {"agent": M("Claude Opus 5.5 · local: Qwen3.8 27B. The longest and most demanding work."),
+            "review": M("Claude Sonnet 5.5 · local: Gemma 4 26B. Ideally another family than the agent's: a second opinion."),
+            "study": M("Claude Sonnet 5.5, or Opus for a hard study · local: Qwen3.8 27B."),
+            "onboarding": M("Claude Haiku 5.5 · local: Gemma 4 26B. A simple task, checked by the runner.")}
+INHERIT = "provider"   # effort: provider setting (the level defined on the compatible provider)
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 
@@ -29,7 +30,7 @@ class Invalid(ValueError):
 
 def efforts():
     from .providers import EFFORTS
-    return {INHERIT: "Réglage du provider", **EFFORTS}
+    return {INHERIT: M("Provider setting"), **EFFORTS}
 
 
 def listing(c):
@@ -41,17 +42,17 @@ def get(c, pid):
 
 
 def usage(c, pid):
-    """Où un profil sert : réglage global, repos."""
+    """Where a profile is used: global setting, repos."""
     glob, _ = db.get_setting(c, "agents")
     repos = [r["slug"] for r in db.rows(c, db.repos.select()) if (r["settings"] or {}).get("profile") == pid]
     return {"global": glob.get("profile") == pid, "repos": repos}
 
 
 def slug(name, taken=()):
-    """Identifiant interne déduit du nom (jamais montré) : minuscules sans accents, tirets ; unique."""
+    """Internal identifier deduced from the name (never shown): lowercase without accents, hyphens; unique."""
     import unicodedata
     base = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
-    base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")[:36] or "profil"
+    base = re.sub(r"[^a-z0-9]+", "-", base).strip("-")[:36] or M("profile")
     out, n = base, 2
     while out in taken:
         out, n = f"{base}-{n}", n + 1
@@ -59,42 +60,42 @@ def slug(name, taken=()):
 
 
 def save(c, by, pid, name, roles, new=False):
-    """roles : {rôle: {"model": id}}. Un modèle doit être proposé dans les Settings. Sans pid (nouveau profil),
-    l'identifiant est déduit du nom ; un profil renommé garde le sien (les repos qui l'utilisent le gardent aussi).
-    L'effort ne se règle plus par profil : c'est celui du provider du modèle."""
+    """roles : {role: {"model": id}}. A model must be proposed in the Settings. Without pid (new profile),
+    the identifier is derived from the name; a renamed profile keeps its own (repos using it keep theirs too).
+    Effort is no longer set by profile: it is that of the model provider."""
     from .providers import models_with_provider
     name = " ".join((name or "").split())[:60]
     if not name:
-        raise Invalid("Donne un nom au profil.")
+        raise Invalid(M("Give the profile a name."))
     if any(p["name"].lower() == name.lower() and p["id"] != (pid or "") for p in listing(c)):
-        raise Invalid(f"Un profil s'appelle déjà « {name} ».")
+        raise Invalid(M("A profile is already called “{name}”.", name=name))
     pid = (pid or "").strip().lower() or slug(name, {p["id"] for p in listing(c)})
     if not _ID.match(pid):
-        raise Invalid("Profil invalide.")
+        raise Invalid(M("Invalid profile."))
     known = {m["id"] for m in models_with_provider(c)}
     clean = {}
     for role in ROLES:
         r = roles.get(role) or {}
         model = str(r.get("model") or "")
         if model and model not in known:
-            raise Invalid(f"{ROLES[role][0]} : modèle inconnu ({model}).")
+            raise Invalid(M("{p}: unknown model ({model}).", p=ROLES[role][0], model=model))
         clean[role] = {"model": model, "effort": INHERIT}
     missing = [ROLES[r][0] for r in ROLES if not clean[r]["model"]]
     if missing:
-        raise Invalid("Choisis un modèle pour chaque rôle (manque : " + ", ".join(missing) + ").")
+        raise Invalid(M("Choose a model for each role (missing: ") + ", ".join(missing) + ").")
     items = listing(c)
     if new and any(p["id"] == pid for p in items):
-        raise Invalid(f"Le profil « {name} » existe déjà.")
+        raise Invalid(M("Profile “{name}” already exists.", name=name))
     items = [p for p in items if p["id"] != pid] + [{"id": pid, "name": name, "roles": clean}]
     db.set_setting(c, "profiles", sorted(items, key=lambda p: p["name"].lower()), by)
-    db.log_audit(c, by, "Settings : profil de modèles", detail=f"{name} ({pid})")
+    db.log_audit(c, by, M("Settings: model profile"), detail=f"{name} ({pid})")
 
 
 def remove(c, by, pid):
-    """Retire un profil. Les repos qui l'utilisaient, et le réglage global, reviennent à leur modèle."""
+    """Removes a profile. Repos that used it, and the global setting, revert to their model."""
     p = get(c, pid)
     if not p:
-        raise Invalid("Profil inconnu.")
+        raise Invalid(M("Unknown profile."))
     db.set_setting(c, "profiles", [x for x in listing(c) if x["id"] != pid], by)
     glob, _ = db.get_setting(c, "agents")
     if glob.get("profile") == pid:
@@ -104,11 +105,11 @@ def remove(c, by, pid):
         if rs.get("profile") == pid:
             rs.pop("profile")
             c.execute(db.repos.update().where(db.repos.c.id == r["id"]).values(settings=rs))
-    db.log_audit(c, by, "Settings : profil retiré", detail=f"{p['name']} ({pid})")
+    db.log_audit(c, by, M("Settings: profile removed"), detail=f"{p['name']} ({pid})")
 
 
 def parse_choice(v):
-    """Liste « Modèle ou profil » : « m:<modèle> », « p:<profil> », ou vide (réglage hérité). Renvoie (modèle, profil)."""
+    """"Model or profile" list: "m:<model>", "p:<profile>", or empty (inherited setting). Returns (model, profile)."""
     v = str(v or "")
     if v.startswith("p:"):
         return "", v[2:]
@@ -118,13 +119,13 @@ def parse_choice(v):
 
 
 def role_of(source):
-    return "study" if source == "étude" else "onboarding" if source == "onboarding" else "agent"
+    return "study" if source == "study" else "onboarding" if source == "onboarding" else "agent"
 
 
 def resolve(c, repo_settings, source, job_model="", job_profile=""):
-    """Modèles d'un nouveau job. Chaque niveau (demande, repo, global) choisit SOIT un modèle (un seul pour tout), SOIT un
-    profil (un modèle par rôle) ; le premier niveau qui a choisi l'emporte. Renvoie (modèle principal,
-    {profile, effort, review_model, review_effort}). Effort « provider » : réglage du provider, rien à forcer."""
+    """Models for a new job. Each level (request, repo, global) chooses EITHER a model (only one for all), OR a
+    profile (one model per role); the first level that has chosen wins. Returns (main model,
+    {profile, effort, review_model, review_effort}). Provider effort: provider setting, nothing to force."""
     glob, _ = db.get_setting(c, "agents")
     rs = repo_settings or {}
     single, prof = "", None
@@ -143,14 +144,14 @@ def resolve(c, repo_settings, source, job_model="", job_profile=""):
     roles = prof.get("roles") or {}
     agent, mine = roles.get("agent") or {}, roles.get(role_of(source)) or {}
     model = mine.get("model") or agent.get("model") or rs.get("model") or glob.get("model") or ""
-    effort = INHERIT                                     # l'effort est celui du provider du modèle (réglé sur le provider)
+    effort = INHERIT                                     # the effort is that of the model provider (set on the provider)
     rv = roles.get("review") or {}
     review = rv.get("model") or ""
     return model, {"profile": prof["name"], "effort": INHERIT, "review_model": review if review != model else "", "review_effort": INHERIT}
 
 
 def apply_effort(runtime, effort):
-    """Effort forcé par le profil sur la description runtime d'un modèle (serveurs compatibles seulement)."""
+    """Effort forced by the profile on the runtime description of a model (compatible servers only)."""
     if runtime.get("type") == "compatible" and effort not in (None, INHERIT):
         runtime = {**runtime, "effort": effort}
     return runtime

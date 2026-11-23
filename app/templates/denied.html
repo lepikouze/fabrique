@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% from "_macros.html" import empty %}
-{% block title %}Accès refusé{% endblock %}
-{% block h1 %}Accès refusé{% endblock %}
+{% block title %}Access denied{% endblock %}
+{% block h1 %}Access denied{% endblock %}
 {% block counters %}{% endblock %}
-{% block content %}<div class="pad">{{ empty('Ton rôle ne permet pas de voir ' ~ what ~ '.', 'Ton rôle actuel : ' ~ ROLE_LABEL[user.role] ~ '. Il vient de tes groupes dans le provider d’identité.') }}</div>{% endblock %}
+{% block content %}<div class="pad">{{ empty(_tf('Your role does not allow you to see {what}.', 'denied.html', what), _tf('Your current role: {role}. It comes from your groups in the identity provider.', 'denied.html', ROLE_LABEL[user.role])) }}</div>{% endblock %}

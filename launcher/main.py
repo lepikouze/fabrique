@@ -1,20 +1,28 @@
-"""Lanceur de la Fabrique : le SEUL composant qui parle à Docker. Il offre quatre actions au runner (jeton, réseau privé),
-(plus « net » : lire, dans le journal du proxy, les sorties réseau d'un job),
-et la politique de sécurité des conteneurs de jobs est figée ici, pas négociable par l'appelant :
+"""Fabrique launcher: the ONLY component that talks to Docker. It offers the runner four actions, behind a token and on a private
+network (plus "net": reading a job's network egress in the proxy log), and the security policy of job containers is
+fixed here, not negotiable by the caller:
 
-  image imposée · utilisateur 10002 · aucune capacité · no-new-privileges · système de fichiers en lecture seule ·
-  mémoire, processeur et nombre de processus limités · un seul montage (l'espace de travail de CE job) ·
-  un seul réseau (interne, sans sortie : le proxy en liste blanche et le relais du runner) · étiquette fabrique.job
+  imposed image · user 10002 · no capabilities · no-new-privileges · read-only file system ·
+  limited memory, CPU and number of processes · a single mount (the workspace of THIS job) ·
+  a single network (internal, no egress: the allowlist proxy and the runner relay) · fabrique.job label
 
-Il n'agit que sur les conteneurs qu'il a créés (étiquette). C'est l'équivalent, avec Docker, du compte de service
-Kubernetes limité à un namespace et du contrôle d'admission « restricted »."""
+It only acts on containers it has created (label). This is the Docker equivalent of a
+Kubernetes service account limited to a namespace and the "restricted" admission control."""
+try:
+    from .texts import M
+except ImportError:
+    try:
+        from texts import M
+    except ImportError:
+        def M(t, **p):
+            return t.format(**p) if p else t
 import json, logging, os, re, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-log = logging.getLogger("lanceur")
+log = logging.getLogger("launcher")
 def _token():
-    """Jeton exigé pour toute requête : variable LAUNCHER_TOKEN, sinon fichier LAUNCHER_TOKEN_FILE (créé ici s'il manque,
-    sur un volume partagé avec le runner seul, en mode 0600)."""
+    """Token required for any request: LAUNCHER_TOKEN variable, otherwise LAUNCHER_TOKEN_FILE file (created here if missing,
+    on a volume shared with the runner only, in 0600 mode)."""
     t = os.environ.get("LAUNCHER_TOKEN", "").strip()
     path = os.environ.get("LAUNCHER_TOKEN_FILE", "").strip()
     if t or not path:
@@ -25,8 +33,8 @@ def _token():
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(secrets.token_urlsafe(48) + "\n")
-        # Lisible par son seul propriétaire (le lanceur et le runner tournent sous le même utilisateur) : dans le conteneur
-        # du runner, l'utilisateur de l'agent ne peut pas le lire. Corrige aussi un fichier créé par une ancienne version.
+        # Readable only by its owner (the launcher and the runner run under the same user): inside the container
+        # of the runner, the agent's user cannot read it. Also fixes a file created by an older version.
         os.chmod(path, 0o600)
         return open(path).read().strip()
     except OSError:
@@ -34,16 +42,16 @@ def _token():
 
 
 TOKEN = _token()
-IMAGE = os.environ.get("ATELIER_IMAGE", "").strip()          # image par défaut (python)
-# Liste blanche des images de jobs, par langage : « python=registre/img:tag,node=…,go=…,java=… ». Le runner ne choisit
-# qu'un NOM de cette liste ; jamais une image arbitraire.
-IMAGES = {k.strip(): v.strip() for k, v in (x.split("=", 1) for x in os.environ.get("ATELIER_IMAGES", "").split(",") if "=" in x)}
+IMAGE = os.environ.get("JOB_IMAGE", "").strip()          # default image (python)
+# Allowlist of job images, by language: "python=registry/img:tag,node=…,go=…,java=…". The runner only chooses
+# one NAME from this list; never an arbitrary image.
+IMAGES = {k.strip(): v.strip() for k, v in (x.split("=", 1) for x in os.environ.get("JOB_IMAGES", "").split(",") if "=" in x)}
 if IMAGE:
     IMAGES.setdefault("python", IMAGE)
 NETWORK = os.environ.get("JOBS_NETWORK", "fabrique-jobs")
-PREFIX = os.environ.get("JOBS_PREFIX", "fabrique-job").strip() or "fabrique-job"   # nom des conteneurs de jobs (deux piles côte à côte)
-WORK_HOST = os.environ.get("WORK_HOST", "/opt/volumes/fabrique-runner").rstrip("/")   # dossier des espaces de travail, sur l'hôte
-WORK_IN = os.environ.get("WORK_DIR", "/work").rstrip("/")                            # même chemin que dans le runner
+PREFIX = os.environ.get("JOBS_PREFIX", "fabrique-job").strip() or "fabrique-job"   # job container names (two stacks side by side)
+WORK_HOST = os.environ.get("WORK_HOST", "/opt/volumes/fabrique-runner").rstrip("/")   # workspace directory, on the host
+WORK_IN = os.environ.get("WORK_DIR", "/work").rstrip("/")                            # same path as in the runner
 MEM = os.environ.get("JOB_MEMORY", "4g")
 CPUS = float(os.environ.get("JOB_CPUS", "2"))
 PIDS = int(os.environ.get("JOB_PIDS", "512"))
@@ -59,17 +67,17 @@ class Refused(Exception):
     pass
 
 
-PROXY_CONTAINER = os.environ.get("PROXY_CONTAINER", "").strip()   # nom du conteneur du proxy ; vide : celui du service « proxy » sur le réseau des jobs
+PROXY_CONTAINER = os.environ.get("PROXY_CONTAINER", "").strip()   # container name of the proxy; empty: that of the "proxy" service on the jobs network
 _CONNECT = re.compile(r"Connect \(file descriptor (\d+)\): (\S+)")
 _REQUEST = re.compile(r"Request \(file descriptor (\d+)\): (\S+) (\S+)")
 _REFUSED = re.compile(r'Proxying refused on filtered domain "([^"]+)"')
 
 
 def egress(text, ip):
-    """Sorties réseau d'un job, lues dans le journal du proxy (tinyproxy) : ce que le client `ip` a demandé, et ce que la
-    liste blanche a refusé. Une requête est autorisée sauf si le proxy écrit ensuite qu'il la refuse.
-    Renvoie {"allowed": [[hôte, nombre]…], "denied": [[hôte, nombre]…]}, du plus fréquent au moins fréquent."""
-    fd_ip, pending = {}, []                       # pending : [ip, hôte, refusée ?] dans l'ordre du journal
+    """Job network egress, read from the proxy log (tinyproxy): what the `ip` client requested, and what the
+    allowlist refused. A request is allowed unless the proxy subsequently writes that it refuses it.
+    Returns {"allowed": [[host, count]...], "denied": [[host, count]...]}, from most frequent to least frequent."""
+    fd_ip, pending = {}, []                       # pending : [ip, host, refused?] in the order of the log
     for line in (text or "").splitlines():
         m = _CONNECT.search(line)
         if m:
@@ -99,7 +107,7 @@ def egress(text, ip):
 
 def name_of(ref):
     if not REF.match(ref or ""):
-        raise Refused("référence de job invalide")
+        raise Refused(M("invalid job reference"))
     return f"{PREFIX}-{ref.lower()}"
 
 
@@ -109,19 +117,19 @@ class Launcher:
         self.api = client.api
 
     def _mine(self, ref):
-        """Le conteneur du job, seulement s'il porte notre étiquette (jamais un autre conteneur de l'hôte)."""
+        """The job container, only if it carries our label (never another host container)."""
         try:
             c = self.docker.containers.get(name_of(ref))
         except Exception:
             return None
         if c.labels.get(LABEL) != ref:
-            raise Refused("ce conteneur n'a pas été créé par le lanceur")
+            raise Refused(M("this container was not created by the launcher"))
         return c
 
     def start(self, ref, image="python"):
         image = image or "python"
         if image not in IMAGES:
-            raise Refused(f"image de job inconnue : {image} (liste blanche : {', '.join(sorted(IMAGES)) or 'vide'})")
+            raise Refused(f"unknown job image: {image} (allowlist: {', '.join(sorted(IMAGES)) or 'empty'})")
         IMG = IMAGES[image]
         c = self._mine(ref)
         if c is not None:
@@ -129,7 +137,7 @@ class Launcher:
                 if c.status != "running":
                     c.start()
                 return {"container": c.name, "reused": True, "image": image}
-            c.remove(force=True)            # autre langage (onboarding qui change d'image) : conteneur neuf
+            c.remove(force=True)            # another language (an onboarding that changes image): fresh container
         ws = f"{WORK_HOST}/{ref}"
         c = self.docker.containers.run(
             IMG, ["sleep", "infinity"], name=name_of(ref), detach=True, user=USER, labels={LABEL: ref},
@@ -145,11 +153,11 @@ class Launcher:
             try:
                 c.remove(force=True)
             except Exception as e:
-                log.warning("%s : suppression : %s", ref, e)
+                log.warning("%s: removal: %s", ref, e)
         return {"stopped": True}
 
     def _proxy(self):
-        """Conteneur du proxy de sortie : celui nommé par PROXY_CONTAINER, sinon le service « proxy » du réseau des jobs."""
+        """Egress proxy container: the one named by PROXY_CONTAINER, otherwise the "proxy" service of the jobs network."""
         try:
             if PROXY_CONTAINER:
                 return self.docker.containers.get(PROXY_CONTAINER)
@@ -159,10 +167,10 @@ class Launcher:
             return None
 
     def net(self, ref):
-        """Sorties réseau du job depuis son démarrage. Seule LECTURE hors de ses propres conteneurs : le journal du proxy."""
+        """Job network egress since its startup. Only READ access outside its own containers: the proxy log."""
         c = self._mine(ref)
         if c is None:
-            raise Refused("conteneur du job absent")
+            raise Refused(M("job container missing"))
         proxy = self._proxy()
         if proxy is None:
             return {"known": False}
@@ -180,7 +188,7 @@ class Launcher:
         return egress(text.decode("utf-8", "replace") if isinstance(text, bytes) else str(text), ip)
 
     def kill(self, ref):
-        """Tue tous les processus de l'agent dans le conteneur (sauf le processus 1 qui le maintient en vie)."""
+        """Kills all agent processes in the container (except process 1 which keeps it alive)."""
         c = self._mine(ref)
         if c is not None and c.status == "running":
             ex = self.api.exec_create(c.id, ["kill", "-9", "-1"], user=USER)
@@ -190,19 +198,19 @@ class Launcher:
     def exec_stream(self, ref, body, write):
         argv, env = body.get("argv"), body.get("env") or {}
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv) or sum(map(len, argv)) > 400_000:
-            raise Refused("commande invalide")
+            raise Refused("invalid command")
         if not isinstance(env, dict) or len(env) > 64:
-            raise Refused("environnement invalide")
+            raise Refused("invalid environment")
         for k, v in env.items():
             if not ENV_KEY.match(k) or k in FORBIDDEN_ENV or not isinstance(v, str) or len(v) > 20_000:
-                raise Refused(f"variable refusée : {k}")
+                raise Refused(M("variable refused: {k}", k=k))
         workdir = str(body.get("workdir") or f"{WORK_IN}/{ref}")
         if not (workdir == f"{WORK_IN}/{ref}" or workdir.startswith(f"{WORK_IN}/{ref}/")) or ".." in workdir:
-            raise Refused("dossier de travail hors de l'espace du job")
+            raise Refused(M("working directory outside the job's space"))
         timeout = min(int(body.get("timeout") or 600), MAX_TIMEOUT)
         c = self._mine(ref)
         if c is None or c.status != "running":
-            raise Refused("conteneur du job absent : start d'abord")
+            raise Refused(M("job container missing: start first"))
         ex = self.api.exec_create(c.id, argv, user=USER, environment=env, workdir=workdir, stdout=True, stderr=True)
         timer = threading.Timer(timeout, self.kill, args=(ref,))
         timer.start()
@@ -220,7 +228,7 @@ class Launcher:
 
 def serve(launcher, host="0.0.0.0", port=7080):
     class H(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.0"   # réponse en flux, fermée à la fin
+        protocol_version = "HTTP/1.0"   # streaming response, closed at the end
 
         def _reply(self, code, obj):
             data = json.dumps(obj, ensure_ascii=False).encode()
@@ -230,14 +238,14 @@ def serve(launcher, host="0.0.0.0", port=7080):
         def do_GET(self):
             if self.path == "/health":
                 return self._reply(200, {"ok": True})
-            self._reply(404, {"error": "inconnu"})
+            self._reply(404, {"error": "unknown"})
 
         def do_POST(self):
             if not TOKEN or self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
-                return self._reply(403, {"error": "jeton invalide"})
+                return self._reply(403, {"error": "invalid token"})
             m = re.match(r"^/jobs/([^/]+)/(start|stop|kill|exec|net)$", self.path)
             if not m:
-                return self._reply(404, {"error": "inconnu"})
+                return self._reply(404, {"error": "unknown"})
             ref, action = m.groups()
             try:
                 n = min(int(self.headers.get("Content-Length") or 0), 1_000_000)
@@ -249,7 +257,7 @@ def serve(launcher, host="0.0.0.0", port=7080):
                     try:
                         launcher.exec_stream(ref, body, lambda o: (w.write((json.dumps(o, ensure_ascii=False) + "\n").encode()), w.flush()))
                     except Refused as e:
-                        w.write((json.dumps({"e": f"refusé : {e}"}) + "\n" + json.dumps({"exit": 126}) + "\n").encode())
+                        w.write((json.dumps({"e": f"refused: {e}"}) + "\n" + json.dumps({"exit": 126}) + "\n").encode())
                     return
                 log.info("%s : %s", ref, action)
                 if action == "start":
@@ -264,14 +272,14 @@ def serve(launcher, host="0.0.0.0", port=7080):
         def log_message(self, *a):
             pass
     srv = ThreadingHTTPServer((host, port), H)
-    log.info("lanceur prêt sur %s:%s, images %s, réseau %s", host, port, ", ".join(f"{k}={v}" for k, v in sorted(IMAGES.items())), NETWORK)
+    log.info("launcher ready on %s:%s, images %s, network %s", host, port, ", ".join(f"{k}={v}" for k, v in sorted(IMAGES.items())), NETWORK)
     srv.serve_forever()
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not TOKEN or len(TOKEN) < 32:
-        raise SystemExit("LAUNCHER_TOKEN manquant ou trop court")
+        raise SystemExit("LAUNCHER_TOKEN missing or too short")
     import docker
     serve(Launcher(docker.from_env()))
 

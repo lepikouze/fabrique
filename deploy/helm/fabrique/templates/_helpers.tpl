@@ -1,4 +1,4 @@
-{{/* Nom des objets : celui de la release, sauf si elle contient déjà « fabrique ». */}}
+{{/* Object names: the release name, unless it already contains "fabrique". */}}
 {{- define "fabrique.fullname" -}}
 {{- if contains "fabrique" .Release.Name -}}{{ .Release.Name | trunc 50 | trimSuffix "-" }}{{- else -}}{{ printf "%s-fabrique" .Release.Name | trunc 50 | trimSuffix "-" }}{{- end -}}
 {{- end -}}
@@ -24,7 +24,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s/%s:%s" .root.Values.image.registry .name (.root.Values.image.tag | toString) -}}
 {{- end -}}
 
-{{/* Variables de proxy du dashboard et du runner (proxy d'entreprise). Les services internes sont toujours joints en direct. */}}
+{{/* Proxy variables of the dashboard and the runner (corporate proxy). Internal services are always reached directly. */}}
 {{- define "fabrique.proxyEnv" -}}
 {{- if .Values.outboundProxy.url }}
 {{- $n := include "fabrique.fullname" . }}
@@ -39,7 +39,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end -}}
 
-{{/* Adresse publique : la valeur fournie, sinon celle de l'Ingress, sinon l'adresse du Service dans le cluster. */}}
+{{/* Public address: the value given, else the Ingress one, else the address of the Service in the cluster. */}}
 {{- define "fabrique.publicUrl" -}}
 {{- if .Values.publicUrl -}}{{ ternary .Values.publicUrl (printf "https://%s" .Values.publicUrl) (contains "://" .Values.publicUrl) }}
 {{- else if .Values.ingress.enabled -}}{{ ternary "https" "http" .Values.ingress.tls.enabled }}://{{ .Values.ingress.host }}

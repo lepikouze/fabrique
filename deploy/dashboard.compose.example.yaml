@@ -1,16 +1,16 @@
-# Fabrique — le dashboard seul, quand les runners tournent sur d'autres machines.
-# (Tout sur une seule machine ? Utilise plutôt le compose.yaml à la racine : il contient déjà un runner.)
+# Fabrique — the dashboard only, when runners run on other machines.
+# (Everything on a single machine? Use the compose.yaml at the root instead: it already contains a runner.)
 #
 #   docker compose -f dashboard.compose.example.yaml up -d
-#   docker compose -f dashboard.compose.example.yaml logs dashboard | grep "code d'installation"
+#   docker compose -f dashboard.compose.example.yaml logs dashboard | grep "setup code"
 #
-# Aucune variable n'est obligatoire. Ouvre le dashboard, saisis le code d'installation, crée le compte administrateur :
-# tout le reste (connexion unique, modèles, repos Git, runners) se règle dans l'interface.
-# Images : les mêmes variables que le compose.yaml (FABRIQUE_IMAGES, FABRIQUE_TAG), voir .env.example.
+# No variable is mandatory. Open the dashboard, enter the setup code, create the administrator account:
+# everything else (single sign-on, models, Git repos, runners) is configured in the dashboard.
+# Images: the same variables as compose.yaml (FABRIQUE_IMAGES, FABRIQUE_TAG), see .env.example.
 name: ${COMPOSE_PROJECT_NAME:-fabrique-dashboard}
 
 volumes:
-  donnees:                       # base et secrets générés
+  data:                       # database and generated secrets
 
 services:
   dashboard:
@@ -23,13 +23,13 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       TZ: ${TZ:-Europe/Paris}
-      # Adresse à laquelle les navigateurs ET les runners joignent le dashboard.
+      # Address at which browsers AND runners reach the dashboard.
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
-      # Les runners sont sur d'autres machines : ils arrivent par le réseau (ou par ton proxy inverse), avec leur token.
+      # The runners are on other machines: they arrive via the network (or via your reverse proxy), with their token.
       FABRIQUE_RUNNER_API_INTERNAL: "0"
-      # Facultatif — recommandé en production : fournis ces secrets pour qu'ils restent séparés des données.
+      # Optional — recommended in production: provide these secrets so they remain separate from the data.
       SESSION_SECRET: ${SESSION_SECRET:-}
       FABRIQUE_SECRET_KEY: ${FABRIQUE_SECRET_KEY:-}
     volumes:
-      - donnees:/data
-    ports: ["${FABRIQUE_PORT:-8080}:8080"]     # en production : derrière un proxy inverse TLS
+      - data:/data
+    ports: ["${FABRIQUE_PORT:-8080}:8080"]     # in production: behind a TLS reverse proxy

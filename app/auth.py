@@ -1,21 +1,22 @@
-"""Connexion OIDC générique (Keycloak, Authentik, Entra ID…) : flux « authorization code » + PKCE S256 (Authlib), state et nonce,
-id_token vérifié (émetteur, audience, expiration, signature JWKS), session signée (cookie fabrique_session).
+"""Generic OIDC connection (Keycloak, Authentik, Entra ID...) : "authorization code" flow + PKCE S256 (Authlib), state and nonce,
+id_token verified (issuer, audience, expiration, JWKS signature), signed session (fabrique_session cookie).
 
-Rôles : choisis dans le dashboard par un admin (Settings › Utilisateurs et rôles) ; à défaut, groupes OIDC si une
-correspondance est réglée (utile au bureau avec Keycloak), sinon rôle par défaut des nouveaux comptes (requester, ou en
-attente de validation). Le rôle est relu en base à chaque requête : un changement s'applique sans reconnexion.
+Roles: chosen in the dashboard by an admin (Settings › Users and roles); otherwise, OIDC groups if a
+mapping is configured (useful for the office with Keycloak), otherwise default role for new accounts (requester, or
+awaiting validation). The role is read again from the database on each request: a change applies without reconnection.
 
-Settings : l'environnement fournit les secrets (OIDC_CLIENT_SECRET, SESSION_SECRET) et peut verrouiller les autres champs ;
-sinon ils se règlent dans le dashboard (Settings › Connexion). Le rôle est recalculé à chaque connexion depuis les groupes
-du token : admin > reviewer > requester. Personne dans aucun groupe connu -> accès refusé (sauf groupes requester vides :
-tout compte authentifié est requester). FABRIQUE_ADMINS : comptes toujours admin (secours).
+Settings: the environment provides the secrets (OIDC_CLIENT_SECRET, SESSION_SECRET) and can lock other fields;
+otherwise they are configured in the dashboard (Settings › Connection). The role is recalculated at each login from the
+token groups: admin > reviewer > requester. No one in any known group -> access denied (except empty requester
+groups: any authenticated account is a requester). FABRIQUE_ADMINS: accounts that are always admin (fallback).
 
-Comptes locaux : au premier démarrage, la page /auth/setup crée le compte admin (identifiant et mot de passe fort), sur
-présentation du code d'installation écrit dans les journaux. Ce compte reste le secours si l'OIDC tombe. D'autres comptes
-locaux peuvent être créés par un admin. Mots de passe hachés (scrypt), cinq essais par quart d'heure.
+Local accounts: on first startup, the /auth/setup page creates the admin account (strong username and password), upon
+presentation of the installation code written in the logs. This account remains the fallback if OIDC fails. Other
+local accounts can be created by an admin. Hashed passwords (scrypt), five attempts per fifteen minutes.
 
-Ni OIDC ni compte admin local -> installation à terminer (rien d'autre n'est servi). OIDC incomplète sans compte local ->
-tout est fermé (503). Le mode ouvert (tout visiteur admin) n'existe qu'avec FABRIQUE_OPEN=1, pour le développement."""
+Neither OIDC nor local admin account -> installation incomplete (nothing else is served). Incomplete OIDC without a local account ->
+everything is closed (503). Open mode (any visitor is admin) only exists with FABRIQUE_OPEN=1, for development."""
+from .i18n import M
 import base64, hashlib, hmac, logging, re, secrets, time
 from urllib.parse import quote, urlsplit
 from fastapi import APIRouter, Request
@@ -27,23 +28,23 @@ from . import config, db
 log = logging.getLogger("fabrique.auth")
 COOKIE = "fabrique_session"
 MIN_SECRET = 32
-ROLES = ("requester", "verifier", "admin")
-ROLE_LABEL = {"none": "En attente", "requester": "Requester", "verifier": "Reviewer", "admin": "Admin"}
+ROLES = ("requester", "reviewer", "admin")
+ROLE_LABEL = {"none": M("Waiting"), "requester": "Requester", "reviewer": "Reviewer", "admin": "Admin"}
 ENV_FIELDS = {"issuer": "OIDC_ISSUER", "client_id": "OIDC_CLIENT_ID", "scopes": "OIDC_SCOPES", "groups_claim": "OIDC_GROUPS_CLAIM",
-              "admin_groups": "OIDC_ADMIN_GROUPS", "verifier_groups": "OIDC_VERIFIER_GROUPS", "requester_groups": "OIDC_REQUESTER_GROUPS"}
-TRANSPORT = None     # tests : httpx.MockTransport (fournisseur simulé)
+              "admin_groups": "OIDC_ADMIN_GROUPS", "reviewer_groups": "OIDC_REVIEWER_GROUPS", "requester_groups": "OIDC_REQUESTER_GROUPS"}
+TRANSPORT = None     # tests: httpx.MockTransport (simulated provider)
 templates = None
 router = APIRouter()
 _cache = {"at": 0.0, "conf": None}
 
 
 def locked():
-    """Champs fixés par l'environnement (affichés verrouillés dans les settings)."""
+    """Fields fixed by the environment (displayed as locked in the settings)."""
     return {k for k, env in ENV_FIELDS.items() if getattr(config, env)}
 
 
 def conf(fresh=False):
-    """Settings OIDC effectifs : environnement > base > défauts. Cache court (2 s) : lu à chaque requête."""
+    """Effective OIDC settings: environment > base > defaults. Short cache (2 s): read on every request."""
     if not fresh and _cache["conf"] is not None and time.time() - _cache["at"] < 2:
         return _cache["conf"]
     with db.tx() as c:
@@ -63,7 +64,7 @@ def invalidate():
 
 
 def client_secret():
-    """Secret du client OIDC : variable d'environnement si elle existe, sinon valeur saisie dans les settings (chiffrée)."""
+    """OIDC client secret: environment variable if it exists, otherwise value entered in the settings (encrypted)."""
     if config.OIDC_CLIENT_SECRET:
         return config.OIDC_CLIENT_SECRET
     from . import providers
@@ -76,24 +77,24 @@ def problems(cf=None):
     cf = cf or conf()
     p = []
     if len(config.SESSION_SECRET) < MIN_SECRET:
-        p.append(f"SESSION_SECRET absent ou trop court ({MIN_SECRET} caractères au moins)")
+        p.append(M("SESSION_SECRET missing or too short (at least {min_secret} characters)", min_secret=MIN_SECRET))
     if not cf.get("client_id"):
-        p.append("identifiant client manquant")
+        p.append(M("client identifier missing"))
     if not client_secret():
-        p.append("secret client manquant (à saisir ci-dessous, ou variable OIDC_CLIENT_SECRET)")
+        p.append(M("client secret missing (enter it below, or set the OIDC_CLIENT_SECRET variable)"))
     if urlsplit(cf["issuer"]).scheme not in ("http", "https"):
-        p.append("émetteur invalide")
+        p.append(M("invalid issuer"))
     if urlsplit(config.PUBLIC_URL).scheme not in ("http", "https"):
-        p.append("PUBLIC_URL invalide")
+        p.append(M("invalid PUBLIC_URL"))
     return p
 
 
-# ---------- comptes locaux (compte admin de secours, créé au premier démarrage) ----------
+# ---------- local accounts (emergency admin account, created on first startup) ----------
 
 LOGIN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,39}$")
 _local = {"at": 0.0, "has": False}
 _setup = {"code": "", "bad": 0}
-_fails = {}   # identifiant -> (nombre d'échecs, heure du premier) : 5 essais par quart d'heure
+_fails = {}   # username -> (number of failures, time of the first): 5 attempts per quarter of an hour
 
 
 def hash_password(pw):
@@ -111,26 +112,25 @@ def check_password(pw, stored):
         return False
 
 
-PW_RULE = ("12 caractères au moins, avec au moins trois familles parmi : minuscules, majuscules, chiffres, autres caractères "
-           "(par exemple - _ ! ?). Il ne doit pas contenir l'identifiant.")
+PW_RULE = (M("At least 12 characters, with at least three kinds among: lowercase, uppercase, digits, other characters (for example - _ ! ?). It must not contain the username."))
 
 
 def password_problem(pw, login=""):
-    """Mot de passe fort : 12 caractères au moins, trois familles de caractères sur quatre, sans l'identifiant."""
+    """Strong password: at least 12 characters, three character classes out of four, and not containing the username."""
     kinds = sum(bool(re.search(x, pw)) for x in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]"))
     if len(pw) < 12:
-        return "12 caractères au moins"
+        return M("at least 12 characters")
     if len(pw) > 200:
-        return "200 caractères au plus"
+        return M("at most 200 characters")
     if kinds < 3:
-        return "au moins trois familles parmi : minuscules, majuscules, chiffres, autres caractères"
+        return M("at least three kinds among: lowercase, uppercase, digits, other characters")
     if login and login.lower() in pw.lower():
-        return "il ne doit pas contenir l'identifiant"
+        return M("it must not contain the username")
     return ""
 
 
 def has_local_admin(fresh=False):
-    """Un compte admin avec mot de passe existe (cache de 2 s)."""
+    """An admin account with a password exists (2 s cache)."""
     if not fresh and time.time() - _local["at"] < 2:
         return _local["has"]
     with db.tx() as c:
@@ -147,19 +147,19 @@ def has_local_accounts():
 def create_local(login, name, password, role, by):
     login = (login or "").strip().lower()
     if not LOGIN_RE.match(login):
-        raise ValueError("Identifiant : 3 à 40 caractères, minuscules, chiffres, point, tiret.")
+        raise ValueError(M("Username: 3 to 40 characters, lowercase letters, digits, dot, hyphen."))
     why = password_problem(password or "", login)
     if why:
-        raise ValueError("Mot de passe trop faible : " + why + ".")
+        raise ValueError(M("Password too weak: {why}.", why=why))
     if role not in ROLES:
-        raise ValueError("Rôle inconnu.")
+        raise ValueError(M("Unknown role."))
     t = time.time()
     with db.tx() as c:
         if db.one(c, select(db.users.c.id).where(db.users.c.username == login)):
-            raise ValueError("Ce compte existe déjà.")
+            raise ValueError(M("This account already exists."))
         c.execute(insert(db.users).values(username=login, name=(name or login).strip()[:120], email="", groups=[], role=role,
-                                          role_source="compte local", created_at=t, password_hash=hash_password(password)))
-        db.log_audit(c, by or login, "Compte local créé", target=login, detail=ROLE_LABEL[role])
+                                          role_source=M("local account"), created_at=t, password_hash=hash_password(password)))
+        db.log_audit(c, by or login, M("Local account created"), target=login, detail=ROLE_LABEL[role])
     _local["at"] = 0.0
     forget_role(login)
     return login
@@ -168,14 +168,14 @@ def create_local(login, name, password, role, by):
 def set_password(login, password, by):
     why = password_problem(password or "", login)
     if why:
-        raise ValueError("Mot de passe trop faible : " + why + ".")
+        raise ValueError(M("Password too weak: {why}.", why=why))
     with db.tx() as c:
         c.execute(update(db.users).where(db.users.c.username == login, db.users.c.password_hash.is_not(None)).values(password_hash=hash_password(password)))
-        db.log_audit(c, by, "Mot de passe changé", target=login)
+        db.log_audit(c, by, M("Password changed"), target=login)
 
 
 def setup_code():
-    """Code d'installation : prouve que la personne qui crée le premier compte admin a accès aux journaux du conteneur."""
+    """Installation code: proves that the person creating the first admin account has access to the container logs."""
     if not _setup["code"]:
         _setup["code"] = config.SETUP_CODE or "-".join(secrets.token_hex(2).upper() for _ in range(4))
         _setup["bad"] = 0
@@ -183,7 +183,7 @@ def setup_code():
 
 
 def announce_setup():
-    log.warning("PREMIER DÉMARRAGE : ouvre %s/auth/setup et saisis le code d'installation : %s", config.PUBLIC_URL, setup_code())
+    log.warning("FIRST START: open %s/auth/setup and enter the setup code: %s", config.PUBLIC_URL, setup_code())
 
 
 def oidc_on():
@@ -192,12 +192,12 @@ def oidc_on():
 
 
 def mode():
-    """'on' : session obligatoire (OIDC et/ou compte local) ; 'setup' : installation neuve, créer le compte admin ;
-    'ko' : OIDC mal configurée et aucun compte local (tout refusé) ; 'off' : mode ouvert, développement seulement."""
+    """'on': mandatory session (OIDC and/or local account); 'setup': new installation, create the admin account;
+    'ko': OIDC misconfigured and no local account (everything refused); 'off': open mode, development only."""
     cf = conf()
     if cf["issuer"] and not problems(cf):
         return "on"
-    # Comptes locaux et installation : jamais avec un secret de session absent ou trop court (une session se forgerait).
+    # Local accounts and installation: never with a missing or too short session secret (a session could be forged).
     weak = len(config.SESSION_SECRET) < MIN_SECRET
     if has_local_admin():
         return "ko" if weak else "on"
@@ -211,15 +211,15 @@ def mode():
 def log_startup():
     m = mode()
     if m == "off":
-        log.warning("FABRIQUE_OPEN=1 : mode ouvert, tout visiteur est admin (développement seulement)")
+        log.warning("FABRIQUE_OPEN=1: open mode, every visitor is an admin (development only)")
     elif m == "setup":
         announce_setup()
     elif m == "ko":
-        log.error("connexion mal configurée (%s) : toutes les pages répondent 503", " ; ".join(problems()))
+        log.error("sign-in misconfigured (%s): every page answers 503", " ; ".join(problems()))
     else:
-        log.info("connexion active (%s)", conf()["issuer"] if oidc_on() else "comptes locaux")
+        log.info("sign-in active (%s)", conf()["issuer"] if oidc_on() else "local accounts")
     for name in sorted(config.GENERATED):
-        log.warning("%s absent de l'environnement : généré et gardé avec les données (voir Settings)", name)
+        log.warning("%s missing from the environment: generated and kept with the data (see Settings)", name)
 
 
 def provider_origin():
@@ -230,13 +230,13 @@ def provider_origin():
 
 
 def is_public(path):
-    """Sans session : santé, fichiers statiques, et l'API des runners (authentifiée par le token du runner, pas par OIDC)."""
+    """Without session: health, static files, and the runners API (authenticated by the runner token, not by OIDC)."""
     return path in ("/health",) or path.startswith(("/static/", "/api/runner/"))
 
 
 def valid(session):
-    """Session présente, non expirée, et ouverte après la dernière révocation du compte (déconnexion, changement de mot de
-    passe, « Déconnecter » par un admin) : un cookie copié ne survit pas à ces événements."""
+    """Session present, not expired, and opened after the last account revocation (logout, password change,
+    "Logout" by an admin): a copied cookie does not survive these events."""
     try:
         if not (session and session.get("user")) or float(session.get("exp", 0)) <= time.time():
             return False
@@ -246,15 +246,15 @@ def valid(session):
         return False
 
 
-LOCAL = {"user": "local", "name": "Utilisateur local", "role": "admin", "local": True}
+LOCAL = {"user": "local", "name": M("Local user"), "role": "admin", "local": True}
 
 
 _roles = {}
 
 
 def _state(username):
-    """(rôle, instant de révocation des sessions) du compte, en base (cache d'une seconde) : un changement fait par un
-    admin s'applique à la requête suivante."""
+    """(role, session revocation timestamp) of the account, in database (one-second cache): a change made by an
+    admin applies to the next request."""
     hit = _roles.get(username)
     if hit and time.time() - hit[0] < 1:
         return hit[1]
@@ -270,11 +270,11 @@ def stored_role(username):
 
 
 def revoke_sessions(username, by, why, audit=True):
-    """Toutes les sessions ouvertes du compte cessent de valoir, sur tous les navigateurs."""
+    """All open sessions of the account cease to be valid, on all browsers."""
     with db.tx() as c:
         c.execute(update(db.users).where(db.users.c.username == username).values(sessions_after=time.time()))
         if audit:
-            db.log_audit(c, by, "Sessions fermées", target=username, detail=why)
+            db.log_audit(c, by, M("Sessions closed"), target=username, detail=why)
     forget_role(username)
 
 
@@ -283,8 +283,8 @@ def forget_role(username=None):
 
 
 def who(request):
-    """{'user', 'name', 'role', 'local'} de la personne connectée. En mode local : l'utilisateur local, dont le rôle peut être
-    simulé (cookie fabrique_as) pour voir l'interface d'un requester ou d'un reviewer."""
+    """{'user', 'name', 'role', 'local'} of the logged-in person. In local mode: the local user, whose role can be
+    simulated (fabrique_as cookie) to see the interface of a requester or a reviewer."""
     m = mode()
     if m == "off":
         as_role = request.cookies.get("fabrique_as")
@@ -299,37 +299,37 @@ def who(request):
 
 
 def can(user, action):
-    """Droits par rôle. Le requester ne voit que ses propres demandes (filtré dans les requêtes)."""
+    """Rights by role. The requester only sees their own requests (filtered in the queries)."""
     r = (user or {}).get("role")
     need = {"request": "requester", "answer_own": "requester",
-            "see_all": "verifier", "answer": "verifier", "decide": "verifier", "archive": "verifier", "see_infra": "verifier",
+            "see_all": "reviewer", "answer": "reviewer", "decide": "reviewer", "archive": "reviewer", "see_infra": "reviewer",
             "settings": "admin", "repos_edit": "admin", "runners_edit": "admin"}[action]
     return r in ROLES and ROLES.index(r) >= ROLES.index(need)
 
 
 def role_for(username, email, groups, existing=None, cf=None):
-    """(rôle, source) à la connexion. Ordre : secours > choix d'un admin dans le dashboard > groupes OIDC > rôle par défaut.
-    (None, raison) : refus (groupes requester réglés et la personne n'y est pas)."""
+    """(role, source) at login. Order: fallback > admin choice in the dashboard > OIDC groups > default role.
+    (None, reason): refusal (requester groups set and the person is not in them)."""
     cf = cf or conf()
     if (username or "").lower() in config.FABRIQUE_ADMINS or (email or "").lower() in config.FABRIQUE_ADMINS:
-        return "admin", "secours (FABRIQUE_ADMINS)"
-    if existing and existing.get("role_source") == "panneau":
-        return existing["role"], "panneau"
+        return "admin", "break-glass (FABRIQUE_ADMINS)"
+    if existing and existing.get("role_source") == "dashboard":
+        return existing["role"], "dashboard"
     g = {x.lower() for x in groups}
-    for role, key in (("admin", "admin_groups"), ("verifier", "verifier_groups"), ("requester", "requester_groups")):
+    for role, key in (("admin", "admin_groups"), ("reviewer", "reviewer_groups"), ("requester", "requester_groups")):
         hit = sorted(g & {x.lower() for x in cf.get(key) or []})
         if hit:
-            return role, f"groupe {hit[0]}"
+            return role, f"group {hit[0]}"
     if cf.get("requester_groups"):
-        return None, "aucun groupe autorisé"
-    # Un rôle venu d'un groupe OIDC ou de FABRIQUE_ADMINS ne vaut que tant que sa source s'applique : sinon, rôle par défaut.
+        return None, M("no authorized group")
+    # A role coming from an OIDC group or from FABRIQUE_ADMINS is only valid as long as its source applies: otherwise, default role.
     src = (existing or {}).get("role_source") or ""
-    if existing and not src.startswith(("groupe", "secours")):
-        return existing["role"], src or "défaut"
+    if existing and not src.startswith(("group", "break-glass")):
+        return existing["role"], src or M("default", _ctx="role")
     with db.tx() as c:
         access, _ = db.get_setting(c, "access")
     role = access.get("default_role") if access.get("default_role") in ("requester", "none") else "requester"
-    return role, "défaut des nouveaux comptes"
+    return role, M("default for new accounts")
 
 
 def safe_next(n):
@@ -359,7 +359,7 @@ class _Guard:
         if mode() == "setup" and not scope["path"].startswith("/auth/setup"):
             request = Request(scope)
             resp = RedirectResponse("/auth/setup", status_code=303) if _wants_html(request) else \
-                JSONResponse({"error": "installation à terminer"}, status_code=503)
+                JSONResponse({"error": M("setup to finish")}, status_code=503)
             return await resp(scope, receive, send)
         if scope["path"].startswith("/auth/") or valid(session):
             return await self.app(scope, receive, send)
@@ -370,7 +370,7 @@ class _Guard:
             target = scope["path"] + ("?" + request.url.query if request.url.query else "")
             resp = RedirectResponse("/auth/login?next=" + quote(safe_next(target), safe=""), status_code=303)
         else:
-            resp = JSONResponse({"error": "connexion requise"}, status_code=401)
+            resp = JSONResponse({"error": "sign-in required"}, status_code=401)
         await resp(scope, receive, send)
 
 
@@ -387,7 +387,7 @@ class AuthLayer:
         if m == "ko":
             request = Request(scope)
             resp = page(request, "misconfigured", 503) if _wants_html(request) else \
-                JSONResponse({"error": "connexion mal configurée : accès fermé"}, status_code=503)
+                JSONResponse({"error": M("sign-in misconfigured: access closed")}, status_code=503)
             return await resp(scope, receive, send)
         key = (config.SESSION_SECRET, config.PUBLIC_URL, config.OIDC_SESSION_HOURS)
         if key not in self._sm:
@@ -418,29 +418,29 @@ def client():
 async def _claims_options(cl):
     iss = (await cl.load_server_metadata()).get("issuer", "")
     if iss.rstrip("/") != conf()["issuer"].rstrip("/"):
-        raise ValueError(f"émetteur inattendu dans la découverte : {iss!r}")
+        raise ValueError(M("unexpected issuer in the discovery document: {iss}", iss=f"{iss!r}"))
     return {"iss": {"essential": True, "values": [iss]}, "exp": {"essential": True}, "aud": {"essential": True}}
 
 
 async def discover(issuer):
-    """Test de la découverte depuis les settings : (ok, message). Aucune donnée secrète n'est envoyée."""
+    """Test of discovery from settings: (ok, message). No secret data is sent."""
     import httpx
     u = issuer.strip().rstrip("/") + "/.well-known/openid-configuration"
     if urlsplit(u).scheme not in ("http", "https"):
-        return False, "l'émetteur doit commencer par https://"
+        return False, M("the issuer must start with https://")
     try:
         async with httpx.AsyncClient(timeout=8, transport=TRANSPORT) as h:
             r = await h.get(u)
         r.raise_for_status()
         d = r.json()
     except Exception as e:
-        return False, f"découverte impossible : {type(e).__name__}"
+        return False, M("discovery failed: {name}", name=type(e).__name__)
     if (d.get("issuer") or "").rstrip("/") != issuer.strip().rstrip("/"):
-        return False, f"l'émetteur annoncé ({d.get('issuer')!r}) ne correspond pas"
+        return False, M("the advertised issuer ({issuer}) does not match", issuer=f"{d.get('issuer')!r}")
     missing = [k for k in ("authorization_endpoint", "token_endpoint", "jwks_uri") if not d.get(k)]
     if missing:
-        return False, "points d'accès manquants : " + ", ".join(missing)
-    return True, "découverte OK · " + ", ".join(sorted(set(d.get("grant_types_supported") or ["authorization_code"]))[:3])
+        return False, M("missing endpoints: ") + ", ".join(missing)
+    return True, M("discovery OK · ") + ", ".join(sorted(set(d.get("grant_types_supported") or ["authorization_code"]))[:3])
 
 
 def _remember(user, name, email, groups, role, source):
@@ -452,7 +452,7 @@ def _remember(user, name, email, groups, role, source):
         else:
             c.execute(insert(db.users).values(username=user, name=name, email=email, groups=groups, role=role,
                                               role_source=source, created_at=t, last_login=t))
-        db.log_audit(c, user, "Connexion", detail=f"{ROLE_LABEL[role]} · {source}")
+        db.log_audit(c, user, M("Sign-in"), detail=f"{ROLE_LABEL[role]} · {source}")
 
 
 def _open_session(request, user, name, via):
@@ -473,21 +473,21 @@ async def setup_do(request: Request):
     if mode() != "setup":
         return RedirectResponse("/", status_code=303)
     f = await request.form()
-    kept = {k: str(f.get(k) or "")[:120] for k in ("code", "login", "name")}   # rien à retaper après un refus (sauf le mot de passe)
+    kept = {k: str(f.get(k) or "")[:120] for k in ("code", "login", "name")}   # nothing to retype after a refusal (except the password)
     if not hmac.compare_digest(str(f.get("code") or "").strip().upper().encode(), setup_code().upper().encode()):
         _setup["bad"] += 1
-        if _setup["bad"] >= 10:   # trop d'essais : nouveau code, écrit dans les journaux
+        if _setup["bad"] >= 10:   # too many attempts: new code, written in the logs
             _setup["code"] = ""
             announce_setup()
-        return page(request, "setup", 403, "Code d'installation incorrect. Il est dans les journaux du conteneur du dashboard.", **kept)
+        return page(request, "setup", 403, M("Wrong setup code. It is in the dashboard container's logs."), **kept)
     if str(f.get("password") or "") != str(f.get("password2") or ""):
-        return page(request, "setup", 400, "Les deux mots de passe ne sont pas identiques.", **kept)
+        return page(request, "setup", 400, M("The two passwords are not the same."), **kept)
     try:
         login_ = create_local(f.get("login"), f.get("name"), str(f.get("password") or ""), "admin", "")
     except ValueError as e:
         return page(request, "setup", 400, str(e), **kept)
     _setup["code"] = ""
-    log.info("installation terminée : compte admin « %s » créé", login_)
+    log.info("setup finished: admin account “%s” created", login_)
     _open_session(request, login_, str(f.get("name") or login_).strip()[:120] or login_, "local")
     return RedirectResponse("/start", status_code=303)
 
@@ -498,20 +498,20 @@ async def password_login(request: Request):
     login_, pw, nxt = str(f.get("login") or "").strip().lower(), str(f.get("password") or ""), safe_next(str(f.get("next") or "/"))
     n, since = _fails.get(login_, (0, 0.0))
     if n >= 5 and time.time() - since < 900:
-        return page(request, "login", 429, "Trop d'essais : réessaie dans un quart d'heure.")
+        return page(request, "login", 429, M("Too many attempts: try again in a quarter of an hour."))
     with db.tx() as c:
         u = db.one(c, select(db.users).where(db.users.c.username == login_))
     stored = (u or {}).get("password_hash")
-    ok = check_password(pw, stored or hash_password("mot-de-passe-factice"))   # même coût, que le compte existe ou non
+    ok = check_password(pw, stored or hash_password("dummy-password"))   # same cost, whether the account exists or not
     if not (u and stored and ok and u["role"] != "none"):
         _fails[login_] = (n + 1 if time.time() - since < 900 else 1, since if n and time.time() - since < 900 else time.time())
         with db.tx() as c:
-            db.log_audit(c, login_[:60] or "?", "Connexion refusée", detail="mot de passe")
-        return page(request, "login", 401, "Identifiant ou mot de passe incorrect.")
+            db.log_audit(c, login_[:60] or "?", M("Sign-in refused"), detail=M("password"))
+        return page(request, "login", 401, M("Wrong username or password."))
     _fails.pop(login_, None)
     with db.tx() as c:
         c.execute(update(db.users).where(db.users.c.id == u["id"]).values(last_login=time.time()))
-        db.log_audit(c, login_, "Connexion", detail=f"{ROLE_LABEL[u['role']]} · mot de passe")
+        db.log_audit(c, login_, M("Sign-in"), detail=M("{role} · password", role=ROLE_LABEL[u['role']]))
     _open_session(request, login_, u["name"] or login_, "local")
     return RedirectResponse(nxt, status_code=303)
 
@@ -521,8 +521,8 @@ async def login(request: Request, next: str = "/", sso: int = 0, out: int = 0):
     nxt = safe_next(next)
     if mode() != "on" or valid(request.session):
         return RedirectResponse(nxt, status_code=303)
-    # Après une déconnexion (out=1), on reste sur la page de connexion de la Fabrique, même sans compte local : pas de
-    # renvoi immédiat vers le provider d'identité.
+    # After a logout (out=1), we stay on the Fabrique login page, even without a local account: no
+    # immediate redirect to the identity provider.
     if not oidc_on() or (has_local_accounts() and not sso) or (out and not sso):
         return templates.TemplateResponse(request, "auth.html", {"bare": True, "page": "auth", "kind": "login", "detail": "",
                                                                  "next": nxt, "sso": oidc_on(), "out": bool(out)})
@@ -531,7 +531,7 @@ async def login(request: Request, next: str = "/", sso: int = 0, out: int = 0):
     try:
         return await client().authorize_redirect(request, config.PUBLIC_URL + "/auth/callback")
     except Exception as e:
-        log.error("provider OIDC injoignable : %s", e)
+        log.error("OIDC provider unreachable: %s", e)
         return page(request, "error", 502)
 
 
@@ -546,7 +546,7 @@ async def callback(request: Request):
         if not info:
             raise ValueError("id_token absent")
     except Exception as e:
-        log.warning("connexion OIDC refusée : %s", e)
+        log.warning("OIDC sign-in refused: %s", e)
         request.session.clear()
         return page(request, "error", 400)
     user = (info.get("preferred_username") or "").strip()
@@ -558,11 +558,11 @@ async def callback(request: Request):
     with db.tx() as c:
         existing = db.one(c, select(db.users).where(db.users.c.username == (user or email)))
     if existing and existing.get("password_hash"):
-        log.warning("connexion OIDC refusée : %r est un compte local", user or email)
+        log.warning("OIDC sign-in refused: %r is a local account", user or email)
         return page(request, "denied", 403)
     role, source = role_for(user, email, groups, existing)
     if not (user or email) or role is None:
-        log.warning("compte sans rôle : %r (%r) groupes=%r", user, email, groups)
+        log.warning("account without a role: %r (%r) groups=%r", user, email, groups)
         return page(request, "denied", 403)
     name = str(info.get("name") or user or email)[:80]
     _remember(user or email, name, email, groups, role, source)
@@ -577,21 +577,21 @@ async def logout(request: Request):
     if mode() != "on":
         return RedirectResponse("/", status_code=303)
     local = request.session.get("via") == "local"
-    if valid(request.session):   # se déconnecter ferme la session partout : un cookie copié ne vaut plus rien
-        revoke_sessions(request.session["user"], request.session["user"], "déconnexion", audit=False)
+    if valid(request.session):   # logging out closes the session everywhere: a copied cookie is worth nothing
+        revoke_sessions(request.session["user"], request.session["user"], M("sign-out"), audit=False)
     request.session.clear()
     end = None
-    back_to = "/auth/login?out=1"   # retour sur la page de connexion de la Fabrique, avec « Tu es déconnecté »
+    back_to = "/auth/login?out=1"   # return to the Fabrique login page, with "You are logged out"
     if local or not oidc_on():
         return RedirectResponse(back_to, status_code=303)
     try:
         end = (await client().load_server_metadata()).get("end_session_endpoint")
     except Exception as e:
-        log.warning("découverte OIDC indisponible à la déconnexion : %s", e)
+        log.warning("OIDC discovery unavailable at sign-out: %s", e)
     if not (end and urlsplit(end).scheme in ("http", "https")):
         return RedirectResponse(back_to, status_code=303)
-    # Déconnexion côté provider (OpenID RP-Initiated Logout), puis retour à la Fabrique : l'adresse de retour doit être
-    # déclarée chez le provider (Keycloak : « Valid post logout redirect URIs » ; Authentik : URI de redirection).
+    # Provider-side logout (OpenID RP-Initiated Logout), then return to Fabrique: the return address must be
+    # declared with the provider (Keycloak: "Valid post logout redirect URIs"; Authentik: redirection URI).
     from urllib.parse import urlencode
     q = urlencode({"post_logout_redirect_uri": config.PUBLIC_URL + back_to, "client_id": conf()["client_id"]})
     return RedirectResponse(end + ("&" if "?" in end else "?") + q, status_code=303)

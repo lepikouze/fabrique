@@ -1,20 +1,21 @@
-"""Diff d'un job, tel que le runner l'envoie (git diff unifié) : découpage par fichier pour l'affichage. Lecture seule,
-aucun appel à git : le dashboard ne touche jamais au code, il range du texte. Tout ce qui sort d'ici est du texte brut,
-échappé par les gabarits."""
+"""Diff of a job, as sent by the runner (unified git diff): split by file for display. Read-only,
+no git call: the dashboard never touches the code, it organizes text. Everything coming out of here is plain text,
+escaped by templates."""
+from .i18n import M
 import re
 
-MAX_TEXT = 500_000        # caractères de diff gardés par job ; au-delà, coupé et signalé « tronqué »
-MAX_FILES = 500           # fichiers résumés par diff
+MAX_TEXT = 500_000        # diff characters kept per job; beyond, cut and flagged as "truncated"
+MAX_FILES = 500           # files summarized by diff
 MAX_PATH = 300
-OPEN_UNDER = 400          # lignes modifiées au total : en dessous, les fichiers s'affichent dépliés
+OPEN_UNDER = 400          # total modified lines: below this, files are displayed expanded
 
 _HEAD = re.compile(r"^diff --git (.*)$")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
-STATUS = {"added": "ajouté", "deleted": "supprimé", "modified": "modifié", "binary": "binaire"}
+STATUS = {"added": M("added"), "deleted": M("deleted"), "modified": M("modified"), "binary": M("binary")}
 
 
 def _unquote(p):
-    """Chemin tel que git l'écrit : entre guillemets, avec des échappements, quand il contient des caractères spéciaux."""
+    """Path as git writes it: in quotes, with escapes, when it contains special characters."""
     p = p.strip()
     if len(p) >= 2 and p[0] == '"' and p[-1] == '"':
         try:
@@ -25,7 +26,7 @@ def _unquote(p):
 
 
 def _side(line, prefix):
-    """Chemin d'une ligne « --- a/x » ou « +++ b/x » ; None pour /dev/null."""
+    """Path of a line "--- a/x" or "+++ b/x"; None for /dev/null."""
     p = _unquote(line[4:].split("\t", 1)[0])
     if p == "/dev/null":
         return None
@@ -34,8 +35,8 @@ def _side(line, prefix):
 
 def parse(text):
     """[{path, status, add, rem, binary, hunks: [{header, lines: [(kind, old, new, text)]}]}] ; kind : ctx, add, rem, note.
-    Les compteurs de l'en-tête « @@ » disent où finit chaque bloc : une ligne de contenu qui ressemble à un en-tête
-    (« +++ », « diff --git ») reste du contenu."""
+    The "@@" header counters indicate where each block ends: a content line that looks like a header
+    ("+++", "diff --git") remains part of the content."""
     files, cur, hunk, old, new, left_old, left_new = [], None, None, 0, 0, 0, 0
     for line in (text or "").split("\n"):
         inside = hunk is not None and (left_old > 0 or left_new > 0)
@@ -48,12 +49,12 @@ def parse(text):
                 hunk["lines"].append(("ctx", old, new, line[1:])); old += 1; new += 1; left_old -= 1; left_new -= 1
             continue
         if hunk is not None and line.startswith("\\"):
-            hunk["lines"].append(("note", None, None, "pas de retour à la ligne en fin de fichier"))
+            hunk["lines"].append(("note", None, None, M("no newline at end of file")))
             continue
         m = _HEAD.match(line)
         if m:
             raw = m.group(1)
-            # « a/chemin b/chemin » : sans renommage (le runner le désactive), les deux moitiés sont identiques.
+            # "a/path b/path" : without renaming (the runner disables it), both halves are identical.
             half = raw[len(raw) // 2 + 1:] if len(raw) % 2 and raw[len(raw) // 2] == " " else raw.rsplit(" b/", 1)[-1]
             path = _unquote(half)
             cur = {"path": (path[2:] if path.startswith("b/") else path)[:MAX_PATH], "status": "modified", "add": 0, "rem": 0,
@@ -69,7 +70,7 @@ def parse(text):
             left_old, left_new = int(h.group(2) or 1), int(h.group(4) or 1)
             hunk = {"header": line[:200], "lines": []}
             cur["hunks"].append(hunk)
-        elif hunk is None:   # en-tête du fichier
+        elif hunk is None:   # file header
             if line.startswith("new file mode"):
                 cur["status"] = "added"
             elif line.startswith("deleted file mode"):
@@ -84,18 +85,18 @@ def parse(text):
                 p = _side(line, "a/")
                 if p and cur["status"] == "deleted":
                     cur["path"] = p[:MAX_PATH]
-        elif line.strip():   # bloc coupé par le plafond (« [… diff tronqué] ») ou ligne inattendue : montrée telle quelle
+        elif line.strip():   # block cut by the cap ("[... truncated diff]" ) or unexpected line: shown as is
             hunk["lines"].append(("note", None, None, line[:400]))
     return files
 
 
 def summary(text):
-    """Résumé gardé en base à la réception : [{path, add, rem, status}], pour afficher la liste sans relire le texte."""
+    """Summary kept in database upon receipt: [{path, add, rem, status}], to display the list without re-reading the text."""
     return [{"path": f["path"], "add": f["add"], "rem": f["rem"], "status": f["status"]} for f in parse(text)[:MAX_FILES]]
 
 
 def clip(text):
-    """(texte gardé, coupé ?) : coupé à MAX_TEXT, à une fin de ligne."""
+    """(text kept, cut?) : cut at MAX_TEXT, at a line end."""
     text = str(text or "").replace("\r\n", "\n").replace("\x00", "")
     if len(text) <= MAX_TEXT:
         return text, False
@@ -104,7 +105,7 @@ def clip(text):
 
 
 def view(row, protected=()):
-    """Ce que le gabarit affiche : fichiers découpés, totaux, fichiers protégés signalés, dépliés ou non par défaut."""
+    """What the template displays: split files, totals, protected files flagged, expanded or not by default."""
     files = parse(row["text"])
     total = sum(f["add"] + f["rem"] for f in files)
     prot = set(protected)

@@ -1,34 +1,44 @@
 #!/usr/bin/env python3
-"""Contrôle de sécurité léger de la Fabrique : secrets écrits en dur (Betterleaks) et paquets introuvables ou tout juste
-publiés (nom inventé par le modèle, ou paquet piège qui exploite ces noms inventés). Deux usages :
-  controle.py hook        hook PostToolUse de Claude Code (Write, Edit, MultiEdit), installé en réglages gérés. Contrôle le
-                          fichier que l'agent vient d'écrire. S'il trouve un problème : code 2 et message à l'agent, qui
-                          corrige aussitôt. Le fichier est déjà écrit : c'est un signalement, pas un refus.
-  controle.py diff BASE   en fin de job, lancé par le runner dans le conteneur du job : contrôle tout ce que le job a changé
-                          (commits BASE..HEAD) et écrit un rapport. Toujours code 0 : à titre d'information, ne bloque pas.
-La valeur d'un secret n'est jamais affichée. Réseau : seulement les registres de paquets, par le proxy de sortie du job.
-Un registre injoignable ne bloque rien : le paquet est signalé « non vérifié »."""
+"""Lightweight security check for Fabrique: hardcoded secrets (Betterleaks) and missing or just
+published packages (model-invented name, or typo-squatting package exploiting these invented names). Two uses:
+  security_check.py hook        Claude Code PostToolUse hook (Write, Edit, MultiEdit), installed via managed settings.
+                          Checks the file the agent just wrote. If a problem is found: exit code 2 and a message to the
+                          agent, which corrects it immediately. The file is already written: it is a report, not a refusal.
+  security_check.py diff BASE   at the end of a job, launched by the runner in the job container: checks everything the
+                          job changed (commits BASE..HEAD) and writes a report. Always exit code 0: for information,
+                          does not block.
+The value of a secret is never displayed. Network: only package registries, via the job's egress proxy.
+An unreachable registry does not block anything: the package is flagged as "unverified"."""
+try:
+    from .texts import M
+except ImportError:
+    try:
+        from texts import M
+    except ImportError:
+        def M(t, **p):
+            return t.format(**p) if p else t
 import calendar, json, os, re, shutil, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
-YOUNG_DAYS = 30            # un paquet publié depuis moins longtemps est signalé
-MAX_PACKAGES = 15          # au-delà, les paquets suivants ne sont pas vérifiés (et c'est dit)
-TIMEOUT = 6                # secondes par requête de registre
-# Dans les tests, les mots de passe factices sont la norme : seules les règles génériques y sont ignorées. Un vrai jeton
-# reconnu (GitHub, Stripe, AWS…) reste signalé partout.
+ALERTS_LINE = "fabrique-alerts: "     # last line of the diff report, for the runner
+YOUNG_DAYS = 30            # a package published more recently than this (in days) is flagged
+MAX_PACKAGES = 15          # beyond that, the following packages are not checked (and this is stated)
+TIMEOUT = 6                # seconds per registry request
+# In tests, dummy passwords are the norm: only generic rules are ignored there. A real token
+# recognized (GitHub, Stripe, AWS...) remains flagged everywhere.
 TEST_PATH = re.compile(r"(^|/)(tests?|spec|specs|__tests__|testdata|fixtures?)(/|$)|(^|/)(test_[^/]*|[^/]*_test\.[a-z]+|[^/]*\.(test|spec)\.[a-z]+)$")
 GENERIC = re.compile(r"^generic-")
 
-# Fichiers de dépendances reconnus -> écosystème
+# Recognized dependency files -> ecosystem
 MANIFESTS = [(re.compile(r"(^|/)requirements[^/]*\.(txt|in)$"), "pypi"), (re.compile(r"(^|/)pyproject\.toml$"), "pypi"),
              (re.compile(r"(^|/)package\.json$"), "npm"), (re.compile(r"(^|/)go\.mod$"), "go")]
-REGISTRY = {"pypi": "PyPI", "npm": "npm", "go": "le proxy Go"}
+REGISTRY = {"pypi": "PyPI", "npm": "npm", "go": "the Go proxy"}
 
 
 # --- Secrets -------------------------------------------------------------------------------------------------------------
 
 def secrets(args, cwd):
-    """Lance Betterleaks (validation des secrets désactivée : rien ne part vers les services concernés) ; renvoie
-    [(fichier, ligne, règle)], ou None si l'outil est absent."""
+    """Runs Betterleaks (secret validation disabled: nothing is sent to the concerned services); returns
+    [(file, line, rule)], or None if the tool is missing."""
     exe = shutil.which("betterleaks")
     if not exe:
         return None
@@ -48,7 +58,7 @@ def secrets(args, cwd):
     return sorted(set(out))
 
 
-# --- Paquets -------------------------------------------------------------------------------------------------------------
+# --- Packages ------------------------------------------------------------------------------------------------------------
 
 def ecosystem(path):
     return next((e for pat, e in MANIFESTS if pat.search(path)), None)
@@ -60,8 +70,8 @@ def _pyname(spec):
 
 
 def packages(path, text):
-    """Noms des paquets déclarés dans un fichier de dépendances (registre public seulement : chemins, URL et dépôts Git
-    sont ignorés)."""
+    """Names of packages declared in a dependency file (public registry only: paths, URLs, and Git repos
+    are ignored)."""
     eco, names = ecosystem(path), set()
     if not text:
         return names
@@ -114,13 +124,13 @@ def packages(path, text):
 
 
 def _get(url):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "fabrique-controle"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "fabrique-security-check"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return json.load(r)
 
 
 def lookup(eco, name, now=None, get=_get):
-    """Ce que dit le registre public : ("absent", None), ("ok", âge en jours ou None) ou ("inconnu", raison)."""
+    """What the public registry says: ("absent", None), ("ok", age in days or None) or ("unknown", reason)."""
     now = now or time.time()
     try:
         if eco == "pypi":
@@ -135,9 +145,9 @@ def lookup(eco, name, now=None, get=_get):
             get(f"https://proxy.golang.org/{esc}/@latest")
             first = None
     except urllib.error.HTTPError as e:
-        return ("absent", None) if e.code in (404, 410) else ("inconnu", f"réponse {e.code} du registre")
+        return ("absent", None) if e.code in (404, 410) else ("unknown", M("response {code} from the registry", code=e.code))
     except (urllib.error.URLError, OSError, ValueError):
-        return "inconnu", "registre injoignable"
+        return "unknown", "registry unreachable"
     if not first:
         return "ok", None
     try:
@@ -148,29 +158,27 @@ def lookup(eco, name, now=None, get=_get):
 
 
 def check_packages(changes, get=_get):
-    """changes : [(fichier, ancien texte, nouveau texte)]. Renvoie (alertes, notes, nombre de paquets vérifiés)."""
+    """changes: [(file, old text, new text)]. Returns (alerts, notes, number of packages reviewed)."""
     alerts, notes, n = [], [], 0
     for path, old, new in changes:
         eco = ecosystem(path)
         added = sorted(packages(path, new) - packages(path, old))
         for name in added:
             if n >= MAX_PACKAGES:
-                notes.append(f"{path} : d'autres paquets ajoutés ne sont pas vérifiés (limite de {MAX_PACKAGES}).")
+                notes.append(M("{path}: other added packages are not checked (limit of {max_packages}).", path=path, max_packages=MAX_PACKAGES))
                 return alerts, notes, n
             n += 1
             state, info = lookup(eco, name, get=get)
             if state == "absent":
-                alerts.append(f"{path} : le paquet « {name} » est introuvable sur {REGISTRY[eco]}. Le nom est probablement mal "
-                              "orthographié ou inventé : corrige-le avec le nom exact du paquet voulu, ou retire-le.")
+                alerts.append(M("{path}: package “{name}” cannot be found on {p}. The name is probably misspelled or made up: fix it with the exact name of the intended package, or remove it.", path=path, name=name, p=REGISTRY[eco]))
             elif state == "ok" and info is not None and info < YOUNG_DAYS:
-                alerts.append(f"{path} : le paquet « {name} » n'existe sur {REGISTRY[eco]} que depuis {info} jour(s). Un paquet aussi "
-                              "récent peut être un piège qui imite un nom connu : vérifie que c'est bien celui voulu, sinon remplace-le.")
-            elif state == "inconnu":
-                notes.append(f"{path} : « {name} » non vérifié ({info}).")
+                alerts.append(M("{path}: package “{name}” has existed on {p} for only {info} day(s). A package this recent may be a trap imitating a known name: check it is the intended one, otherwise replace it.", path=path, name=name, p=REGISTRY[eco], info=info))
+            elif state == "unknown":
+                notes.append(M("{path}: “{name}” not checked ({info}).", path=path, name=name, info=info))
     return alerts, notes, n
 
 
-# --- Les deux usages -----------------------------------------------------------------------------------------------------
+# --- The two uses -----------------------------------------------------------------------------------------------------
 
 def _git(args, cwd):
     p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
@@ -178,11 +186,11 @@ def _git(args, cwd):
 
 
 def _say(message):
-    """Ligne dans l'activité du job (relais du runner, jeton du job). Sans relais : rien."""
+    """Line in the job activity (runner relay, job token). Without relay: nothing."""
     if not os.environ.get("FAB_TOKEN"):
         return
     req = urllib.request.Request(os.environ.get("FAB_RELAY", "http://127.0.0.1:7071") + "/fab",
-                                 data=json.dumps({"cmd": "controle", "message": message[:900]}).encode(),
+                                 data=json.dumps({"cmd": "check", "message": message[:900]}).encode(),
                                  headers={"Content-Type": "application/json", "X-Fab-Token": os.environ["FAB_TOKEN"]})
     try:
         urllib.request.urlopen(req, timeout=5).close()
@@ -204,8 +212,7 @@ def hook(stdin=sys.stdin, get=_get):
     rel = os.path.relpath(full, root)
     problems = []
     for path, line, rule in secrets(["dir", rel], root) or []:
-        problems.append(f"{path} ligne {line} : secret écrit en dur (règle {rule}). Retire-le et lis-le depuis une variable "
-                        "d'environnement ou la configuration ; ne recopie jamais sa valeur, ni ici ni dans un message.")
+        problems.append(M("{path} line {line}: hard-coded secret (rule {rule}). Remove it and read it from an environment variable or the configuration; never copy its value, here or in a message.", path=path, line=line, rule=rule))
     if ecosystem(rel):
         try:
             new = open(full, encoding="utf-8", errors="replace").read()
@@ -215,42 +222,43 @@ def hook(stdin=sys.stdin, get=_get):
         problems += alerts
     if not problems:
         return 0
-    _say(f"Contrôle sur {rel} : " + " ".join(p.split(" : ", 1)[1].split(".")[0] for p in problems)[:600] + ". L'agent est invité à corriger.")
-    print("Contrôle de la Fabrique : à corriger avant de continuer.\n- " + "\n- ".join(problems), file=sys.stderr)
+    _say(M("Check on {rel}: ", rel=rel) + " ".join(p.split(": ", 1)[1].split(".")[0] for p in problems)[:600] + M(". The agent is asked to fix it."))
+    print(M("Fabrique check: fix before going on.\n- ") + "\n- ".join(problems), file=sys.stderr)
     return 2
 
 
 def diff(base, cwd=".", get=_get):
-    """Rapport sur tout ce que le job a changé. Première ligne : le bilan (lu par le runner et le dashboard)."""
+    """Report on everything the job has changed. First line: the summary (read by the runner and the dashboard)."""
     if not re.fullmatch(r"[0-9a-f]{7,40}", base or ""):
-        print("Contrôle de sécurité : base invalide")
+        print(M("Security check: invalid base"))
         return 0
     lines, alerts = [], 0
     found = secrets(["git", f"--log-opts={base}..HEAD", "."], cwd)
     if found is None:
-        lines.append("Secrets : non contrôlés (Betterleaks absent de l'image du job).")
+        lines.append(M("Secrets: not checked (Betterleaks missing from the job image)."))
     elif found:
         alerts += len(found)
-        lines.append("Secrets écrits en dur :")
-        lines += [f"  ⚠ {p} ligne {l} (règle {r})" for p, l, r in found]
+        lines.append(M("Hard-coded secrets:"))
+        lines += [M("  ⚠ {p} line {l} (rule {r})", p=p, l=l, r=r) for p, l, r in found]
     else:
-        lines.append("Secrets : aucun dans les commits du job.")
+        lines.append(M("Secrets: none in the job's commits."))
     changed = [f for f in _git(["diff", "--name-only", "--no-renames", f"{base}..HEAD"], cwd).splitlines() if ecosystem(f)]
     if changed:
         pa, notes, n = check_packages([(f, _git(["show", f"{base}:{f}"], cwd), _git(["show", f"HEAD:{f}"], cwd)) for f in changed], get=get)
         alerts += len(pa)
-        lines.append(f"Paquets ajoutés : {n} vérifié(s) sur leur registre." if n else "Paquets ajoutés : aucun.")
+        lines.append(M("Added packages: {n} checked against their registry.", n=n) if n else M("Added packages: none."))
         lines += [f"  ⚠ {a}" for a in pa] + [f"  · {x}" for x in notes]
     else:
-        lines.append("Paquets : aucun fichier de dépendances modifié.")
-    head = f"Contrôle de sécurité : {alerts} alerte(s)" if alerts else "Contrôle de sécurité : rien à signaler"
-    print(head + "\n" + "\n".join(lines) + "\n\nÀ titre d'information : ce contrôle ne bloque pas le job.")
+        lines.append(M("Packages: no dependency file changed."))
+    head = M("Security check: {alerts} alert(s)", alerts=alerts) if alerts else M("Security check: nothing to report")
+    print(head + "\n" + "\n".join(lines) + M("\n\nFor information: this check does not block the job."))
+    print(f"{ALERTS_LINE}{alerts}")     # read by the runner: the number of alerts, never taken from the wording above
     return 0
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    # Dépôt du job créé par un autre utilisateur (volume partagé, NFS) : Git ne doit pas le refuser comme « douteux ».
+    # Job repo created by another user (shared volume, NFS): Git must not refuse it as "suspicious".
     os.environ.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*"})
     if argv[:1] == ["hook"]:
         return hook()

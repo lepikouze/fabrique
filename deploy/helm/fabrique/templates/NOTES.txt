@@ -1,25 +1,25 @@
-La Fabrique est installée dans le namespace « {{ .Release.Namespace }} ».
+Fabrique is installed in the "{{ .Release.Namespace }}" namespace.
 
-1. Code d'installation (affiché une fois, au premier démarrage) :
+1. Setup code (shown once, at the first start):
 
-   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "fabrique.fullname" . }}-dashboard | grep "code d'installation"
+   kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "fabrique.fullname" . }}-dashboard | grep "setup code"
 
-2. Ouvrir le dashboard :
+2. Open the dashboard:
 {{- if .Values.ingress.enabled }}
 
    {{ include "fabrique.publicUrl" . }}
 {{- else }}
 
    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "fabrique.fullname" . }} 8080:{{ .Values.service.port }}
-   puis http://localhost:8080
+   then http://localhost:8080
 {{- end }}
 
-3. Saisir le code, créer le compte administrateur, puis suivre la page Setup (un modèle, un provider Git, un premier repo).
+3. Enter the code, create the administrator account, then follow the Setup page (a model, a Git provider, a first repo).
 {{- if .Values.runner.enabled }}
-   Le runner intégré « {{ .Values.runner.name }} » s'enregistre seul : il apparaît en ligne dans Runners en moins d'une minute.
+   The built-in runner "{{ .Values.runner.name }}" registers itself: it shows as online under Runners within a minute.
 {{- end }}
 {{- if not .Values.secrets.existingSecret }}
 
-Les secrets de l'application sont dans le Secret « {{ include "fabrique.fullname" . }} ». Sauvegarde-le : sans lui, les clés
-des modèles et les tokens Git enregistrés dans le dashboard sont illisibles. Il n'est pas supprimé par `helm uninstall`.
+The application's secrets are in the Secret "{{ include "fabrique.fullname" . }}". Back it up: without it, the model
+keys and the Git tokens stored in the dashboard are unreadable. `helm uninstall` does not delete it.
 {{- end }}

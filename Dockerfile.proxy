@@ -1,4 +1,4 @@
-# Proxy de sortie des conteneurs de jobs (liste blanche). Non root, système de fichiers en lecture seule possible.
+# Job container egress proxy (allowlist). Non-root, read-only filesystem possible.
 FROM alpine:3.22
 RUN apk add --no-cache tinyproxy
 COPY proxy/entrypoint.sh /entrypoint.sh

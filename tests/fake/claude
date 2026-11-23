@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Faux Claude Code pour les tests du runner. Agent : parle à la Fabrique via fab.py, modifie le dépôt, flux stream-json.
-Relecteur (--output-format json) : renvoie un verdict JSON. Le titre de la demande pilote les cas de test."""
+"""Fake Claude Code for the runner tests. Agent: talks to Fabrique through fab.py, changes the repo, stream-json output.
+Reviewer (--output-format json): returns a JSON verdict. The title of the request drives the test cases."""
 import json, os, subprocess, sys, time
 args = sys.argv[1:]
 prompt = args[args.index("-p") + 1]
@@ -10,77 +10,112 @@ def out(o): print(json.dumps(o), flush=True)
 def fab(*a): subprocess.run(FAB + list(a), check=True, capture_output=True)
 
 if "--output-format" in args and args[args.index("--output-format") + 1] == "json":   # relecteur
-    src = open("carnet.py").read()
+    src = open("notebook.py").read()
     mark = os.path.join(os.environ.get("HOME", "/tmp"), ".illisible")
     if "ILLISIBLE" in prompt and ("TOUJOURS" in prompt or not os.path.exists(mark)):
         open(mark, "w").close()
         print(json.dumps({"result": "Je pense que c'est bon mais je n'ai pas fini…", "total_cost_usd": 0.0}))
         sys.exit(0)
-    verdict = "bloquant" if any(k in prompt for k in ("BLOQUER", "SANSPREUVE", "PREUVEVIDE")) and "# corrigé" not in src else "ok"
-    preuve = "" if "SANSPREUVE" in prompt else ("true" if "PREUVEVIDE" in prompt else "grep -q '# corrigé' carnet.py")
-    print(json.dumps({"result": "Voici ma relecture.\n" + json.dumps({"verdict": verdict, "resume": "relu", "points": ["carnet.py : ok()"] if verdict != "ok" else [],
-                                                                       "preuve": preuve}),
+    verdict = "blocking" if any(k in prompt for k in ("BLOQUER", "SANSPREUVE", "PREUVEVIDE")) and "# corrigé" not in src else "ok"
+    preuve = "" if "SANSPREUVE" in prompt else ("true" if "PREUVEVIDE" in prompt else "grep -q '# corrigé' notebook.py")
+    print(json.dumps({"result": "Voici ma relecture.\n" + json.dumps({"verdict": verdict, "summary": "relu", "points": ["notebook.py : ok()"] if verdict != "ok" else [],
+                                                                       "evidence": preuve}),
                       "total_cost_usd": 0.1}))
     sys.exit(0)
 
 sid = resume or "sess-42"
 out({"type": "system", "subtype": "init", "session_id": sid})
-if prompt.startswith("Onboarding du dépôt"):          # agent d'onboarding : n'écrit que la recette (sauf cas « touche »)
-    fab("etape", "triage", "lecture du dépôt")
-    if os.path.exists("RIEN_A_VERIFIER"):              # projet sans tests ni build : l'agent abandonne
-        fab("echec", "aucun test, aucun build : rien à vérifier")
+if prompt.startswith("Onboarding of repository"):          # onboarding agent: only writes the recipe (except for "touch" cases)
+    fab("step", "triage", "lecture du dépôt")
+    if os.path.exists("NOTHING_TO_CHECK"):              # project without tests or build: the agent gives up
+        fab("fail", "aucun test, aucun build : rien à vérifier")
         out({"type": "result", "subtype": "success", "session_id": sid, "result": "abandon"})
         sys.exit(0)
     os.makedirs(".fabrique", exist_ok=True)
     with open(".fabrique/setup.json", "w") as f:
-        json.dump({"setup": [] if "sanscheck" in prompt else ["true"], "checks": {} if "sanscheck" in prompt else {"tests": "python3 -c 'import carnet'"},
+        json.dump({"setup": [] if "sanscheck" in prompt else ["true"], "checks": {} if "sanscheck" in prompt else {"tests": "python3 -c 'import notebook'"},
                    "env": [{"name": "API_KEY", "purpose": "appel externe des tests d'intégration", "required": False}]}, f)
     if "touche" in prompt:
-        with open("carnet.py", "a") as f:
+        with open("notebook.py", "a") as f:
             f.write("# l'agent a corrigé le code au passage\n")
         os.makedirs(".venv/bin", exist_ok=True)
         open(".venv/bin/activate", "w").write("# env\n")
     subprocess.run(["git", "add", "-A"], check=True)
-    subprocess.run(["git", "commit", "-qm", "Recette de la Fabrique"], check=True, capture_output=True)
-    fab("decision", "--confiant", "oui", "--verdict", "recette prouvée", "--interpretation", "pip + pytest")
+    subprocess.run(["git", "commit", "-qm", "Fabrique recipe"], check=True, capture_output=True)
+    fab("decision", "--confident", "yes", "--verdict", "recette prouvée", "--interpretation", "pip + pytest")
     out({"type": "result", "subtype": "success", "session_id": sid, "result": "fini"})
     sys.exit(0)
-if "agent d'étude" in " ".join(args):   # agent d'étude : un rapport, rien d'autre
-    fab("etape", "triage", "cadrage de l'étude")
-    if "QUESTION" in prompt and "<reponse>" not in prompt:
+if "study agent" in " ".join(args):   # study agent: a report, nothing else
+    fab("step", "triage", "cadrage de l'étude")
+    if "QUESTION" in prompt and "<answer>" not in prompt:
         fab("question", "Quel périmètre ?")
         out({"type": "result", "subtype": "success", "session_id": sid, "result": "question posée", "total_cost_usd": 0.2})
         sys.exit(0)
-    fab("etape", "investigating", "lecture du code")
-    with open("carnet.py", "a") as f:
+    fab("step", "investigating", "lecture du code")
+    with open("notebook.py", "a") as f:
         f.write("# essai jetable de l'étude\n")
     if "SANSRAPPORT" not in prompt:
-        with open("RAPPORT_ETUDE.md", "w") as f:
+        with open("STUDY_REPORT.md", "w") as f:
             f.write("## Réponse courte\nok() renvoie False.\n\n<script>alert(1)</script>\n")
     out({"type": "result", "subtype": "success", "session_id": sid, "result": "", "total_cost_usd": 0.3})
     sys.exit(0)
-if "MUET" in prompt and "Chien de garde" not in prompt:
-    time.sleep(6)                       # silence : le chien de garde coupe et relance
+OPINION = os.path.join(os.environ.get("HOME", "/tmp"), ".opinion-mode")   # how this fake behaves about `fab decision`
+TEXT_OPINION = 'Done.\n\n`fab decision --confident yes --interpretation "read from the text" --assumption "one gap" --verdict "written, not run"`'
+if "without giving your merge opinion" in prompt:        # the runner asks for the opinion that was not given
+    mode = open(OPINION).read() if os.path.exists(OPINION) else ""
+    if mode == "NOOPINION":
+        fab("decision", "--confident", "yes", "--verdict", "given when asked", "--interpretation", "understood")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": TEXT_OPINION if mode == "TEXTOPINION" else "done", "total_cost_usd": 0.1})
+    sys.exit(0)
+SATURATED = os.path.join(os.environ.get("HOME", "/tmp"), ".saturated-mode")   # the model server answers an error instead of working
+if "TOOLARGE" in prompt:
+    out({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": sid,
+         "result": "API Error: 400 the request exceeds the available context size, try increasing it"})
+    sys.exit(0)
+if "SATURATED" in prompt and not os.path.exists(SATURATED):
+    open(SATURATED, "w").write("ALWAYS" if "ALWAYSSATURATED" in prompt else "ONCE")
+    out({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": sid,
+         "result": "API Error: 500 Context size has been exceeded."})
+    sys.exit(0)
+if "the model server was busy" in prompt and os.path.exists(SATURATED) and open(SATURATED).read() == "ALWAYS":
+    out({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": sid,
+         "result": "API Error: 503 Service Unavailable"})
+    sys.exit(0)
+if "MUET" in prompt and "Watchdog" not in prompt:
+    time.sleep(6)                       # silence: the watchdog cuts and restarts
 if "LONG" in prompt:
-    time.sleep(8)                       # le test demande l'arrêt pendant ce temps
-fab("etape", "triage", "compris")
+    time.sleep(8)                       # the test requests a pause during this time
+fab("step", "triage", "compris")
 if "ABANDON" in prompt:
-    fab("echec", "la chaîne d'outils est cassée")
+    fab("fail", "la chaîne d'outils est cassée")
     out({"type": "result", "subtype": "success", "session_id": sid, "result": "abandon"})
     sys.exit(0)
-if "QUESTION" in prompt and "<reponse>" not in prompt:
+if "WRITTENQUESTION" in prompt and "<answer>" not in prompt:   # the question is written in the answer, not run
+    out({"type": "result", "subtype": "success", "session_id": sid, "total_cost_usd": 0.2,
+         "result": 'The request is too vague.\n\nfab question "What should be improved? (A) the speed; (B) the error messages?"'})
+    sys.exit(0)
+if "QUESTION" in prompt and "<answer>" not in prompt:
     fab("question", "A ou B ?")
     out({"type": "result", "subtype": "success", "session_id": sid, "result": "question posée", "total_cost_usd": 0.5})
     sys.exit(0)
-bad = "CASSER" in prompt and "contrôles échouent" not in prompt
+if "DROPIT" in prompt:                                  # the requester answered "drop it": an opinion, no change
+    fab("decision", "--confident", "yes", "--verdict", "dropped at the requester's request", "--interpretation", "nothing to do")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "nothing to change", "total_cost_usd": 0.1})
+    sys.exit(0)
+bad = "CASSER" in prompt and "checks fail" not in prompt
 out({"type": "assistant", "message": {"usage": {"input_tokens": 1000, "output_tokens": 200},
-     "content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": os.path.join(os.getcwd(), "carnet.py")}}]}})
+     "content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": os.path.join(os.getcwd(), "notebook.py")}}]}})
 body = "def ok():\n    return %s\n" % ("0" if bad else "True")
-if "Des relecteurs ont trouvé" in prompt:
+if "Reviewers found" in prompt:
     body += "# corrigé\n"
-with open("carnet.py", "w") as f:
+with open("notebook.py", "w") as f:
     f.write(body)
 subprocess.run(["git", "add", "-A"], check=True)
 subprocess.run(["git", "commit", "-qm", "changement de l'agent"], check=True, capture_output=True)
-fab("decision", "--confiant", "oui", "--verdict", "fait", "--interpretation", "compris")
+mode = next((m for m in ("NOOPINION", "TEXTOPINION", "NEVEROPINION") if m in prompt), "")
+if mode:                                                 # a model that writes the command instead of running it, or forgets it
+    open(OPINION, "w").write(mode)
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": TEXT_OPINION if mode == "TEXTOPINION" else "done", "total_cost_usd": 0.5})
+    sys.exit(0)
+fab("decision", "--confident", "yes", "--verdict", "fait", "--interpretation", "compris")
 out({"type": "result", "subtype": "success", "session_id": sid, "result": "fini", "total_cost_usd": 0.5})

@@ -1,38 +1,38 @@
-# Fabrique — pile complète sur un hôte Docker : dashboard, runner intégré, launcher, proxy de sortie.
+# Fabrique — full stack on a Docker host: dashboard, built-in runner, launcher, egress proxy.
 #
-#   docker compose --profile images build     # construit les images depuis ce repo (ou : docker compose pull, voir .env.example)
+#   docker compose --profile images build     # builds images from this repo (or: docker compose pull, see .env.example)
 #   docker compose up -d
-#   docker compose logs dashboard | grep "code d'installation"     # puis ouvrir le dashboard et créer le compte administrateur
+#   docker compose logs dashboard | grep "setup code"     # then open the dashboard and create the admin account
 #
-# Aucune variable n'est obligatoire. Tout le reste (connexion unique, repos Git, modèles, notifications) se règle dans le
-# dashboard. Variables utiles : voir .env.example et docs/configuration.md.
+# No variable is mandatory. Everything else (single sign-on, Git repos, models, notifications) is configured in the
+# dashboard. Useful variables: see .env.example and docs/configuration.md.
 name: ${COMPOSE_PROJECT_NAME:-fabrique}
 
 x-images:
   dashboard: &img-dashboard ${FABRIQUE_IMAGES:-fabrique-local}/fabrique:${FABRIQUE_TAG:-latest}
   runner: &img-runner ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-runner:${FABRIQUE_TAG:-latest}
   proxy: &img-proxy ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-proxy:${FABRIQUE_TAG:-latest}
-x-durci: &durci
+x-hardened: &hardened
   restart: unless-stopped
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
 
 networks:
-  interne:                       # dashboard <-> runner
-  launcher:                      # runner <-> launcher, rien d'autre
-  jobs:                          # jobs <-> proxy, relay et gateway du runner ; aucune sortie directe
+  control:                       # dashboard <-> runner
+  launcher:                      # runner <-> launcher, nothing else
+  jobs:                          # jobs <-> proxy, relay and gateway of the runner; no direct egress
     name: ${COMPOSE_PROJECT_NAME:-fabrique}-jobs
     internal: true
 
 volumes:
-  donnees:                       # base et secrets générés du dashboard
-  amorce:                        # token du runner intégré, déposé par le dashboard
-  jeton-lanceur:                 # token partagé runner <-> launcher, créé par le launcher
+  data:                       # database and generated secrets of the dashboard
+  bootstrap:                        # token of the built-in runner, written by the dashboard
+  launcher-token:                 # shared runner <-> launcher token, created by the launcher
 
 services:
   dashboard:
-    <<: *durci
+    <<: *hardened
     image: *img-dashboard
     build: { context: ., dockerfile: Dockerfile }
     tmpfs: [/tmp]
@@ -40,94 +40,94 @@ services:
     environment:
       TZ: ${TZ:-Europe/Paris}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
-      FABRIQUE_BOOTSTRAP_RUNNER_FILE: /bootstrap/jeton-runner
-      # Facultatif — recommandé en production : fournis ces secrets ici pour qu'ils restent séparés des données.
+      FABRIQUE_BOOTSTRAP_RUNNER_FILE: /bootstrap/runner-token
+      # Optional — recommended in production: provide these secrets here so they remain separate from the data.
       SESSION_SECRET: ${SESSION_SECRET:-}
       FABRIQUE_SECRET_KEY: ${FABRIQUE_SECRET_KEY:-}
-      # Facultatif — la connexion unique se règle aussi dans le dashboard (Settings → Connexion).
+      # Optional — single sign-on is also configured in the dashboard (Settings → Sign-in).
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       FABRIQUE_ADMINS: ${FABRIQUE_ADMINS:-}
       FABRIQUE_DEMO: ${FABRIQUE_DEMO:-0}
     volumes:
-      - donnees:/data
-      - amorce:/bootstrap
-    ports: ["${FABRIQUE_PORT:-8080}:8080"]     # à placer derrière un proxy inverse TLS en production
-    networks: [interne]
+      - data:/data
+      - bootstrap:/bootstrap
+    ports: ["${FABRIQUE_PORT:-8080}:8080"]     # to be placed behind a TLS reverse proxy in production
+    networks: [control]
 
   runner:
-    <<: *durci
+    <<: *hardened
     image: *img-runner
     build: { context: ., dockerfile: Dockerfile.runner }
     depends_on: [dashboard, launcher, proxy]
     tmpfs: [/tmp]
     mem_limit: 1g
-    cap_add: [SETUID, SETGID, KILL]            # changer d'utilisateur pour les opérations dans l'workspace
-    group_add: ["10001"]                       # lire le token déposé par le dashboard (fichier 0640) ; l'agent n'a pas ce groupe
+    cap_add: [SETUID, SETGID, KILL]            # change user for operations in the workspace
+    group_add: ["10001"]                       # read the token deposited by the dashboard (file 0640); the agent does not have this group
     environment:
       TZ: ${TZ:-Europe/Paris}
       FABRIQUE_URL: http://dashboard:8080
-      FABRIQUE_RUNNER_TOKEN_FILE: /bootstrap/jeton-runner
-      RUNNER_HOST: ${RUNNER_HOST:-runner-integre}
+      FABRIQUE_RUNNER_TOKEN_FILE: /bootstrap/runner-token
+      RUNNER_HOST: ${RUNNER_HOST:-built-in-runner}
       RUNNER_TAGS: ${RUNNER_TAGS:-docker}
       CAPACITY: ${CAPACITY:-2}
       EXECUTOR: docker
       LAUNCHER_URL: http://launcher:7080
-      LAUNCHER_TOKEN_FILE: /jeton-lanceur/jeton
+      LAUNCHER_TOKEN_FILE: /launcher-token/token
       RELAY_HOST: 0.0.0.0
       RELAY_PUBLIC_URL: http://runner:7071
       GATEWAY_PUBLIC_URL: http://runner:7072
       JOB_PROXY: http://proxy:3128
       GIT_AUTHOR: ${GIT_AUTHOR:-Agent Fabrique <fabrique-bot@noreply.invalid>}
-      # Facultatif — les tokens Git se règlent aussi dans le dashboard (Settings → Providers Git).
+      # Optional — Git tokens are also configured in the dashboard (Settings → Git providers).
       GIT_BASE_URL: ${GIT_BASE_URL:-}
       GIT_TOKEN: ${GIT_TOKEN:-}
       GITLAB_BASE_URL: ${GITLAB_BASE_URL:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
-      - ${FABRIQUE_WORK_DIR:-/opt/fabrique/travail}:/work
-      - amorce:/bootstrap:ro
-      - jeton-lanceur:/jeton-lanceur:ro
-    networks: [interne, launcher, jobs, default]
+      - ${FABRIQUE_WORK_DIR:-/opt/fabrique/work}:/work
+      - bootstrap:/bootstrap:ro
+      - launcher-token:/launcher-token:ro
+    networks: [control, launcher, jobs, default]
 
   launcher:
-    <<: *durci
+    <<: *hardened
     image: *img-runner
-    command: ["python", "-m", "lanceur.main"]
+    command: ["python", "-m", "launcher.main"]
     mem_limit: 256m
     environment:
-      LAUNCHER_TOKEN_FILE: /jeton-lanceur/jeton
-      # Liste blanche des images de jobs : le runner ne choisit qu'un NOM de cette liste.
-      ATELIER_IMAGES: python=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-python:${FABRIQUE_TAG:-latest},node=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-node:${FABRIQUE_TAG:-latest},go=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-go:${FABRIQUE_TAG:-latest},java=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-java:${FABRIQUE_TAG:-latest}
+      LAUNCHER_TOKEN_FILE: /launcher-token/token
+      # Allowlist of job images: the runner only selects one NAME from this list.
+      JOB_IMAGES: python=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-python:${FABRIQUE_TAG:-latest},node=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-node:${FABRIQUE_TAG:-latest},go=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-go:${FABRIQUE_TAG:-latest},java=${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-java:${FABRIQUE_TAG:-latest}
       JOBS_NETWORK: ${COMPOSE_PROJECT_NAME:-fabrique}-jobs
       JOBS_PREFIX: ${COMPOSE_PROJECT_NAME:-fabrique}-job
-      WORK_HOST: ${FABRIQUE_WORK_DIR:-/opt/fabrique/travail}     # le même dossier que /work du runner, vu de l'hôte
+      WORK_HOST: ${FABRIQUE_WORK_DIR:-/opt/fabrique/work}     # the same folder as /work of the runner, as seen from the host
       JOB_MEMORY: ${JOB_MEMORY:-4g}
       JOB_CPUS: ${JOB_CPUS:-2}
       JOB_PIDS: ${JOB_PIDS:-512}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock                # SEUL composant avec l'accès Docker
-      - jeton-lanceur:/jeton-lanceur
+      - /var/run/docker.sock:/var/run/docker.sock                # ONLY component with Docker access
+      - launcher-token:/launcher-token
     networks: [launcher]
 
   proxy:
-    <<: *durci
+    <<: *hardened
     image: *img-proxy
     build: { context: ., dockerfile: Dockerfile.proxy }
     tmpfs: [/tmp]
     mem_limit: 128m
     environment:
-      # Noms d'hôtes joignables par les jobs (expressions régulières ancrées). Rien d'autre ne sort.
+      # Hostnames reachable by jobs (anchored regular expressions). Nothing else goes out.
       PROXY_ALLOW: ${PROXY_ALLOW:-^pypi\.org$$,^files\.pythonhosted\.org$$,^registry\.npmjs\.org$$,^proxy\.golang\.org$$,^sum\.golang\.org$$,^repo\.maven\.apache\.org$$,^repo1\.maven\.org$$,^services\.gradle\.org$$,^downloads\.gradle\.org$$,^plugins\.gradle\.org$$,^plugins-artifacts\.gradle\.org$$}
-      # Derrière un proxy d'entreprise : les requêtes autorisées lui sont envoyées (voir docs/configuration.md).
+      # Behind an enterprise proxy: authorized requests are sent to it (see docs/configuration.md).
       PROXY_UPSTREAM: ${PROXY_UPSTREAM:-}
       PROXY_NO_UPSTREAM: ${PROXY_NO_UPSTREAM:-}
     networks: [jobs, default]
 
-  # Images des conteneurs de jobs, une par langage. Elles ne tournent pas ici : le launcher les démarre à la demande.
-  # « docker compose --profile images build » les construit.
+  # Job container images, one per language. They do not run here: the launcher starts them on demand.
+  # "docker compose --profile images build" builds them.
   job-python: &job
     profiles: [images]
     image: ${FABRIQUE_IMAGES:-fabrique-local}/fabrique-job-python:${FABRIQUE_TAG:-latest}

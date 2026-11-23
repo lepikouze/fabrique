@@ -1,5 +1,10 @@
-// Fabrique : panneau latéral dynamique, raccourcis clavier, temps réel (SSE), toasts.
-// Tout fonctionne aussi sans JavaScript (liens et formulaires classiques) ; ce script ne fait qu'accélérer.
+// Fabrique: dynamic side panel, keyboard shortcuts, real-time (SSE), toasts.
+// Everything also works without JavaScript (classic links and forms); this script only speeds things up.
+// Texts from this script in the page language: the server provides them in <script id="i18n" type="application/json">.
+var I18N = {};
+try { I18N = JSON.parse((document.getElementById("i18n") || {}).textContent || "{}"); } catch (e) { I18N = {}; }
+function T(s) { return I18N[s] || s; }
+
 (function () {
   "use strict";
   var $ = function (s, r) { return (r || document).querySelector(s); };
@@ -10,7 +15,7 @@
   };
   var page = document.body.dataset.page;
 
-  // ---- Thème et barre latérale ----
+  // ---- Theme and sidebar ----
   function markTheme() {
     var cur = document.documentElement.getAttribute("data-theme-choice") || "dark";
     $$("[data-theme-set]").forEach(function (b) { b.setAttribute("aria-checked", b.dataset.themeSet === cur ? "true" : "false"); });
@@ -19,23 +24,23 @@
     b.addEventListener("click", function () { store.set("fabrique-theme", b.dataset.themeSet); window.fabriqueTheme(b.dataset.themeSet); markTheme(); });
   });
   markTheme();
-  // Menu utilisateur : se referme quand on clique ailleurs ou sur Échap
+  // User menu: closes when clicking elsewhere or on Esc
   document.addEventListener("click", function (e) { $$("details.usermenu[open]").forEach(function (m) { if (!m.contains(e.target)) m.open = false; }); });
   function toggleSide() {
-    // Petit écran : la barre est toujours réduite ; le bouton l'ouvre par-dessus la page, avec ses libellés.
+    // Small screen: the bar is always collapsed; the button opens it over the page, with its labels.
     if (window.matchMedia("(max-width: 900px)").matches) { document.documentElement.classList.toggle("side-open"); return; }
     var on = document.documentElement.classList.toggle("side-min");
     store.set("fabrique-side", on ? "min" : "full");
   }
-  document.addEventListener("click", function (e) {      // un appui hors de la barre ouverte la referme
+  document.addEventListener("click", function (e) {      // a click outside the open bar closes it
     var h = document.documentElement;
     if (h.classList.contains("side-open") && !e.target.closest(".side") && !e.target.closest("[data-sidebar-toggle]")) h.classList.remove("side-open");
   });
   $$("[data-sidebar-toggle]").forEach(function (b) { b.addEventListener("click", toggleSide); });
 
-  // Confirmation avant une action destructive
-  // Confirmation (délégation) : le rafraîchissement en direct peut remplacer le formulaire pendant que la question est
-  // ouverte ; un formulaire détaché n'est plus envoyé par le navigateur. On envoie donc une copie, rattachée à la page.
+  // Confirmation before a destructive action
+  // Confirmation (delegation): live refresh can replace the form while the question is
+  // opened; a detached form is no longer sent by the browser. We therefore send a copy, attached to the page.
   document.addEventListener("submit", function (e) {
     var f = e.target;
     if (!f.matches || !f.matches("form[data-confirm]") || f.dataset.confirmed) return;
@@ -47,18 +52,29 @@
     g.submit();
   });
 
-  // Sélecteurs qui s'envoient seuls
-  $$("[data-autosubmit]").forEach(function (s) { s.addEventListener("change", function () { s.form.submit(); }); });
+  // Selectors that send themselves
+  // A list that submits its form when its value changes. With the keyboard, arrows change the value of a closed list at each
+  // press: we then wait for Enter, or for the focus to leave, so that moving through the choices does not reload the page.
+  $$("[data-autosubmit]").forEach(function (s) {
+    var byKey = false, start = s.value;
+    function go() { if (s.value !== start) { start = s.value; s.form.submit(); } }
+    s.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { byKey = false; go(); } else if (e.key !== "Tab") { byKey = true; }
+    });
+    s.addEventListener("pointerdown", function () { byKey = false; });
+    s.addEventListener("change", function () { if (!byKey) { go(); } });
+    s.addEventListener("blur", function () { if (byKey) { byKey = false; go(); } });
+  });
 
-  // ---- Boîtes de dialogue ----
+  // ---- Dialog boxes ----
   $$("[data-open-dialog]").forEach(function (b) {
     b.addEventListener("click", function () {
-      $$("details.usermenu[open]").forEach(function (m) { m.open = false; });   // le menu se referme derrière la fenêtre
+      $$("details.usermenu[open]").forEach(function (m) { m.open = false; });   // the menu closes behind the window
       var d = document.getElementById(b.dataset.openDialog); if (d) d.showModal();
     });
   });
   $$("[data-close-dialog]").forEach(function (b) { b.addEventListener("click", function () { b.closest("dialog").close(); }); });
-  // Un clic en dehors d'une fenêtre modale (sur le fond) la ferme.
+  // A click outside a modal window (on the background) closes it.
   $$("dialog.dlg").forEach(function (d) {
     d.addEventListener("click", function (e) {
       if (e.target !== d) return;
@@ -76,7 +92,7 @@
   function fade(el) { setTimeout(function () { el.classList.add("bye"); setTimeout(function () { el.remove(); }, 400); }, 4200); }
   $$("#toasts .toast").forEach(fade);
 
-  // ---- Ctrl+↵ (ou Cmd+↵) envoie le formulaire de réponse ----
+  // ---- Ctrl+↵ (or Cmd+↵) sends the response form ----
   document.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       var f = e.target.closest && e.target.closest("form[data-cmd-enter]");
@@ -84,7 +100,7 @@
     }
   });
 
-  // ---- Panneau latéral (jobs, boîte de réception) ----
+  // ---- Side panel (jobs, inbox) ----
   var panel = $("#panel");
   var kind = panel && panel.dataset.kind;
   var openRef = (function () {
@@ -92,34 +108,34 @@
     return q.get("job") || q.get("item") || (panel && panel.dataset.open) || null;
   })();
 
-  // Inbox : le premier élément est ouvert d'office, sauf sur petit écran où le volet recouvrirait la liste.
+  // Inbox: the first item is open by default, except on small screens where the pane would cover the list.
   if (panel && panel.classList.contains("auto")) {
     if (window.matchMedia("(max-width: 900px)").matches) { openRef = null; panel.hidden = true; panel.innerHTML = ""; }
     panel.classList.remove("auto");
   }
-  // Connexion OIDC : essai de la découverte sans recharger la page (sinon la saisie non enregistrée serait perdue).
+  // OIDC Connection: attempt discovery without reloading the page (otherwise unsaved input would be lost).
   var oidcTest = $("[data-oidc-test]");
   if (oidcTest) oidcTest.addEventListener("click", function () {
     var form = oidcTest.closest("form"), out = $("[data-oidc-test-out]", form);
-    out.hidden = false; out.className = "git-test muted"; out.textContent = "Test en cours…"; oidcTest.disabled = true;
+    out.hidden = false; out.className = "git-test muted"; out.textContent = T("Testing…"); oidcTest.disabled = true;
     fetch("/settings-test/oidc", { method: "POST", body: new FormData(form), credentials: "same-origin", headers: { "Accept": "application/json" } })
       .then(function (r) { return r.json(); })
       .then(function (d) { out.className = "git-test " + (d.ok ? "ok" : "err"); out.textContent = d.msg; })
-      .catch(function () { out.className = "git-test err"; out.textContent = "Le test n'a pas abouti : recharge la page et réessaie."; })
+      .catch(function () { out.className = "git-test err"; out.textContent = T("The test did not complete: reload the page and try again."); })
       .then(function () { oidcTest.disabled = false; });
   });
-  // Provider Git : essai du token avant d'enregistrer (rien n'est écrit côté serveur).
+  // Git provider: attempt token validation before saving (nothing is written on the server side).
   var gitTest = $("[data-git-test]");
   if (gitTest) gitTest.addEventListener("click", function () {
     var form = gitTest.closest("form"), out = $("[data-git-test-out]", form);
-    out.hidden = false; out.className = "git-test muted"; out.textContent = "Test en cours…"; gitTest.disabled = true;
+    out.hidden = false; out.className = "git-test muted"; out.textContent = T("Testing…"); gitTest.disabled = true;
     fetch("/settings-test/git", { method: "POST", body: new FormData(form), credentials: "same-origin", headers: { "Accept": "application/json" } })
       .then(function (r) { return r.json(); })
       .then(function (d) { out.className = "git-test " + (d.ok ? "ok" : "err"); out.textContent = d.msg; })
-      .catch(function () { out.className = "git-test err"; out.textContent = "Le test n'a pas abouti : recharge la page et réessaie."; })
+      .catch(function () { out.className = "git-test err"; out.textContent = T("The test did not complete: reload the page and try again."); })
       .then(function () { gitTest.disabled = false; });
   });
-  // Nouvelle demande : libellés et exemples selon le type choisi (changement ou étude).
+  // New request: labels and examples according to the chosen type (change or study).
   var kinded = $("[data-kinded]");
   if (kinded) {
     var setKind = function () {
@@ -130,7 +146,21 @@
     $$('input[name="study"]', kinded).forEach(function (r) { r.addEventListener("change", setKind); });
     setKind();
   }
-  // Nouvelle demande : le résumé de ce qui s'appliquera suit le repo choisi.
+  // New request: plain signals while typing, without any model. A very short need, and no "Done when" criterion.
+  var needEl = $("#n-need"), doneEl = $("#n-done"), hintShort = $("[data-hint-short]"), hintDone = $("[data-hint-done]");
+  if (kinded && needEl && hintShort) {
+    var hints = function () {
+      var study = kinded.classList.contains("is-study");
+      var text = needEl.value.replace(/\s+/g, " ").trim();
+      var words = text ? text.split(" ").length : 0;
+      hintShort.hidden = !text || !(text.length < +hintShort.dataset.shortChars && words < +hintShort.dataset.shortWords);
+      if (hintDone) hintDone.classList.toggle("hint-warn", !study && !!text && !doneEl.value.trim());
+    };
+    [needEl, doneEl].forEach(function (el) { if (el) el.addEventListener("input", hints); });
+    $$('input[name="study"]', kinded).forEach(function (r) { r.addEventListener("change", hints); });
+    hints();
+  }
+  // New request: the summary of what will apply follows the chosen repo.
   var repoSel = $("#n-repo");
   if (repoSel) {
     var showRepo = function () { $$("[data-repo-info]").forEach(function (el) { el.hidden = el.dataset.repoInfo !== repoSel.value; }); };
@@ -149,14 +179,14 @@
     $$("[data-row]").forEach(function (r) { r.classList.toggle("sel", !!ref && r.dataset.ref === ref); });
     var wrap = $(".jobs-wrap"); if (wrap) wrap.classList.toggle("with-panel", !!ref);
   }
-  // État à préserver quand une zone est remplacée : défilements et sections <details> ouvertes ou fermées.
+  // State to preserve when a zone is replaced: scroll positions and <details> sections open or closed.
   function keyOf(d, i) { var s = d.querySelector("summary"); return (d.dataset.key || (s ? s.textContent.trim().slice(0, 80) : "")) + "#" + i; }
   function saveState(root) {
     var st = { scroll: [], open: {} };
     $$(".board, .col-b, .fcol, .p-body, .list, .events", root).forEach(function (el, i) { st.scroll.push([i, el.scrollLeft, el.scrollTop]); });
     if (root.scrollTop || root.scrollLeft) st.self = [root.scrollLeft, root.scrollTop];
     $$("details", root).forEach(function (d, i) { st.open[keyOf(d, i)] = d.open; });
-    st.typed = [];   // texte saisi et pas encore envoyé : une réponse en cours ne doit jamais disparaître
+    st.typed = [];   // typed text not yet sent: an ongoing response must never disappear
     $$("textarea[name], input[type=text][name]", root).forEach(function (t) {
       if (t.value !== t.defaultValue) st.typed.push([fieldKey(t), t.value]);
     });
@@ -164,8 +194,8 @@
   }
   function fieldKey(t) { var f = t.form; return (f ? f.getAttribute("action") || "" : "") + "|" + t.name; }
   function restoreState(root, st) {
-    // Les sections d'abord, le défilement ensuite : tant qu'une section ouverte par le lecteur est encore repliée, la zone
-    // est plus courte et le navigateur borne la position demandée (on se retrouvait en haut ou en bas du job).
+    // Sections first, then scrolling: as long as a section opened by the reviewer is still collapsed, the zone
+    // is shorter and the browser clamps the requested position (we ended up at the top or bottom of the job).
     $$("details", root).forEach(function (d, i) { var k = keyOf(d, i); if (k in st.open) d.open = st.open[k]; });
     var els = $$(".board, .col-b, .fcol, .p-body, .list, .events", root);
     st.scroll.forEach(function (x) { var el = els[x[0]]; if (el) { el.scrollLeft = x[1]; el.scrollTop = x[2]; } });
@@ -176,9 +206,9 @@
     });
   }
 
-  // ---- Diff d'un job : chargé à l'ouverture de « Lire le diff », gardé en mémoire pour survivre aux rafraîchissements ----
+  // ---- Job diff: loaded when opening "Read diff", kept in memory to survive refreshes ----
   var diffCache = {};
-  function fillDiffs(root) {   // après le remplacement d'une zone : remet le diff déjà chargé, avant de restaurer les <details>
+  function fillDiffs(root) {   // after replacing a zone: restores the already loaded diff before restoring the <details>
     $$("details[data-diff]", root || document).forEach(function (d) {
       var body = d.querySelector("[data-diff-body]"), html = diffCache[d.dataset.diff];
       if (body && html && !body.dataset.loaded) { body.innerHTML = html; body.dataset.loaded = "1"; }
@@ -192,13 +222,13 @@
     return fetch(url, { headers: { "Accept": "text/html" }, credentials: "same-origin" }).then(function (r) {
       if (r.status === 401) { location.reload(); return; }
       return r.text().then(function (html) { if (r.ok) diffCache[url] = html; body.innerHTML = html; body.dataset.loaded = "1"; });
-    }).catch(function () { body.textContent = "Diff indisponible pour le moment."; }).then(function () { delete body.dataset.loading; });
+    }).catch(function () { body.textContent = T("Diff unavailable for now."); }).then(function () { delete body.dataset.loading; });
   }
   document.addEventListener("toggle", function (e) {
     var d = e.target;
     if (d && d.matches && d.matches("details[data-diff]") && d.open) loadDiff(d);
   }, true);
-  document.addEventListener("click", function (e) {   // un fichier de la liste : ouvre le diff, déplié sur ce fichier
+  document.addEventListener("click", function (e) {   // a file from the list: opens the diff, expanded on this file
     var a = e.target.closest && e.target.closest("[data-diff-file]");
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     var sec = a.closest(".sec"), d = sec && sec.querySelector("details[data-diff]");
@@ -219,8 +249,8 @@
       return r.text().then(function (html) {
         var same = openRef === ref && !push;
         var typing = panel.contains(document.activeElement) && /TEXTAREA|INPUT/.test(document.activeElement.tagName) && document.activeElement.value;
-        if (!push && typing) return;   // ne jamais écraser une réponse en cours de saisie
-        if (same && panel._served === html) return;   // rien n'a changé dans ce job : on ne touche pas à la fiche
+        if (!push && typing) return;   // never overwrite a response currently being typed
+        if (same && panel._served === html) return;   // nothing has changed in this job: leave the page alone
         var st = same ? saveState(panel) : null;
         panel.innerHTML = html; panel._served = html; panel.hidden = false; wire(panel);
         fillDiffs(panel);
@@ -240,6 +270,16 @@
     $$("[data-cmd-enter] textarea", root).forEach(function (t) { if (t.hasAttribute("autofocus")) t.focus(); });
   }
   if (panel) wire(panel);
+  // Machine translation of a job's texts: one click shows the originals, another the translations.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-mt-toggle]");
+    if (!b) return;
+    var root = b.closest(".p-body, .full, main") || document, original = b.dataset.shown !== "original";
+    $$("[data-mt]", root).forEach(function (el) { el.hidden = original; });
+    $$("[data-mo]", root).forEach(function (el) { el.hidden = !original; });
+    b.dataset.shown = original ? "original" : "translated";
+    b.textContent = original ? b.dataset.translated : b.dataset.original;
+  });
   document.addEventListener("click", function (e) {
     var a = e.target.closest && e.target.closest("a[data-row][data-ref]");
     if (!a || !panel || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -250,7 +290,7 @@
     if (ref) loadPanel(ref, false); else closePanel(false);
   });
 
-  // ---- Raccourcis : J/K naviguer, ↵ ouvrir, Échap fermer, [ barre latérale ----
+  // ---- Shortcuts: J/K navigate, ↵ open, Esc close, [ sidebar ----
   var cursor = -1;
   function rows() { return $$("[data-row]").filter(function (r) { return r.offsetParent !== null; }); }
   document.addEventListener("keydown", function (e) {
@@ -282,8 +322,8 @@
     }
   });
 
-  // ---- Temps réel : à chaque changement en base, on rafraîchit les zones [data-live] et le panneau ouvert ----
-  var live = $("#live") || ($("[data-live]") ? document.createElement("span") : null);   // vue en grand : pas de voyant, mais du direct
+  // ---- Real-time: on every database change, we refresh [data-live] areas and the open dashboard ----
+  var live = $("#live") || ($("[data-live]") ? document.createElement("span") : null);   // full view: no indicator, but live
   var pending = null, busy = false;
   function refresh() {
     if (busy) { pending = pending || setTimeout(refresh, 600); return; }
@@ -297,10 +337,10 @@
           var fresh = doc.querySelector('[data-live="' + el.dataset.live + '"]');
           if (!fresh) return;
           if (el.contains(document.activeElement) && /TEXTAREA|INPUT|SELECT/.test(document.activeElement.tagName)) return;
-          if ((el._served || el.innerHTML) === fresh.innerHTML) return;   // rien n'a changé : on ne touche à rien
+          if ((el._served || el.innerHTML) === fresh.innerHTML) return;   // nothing has changed: do not touch anything
           var st = saveState(el), main = $("#main"), mainScroll = main ? [main.scrollLeft, main.scrollTop] : null;
           var focusRef = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.ref : null;
-          el.innerHTML = fresh.innerHTML; el._served = fresh.innerHTML;   // (un diff chargé à la demande s'ajoute ensuite)
+          el.innerHTML = fresh.innerHTML; el._served = fresh.innerHTML;   // (a diff loaded on request is added afterwards)
           fillDiffs(el);
           if (fresh.className !== el.className && el.classList.contains("jobs-wrap")) el.className = fresh.className;
           restoreState(el, st);
@@ -315,39 +355,85 @@
       if (openRef && panel && !panel.hidden) return loadPanel(openRef, false);
     }).catch(function () {}).then(function () { busy = false; });
   }
-  // Temps réel : UNE seule connexion ouverte en permanence, quel que soit le nombre d'onglets. Derrière un intermédiaire en
-  // HTTP/1.1, un navigateur n'ouvre que 6 connexions par site : une connexion par onglet, plus celle d'une page quittée qui
-  // tarde à se fermer, suffisaient à bloquer la page suivante. Un onglet « meneur » (verrou Web Locks) tient la connexion et
-  // relaie les changements aux autres (BroadcastChannel) ; elle est fermée dès que la page est quittée.
+  // Real time. Over HTTP/2 or HTTP/3 (the usual case behind a TLS reverse proxy) every tab opens its own connection:
+  // requests are multiplexed, there is no limit to work around. Behind an intermediary in HTTP/1.1 a browser only opens
+  // 6 connections per site, and one per tab was enough to block the next page: there, a "leader" tab (Web Locks) holds
+  // the only connection and relays changes to the others (BroadcastChannel).
+  // A follower never trusts the leader blindly: it asks "hello" and expects an answer within 3 seconds, again and again.
+  // Without an answer (a tab left open with a lost session, a page from an older version, a frozen tab), or when the
+  // leader says its own connection is down, the follower opens its own connection at once instead of staying frozen
+  // behind a green light.
   if (window.EventSource && live) {
-    var es = null, bc = null, leader = false;
-    var onChange = function () { clearTimeout(pending); pending = setTimeout(refresh, 250); };
-    var setState = function (s) { live.dataset.state = s; if (leader && bc) bc.postMessage(s); };
+    var es = null, bc = null, leader = false, retry = null, delay = 2000, heard = 0, asked = 0, own = false;
+    var diag = { role: "", last: 0, updates: 0, errors: 0 };
+    var tell = function () {                             // what the indicator says when hovered: the state, for a diagnosis
+      var role = diag.role === "leader" ? T("this tab holds the connection") : diag.role === "follower" ? T("through another tab") : T("own connection");
+      var state = live.dataset.state === "on" ? T("connected") : live.dataset.state === "off" ? T("connection lost, retrying") : T("connecting");
+      var last = diag.last ? T("last change {n} s ago").replace("{n}", Math.round((Date.now() - diag.last) / 1000)) : T("no change received yet");
+      live.title = T("Live updates") + " · " + state + " · " + role + " · " + last + " · " + T("{n} update(s) on this page").replace("{n}", diag.updates);
+      live.dataset.role = diag.role;
+    };
+    live.addEventListener("mouseenter", function () { tell(); });
+    var onChange = function () { diag.last = Date.now(); diag.updates++; clearTimeout(pending); pending = setTimeout(refresh, 250); };
+    var setState = function (s) { live.dataset.state = s; if (leader && bc) bc.postMessage(s); tell(); };
     var open = function () {
       if (es) return;
       es = new EventSource("/events/stream");
-      es.addEventListener("open", function () { setState("on"); });
-      es.addEventListener("change", function () { onChange(); if (bc) bc.postMessage("change"); });
-      es.addEventListener("error", function () { setState("off"); });
+      es.addEventListener("open", function () {
+        var back = delay > 2000 || live.dataset.state === "off";
+        delay = 2000; setState("on");
+        if (back) onChange();                            // the page may have missed changes while the connection was down
+      });
+      es.addEventListener("change", function () { onChange(); if (leader && bc) bc.postMessage("change"); });
+      es.addEventListener("ping", function () { if (leader && bc) bc.postMessage("ping"); });
+      es.addEventListener("error", function () {
+        diag.errors++; setState("off");
+        // An EventSource retries by itself after a network cut, but gives up for good on an HTTP error (a dashboard
+        // restarting behind its proxy answers 502): the connection is then reopened here, more and more slowly.
+        if (es && es.readyState === 2) {
+          es = null;
+          clearTimeout(retry);
+          retry = setTimeout(function () { refresh(); open(); }, delay);   // refresh(): a lost session reloads the page
+          delay = Math.min(delay * 2, 30000);
+        }
+      });
     };
-    var stop = function () { if (es) { es.close(); es = null; } };
+    var stop = function () { clearTimeout(retry); if (es) { es.close(); es = null; } };
+    var alone = function () {                            // no usable leader: this tab takes care of itself
+      if (leader || own) return;
+      own = true; diag.role = "own"; open(); onChange();
+    };
     var start = function () {
-      if (window.BroadcastChannel && navigator.locks) {
-        bc = new BroadcastChannel("fabrique-live");
+      var nav = window.performance && performance.getEntriesByType ? performance.getEntriesByType("navigation")[0] : null;
+      var multiplexed = /^h[23]/.test((nav && nav.nextHopProtocol) || "");
+      if (!multiplexed && window.BroadcastChannel && navigator.locks) {
+        // "-2": pages of versions before 0.8.2 used other names; a tab of theirs left open no longer counts.
+        bc = new BroadcastChannel("fabrique-live-2");
         bc.onmessage = function (m) {
+          if (m.data === "hello") { if (leader) bc.postMessage(live.dataset.state); return; }   // "on", "off" or "connecting"
+          if (leader || own) return;
+          if (m.data === "off") { alone(); return; }     // the leader's own connection is down: do not wait for it
+          heard = Date.now();
           if (m.data === "change") onChange();
-          else if (!leader && (m.data === "on" || m.data === "off")) live.dataset.state = m.data;
+          else if (m.data === "on") { live.dataset.state = "on"; tell(); }
         };
-        live.dataset.state = "on";                       // relayé par l'onglet meneur, en attendant de le devenir
-        navigator.locks.request("fabrique-live", function () {
-          leader = true; open();
+        diag.role = "follower"; live.dataset.state = "connecting"; tell();
+        navigator.locks.request("fabrique-live-2", function () {
+          leader = true; own = false; diag.role = "leader"; open(); tell();
           return new Promise(function (done) { window.addEventListener("pagehide", done, { once: true }); });
         });
+        asked = Date.now(); bc.postMessage("hello");
+        setInterval(function () {
+          if (leader || own) return;
+          if (heard < asked) { alone(); return; }        // the last "hello" got no answer in 3 seconds
+          asked = Date.now(); bc.postMessage("hello");
+        }, 3000);
       } else {
-        open();                                          // navigateur sans ces API (ou page non sécurisée) : une connexion par onglet
+        diag.role = "own"; open();                       // HTTP/2 or 3, or a browser without these APIs: one connection per tab
       }
+      tell();
     };
-    // La connexion est fermée AVANT que la page suivante soit demandée, pour lui laisser la place.
+    // The connection is closed BEFORE the next page is requested, to make room for it.
     window.addEventListener("beforeunload", stop);
     window.addEventListener("pagehide", stop);
     window.addEventListener("pageshow", function (e) { if (e.persisted) location.reload(); });
@@ -356,7 +442,7 @@
 })();
 
 
-// Copier le journal des événements (bouton aux deux carrés) : lignes dans l'ordre chronologique, texte brut.
+// Copy the event log (double square button): lines in chronological order, plain text.
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-copy]");
   if (!b) return;
@@ -372,12 +458,12 @@ document.addEventListener("click", async (e) => {
   }
   const old = b.innerHTML;
   b.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>';
-  b.title = ok ? "Copié" : "Copie impossible";
-  setTimeout(() => { b.innerHTML = old; b.title = "Copier le journal (ordre chronologique)"; }, 1500);
+  b.title = ok ? T("Copied") : T("Cannot copy");
+  setTimeout(() => { b.innerHTML = old; b.title = T("Copy the log (chronological order)"); }, 1500);
 });
 
 
-// Agent ↔ modèle : un agent ne propose que les modèles qui parlent son API ; type de fournisseur → adresse préremplie.
+// Agent ↔ model: an agent only proposes models that speak its API; provider type → pre-filled address.
 function syncCompat(form) {
   const h = form.querySelector("[data-compat-harness]"), m = form.querySelector("[data-compat-model]");
   if (!h || !m) return;
@@ -394,7 +480,7 @@ document.addEventListener("change", (e) => {
   if (e.target.matches("[data-compat-harness]")) syncCompat(e.target.form);
   if (e.target.matches("[data-provider-form] select[name=type]")) {
     const f = e.target.form, base = e.target.selectedOptions[0].dataset.base || "";
-    const b = f.querySelector("[name=base_url]"); b.value = base; b.placeholder = base || "http://serveur-modele:8080/v1";
+    const b = f.querySelector("[name=base_url]"); b.value = base; b.placeholder = base || "http://model-server:8080/v1";
     const id = f.querySelector("[name=pid]"); if (!id.value) id.value = e.target.value === "compatible" ? "local" : e.target.value;
     f.querySelectorAll("[data-only-type]").forEach((el) => { el.hidden = el.dataset.onlyType !== e.target.value; });
   }
@@ -402,15 +488,15 @@ document.addEventListener("change", (e) => {
 document.querySelectorAll("form").forEach((f) => { if (f.querySelector("[data-compat-harness]")) syncCompat(f); });
 
 
-// Formulaire de canal : n'afficher (et n'envoyer) que les champs du type choisi.
+// Channel form: only display (and send) fields of the chosen type.
 function syncChannel(form) {
   const typ = form.querySelector("[name=type]:not([type=hidden])")?.value || form.querySelector("input[type=hidden][name=type]")?.value;
-  // Exemples grisés de l'identifiant et du nom : ceux du type choisi (pas toujours ceux de Teams).
-  const ex = { webhook: ["webhook-ci", "Webhook de la CI"], teams: ["teams-equipe", "Équipe dev (Teams)"],
-               jira: ["jira-projet", "Jira du projet"], smtp: ["mail-equipe", "E-mail de l'équipe"] }[typ];
+  // Grayed out examples of the identifier and name: those of the chosen type (not always those from Teams).
+  const ex = { webhook: ["webhook-ci", T("CI webhook")], teams: ["teams-dev", T("Dev team (Teams)")],
+               jira: ["jira-project", T("Project Jira")], smtp: ["team-mail", T("Team e-mail")] }[typ];
   const id = form.querySelector("#c-id:not([disabled])"), nm = form.querySelector("#c-name");
   if (ex && id) id.placeholder = ex[0];
-  if (nm) nm.placeholder = "Nom canal de notification";
+  if (nm) nm.placeholder = T("Notification channel name");
   form.querySelectorAll("[data-for]").forEach((d) => {
     const on = d.dataset.for === typ;
     d.hidden = !on;
@@ -420,7 +506,7 @@ function syncChannel(form) {
 document.addEventListener("change", (e) => { if (e.target.matches("[data-channel-form] [name=type]")) syncChannel(e.target.form); });
 document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
 
-// ---- Archives : recherche pendant la frappe, sélection multiple, suppression confirmée par saisie ----
+// ---- Archives: search while typing, multiple selection, deletion confirmed by typing ----
 (function () {
   var form = document.querySelector("[data-arch-search]");
   if (!form) return;
@@ -436,7 +522,7 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
     fetch("/archives?" + p.toString(), { credentials: "same-origin", headers: { "Accept": "text/html" } })
       .then(function (r) { return r.ok ? r.text() : null; })
       .then(function (html) {
-        if (html === null || mine !== seq) return;   // une réponse plus ancienne n'écrase pas la plus récente
+        if (html === null || mine !== seq) return;   // an older response does not overwrite the most recent one
         var box = document.getElementById("arch-list");
         if (box) box.outerHTML = html;
         history.replaceState(null, "", "/archives" + (qs ? "?" + qs : ""));
@@ -462,14 +548,14 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
     if (e.target.closest("#arch-list")) syncBulk();
   });
 
-  // « Ouvrir en grand » depuis les Archives : la recherche en cours suit, pour y revenir telle quelle.
+  // "Open in large" from Archives: the current search follows, to return to it as is.
   document.addEventListener("click", function (e) {
     var x = e.target.closest("#panel a[data-expand]");
     if (!x) return;
     var q = new URLSearchParams(location.search); q.delete("job");
     if (q.toString()) x.href = x.pathname + "?back=" + encodeURIComponent(q.toString());
   });
-  // Titre d'une ligne : même effet qu'un clic sur sa référence (ouvre le panneau latéral).
+  // Line title: same effect as clicking its reference (opens the side panel).
   document.addEventListener("click", function (e) {
     var t = e.target.closest("[data-row-proxy]");
     if (!t || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -478,7 +564,7 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
   });
 })();
 
-// ---- Suppression définitive d'un job archivé : fenêtre présente sur toutes les pages d'un admin ----
+// ---- Permanent deletion of an archived job: window present on all admin pages ----
 (function () {
   var dlg = document.getElementById("del-dlg");
   if (!dlg) return;
@@ -502,7 +588,7 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
     var one = e.target.closest("[data-delete-ref]");
     if (one) {
       open("/jobs/" + encodeURIComponent(one.dataset.deleteRef) + "/delete",
-           "Supprimer " + one.dataset.deleteRef + " : « " + one.dataset.deleteTitle + " » ?", one.dataset.deletePhrase, null, false);
+           T("Delete {ref}: “{title}”?").replace("{ref}", one.dataset.deleteRef).replace("{title}", one.dataset.deleteTitle), one.dataset.deletePhrase, null, false);
       return;
     }
     if (e.target.closest("[data-bulk-delete]")) {

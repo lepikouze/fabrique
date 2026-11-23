@@ -1,8 +1,8 @@
-"""Rapport d'étude en PDF : un petit convertisseur Markdown vers reportlab (BSD), sans programme externe.
-Pris en charge : titres, paragraphes, gras, italique, code en ligne, liens, listes (à puces, numérotées, imbriquées),
-citations, blocs de code, tableaux, filets. Le texte vient d'un agent : il est traité comme une donnée (échappé, liens
-limités à http, https et mailto) ; un passage que reportlab ne sait pas composer est rendu en texte brut, jamais en erreur.
-Police embarquée : DejaVu (app/static/fonts), pour les accents, les flèches et les symboles courants."""
+"""PDF study report: a small Markdown to reportlab (BSD) converter, without external programs.
+Supported: titles, paragraphs, bold, italic, inline code, links, lists (bulleted, numbered, nested),
+quotes, code blocks, tables, horizontal rules. The text comes from an agent: it is treated as data (escaped, links
+limited to http, https and mailto); a passage that reportlab cannot compose is rendered as plain text, never as an error.
+Embedded font: DejaVu (app/static/fonts), for accents, arrows and common symbols."""
 import io, os, re
 from xml.sax.saxutils import escape
 from reportlab.lib import colors
@@ -18,10 +18,10 @@ from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer,
 FONTS = os.path.join(os.path.dirname(__file__), "static", "fonts")
 SANS, BOLD, ITALIC, MONO = "FabSans", "FabSans-Bold", "FabSans-Oblique", "FabMono"
 INK, MUTED, RULE, CODE_BG, LINK = colors.HexColor("#1a1a1a"), colors.HexColor("#5b5b63"), colors.HexColor("#d9d8d4"), colors.HexColor("#f3f2ef"), colors.HexColor("#1d5fd1")
-MAX_CHARS = 200_000          # au-delà, le rapport est coupé dans le PDF (un rapport d'étude fait quelques pages)
-CODE_COLS = 88               # largeur d'un bloc de code, en caractères : les lignes plus longues sont repliées
-HEADING_MAX = 300            # caractères d'un titre
-CELL_MAX = 1500              # caractères d'une cellule de tableau (une ligne de tableau ne se coupe pas entre deux pages)
+MAX_CHARS = 200_000          # beyond this, the report is cut in the PDF (a study report is a few pages)
+CODE_COLS = 88               # code block width, in characters: longer lines are wrapped
+HEADING_MAX = 300            # characters in a title
+CELL_MAX = 1500              # characters in a table cell (a table row does not break between two pages)
 
 _ready = False
 _glyphs = set()
@@ -39,10 +39,10 @@ def _fonts():
     _ready = True
 
 
-# Caractères hors de la police : équivalent proche, sinon un carré (jamais un trou ni une erreur).
+# Characters outside the font: close equivalent, otherwise a square (never a hole or an error).
 SWAP = {"✅": "✓", "✔": "✓", "☑": "✓", "❌": "✗", "✖": "✗", "❎": "✗", "❓": "?", "❗": "!", "➜": "→", "➡": "→", "⬅": "←", "⬆": "↑",
         "⬇": "↓", "🔴": "●", "🟢": "●", "🟡": "●", "🟠": "●", "🔵": "●", "⭐": "★", "\t": "    ",
-        # invisibles : trait d'union conditionnel, marque d'ordre des octets, espace sans chasse, liant, sélecteur de variante
+        # invisibles: soft hyphen, byte order mark, zero-width space, zero-width joiner, variation selector
         "\u00ad": "", "\ufeff": "", "\u200b": "", "\u200d": "", "\ufe0f": ""}
 
 
@@ -61,7 +61,7 @@ _LINK = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
 
 
 def inline(text):
-    """Texte d'une ligne en balisage reportlab : tout est d'abord échappé, puis seuls nos repères deviennent des balises."""
+    """One-line text in reportlab markup: everything is first escaped, then only our markers become tags."""
     out = []
     for part in _CODE.split(text):
         if len(part) > 2 and part.startswith("`") and part.endswith("`"):
@@ -98,8 +98,8 @@ def _cells(line):
 
 
 def blocks(md):
-    """Découpe le Markdown en blocs : ("h", niveau, texte), ("p", texte), ("li", niveau, puce, texte), ("code", texte),
-    ("table", lignes), ("quote", texte), ("hr",)."""
+    """Splits Markdown into blocks: ("h", level, text), ("p", text), ("li", level, bullet, text), ("code", text),
+    ("table", lines), ("quote", text), ("hr",)."""
     lines = clean(md)[:MAX_CHARS].replace("\r\n", "\n").split("\n")
     out, para, i = [], [], 0
 
@@ -177,7 +177,7 @@ def _styles():
 
 
 def _para(text, style, **kw):
-    """Paragraphe ; si le balisage produit ne se compose pas (repères Markdown mal fermés), le texte est rendu tel quel."""
+    """Paragraph; if the resulting markup cannot be laid out (badly closed Markdown markers), the text is rendered as is."""
     try:
         return Paragraph(inline(text), style, **kw)
     except Exception:
@@ -196,8 +196,8 @@ def _wrap_code(text):
 def _table(rows, st, width):
     n = max(len(r) for r in rows)
     rows = [r + [""] * (n - len(r)) for r in rows]
-    # Chaque colonne reçoit d'abord la place de son mot le plus long (aucun mot coupé tant que la page le permet), puis le
-    # reste est réparti selon la longueur du contenu.
+    # Each column first receives the space of its longest word (no word is cut as long as the page allows), then the
+    # remainder is distributed according to the content length.
     word = lambda c: max((pdfmetrics.stringWidth(w, BOLD, 8.8) for r in rows for w in re.sub(r"[*_`]", "", r[c]).split()), default=0)
     need = [min(word(c) + 12, width * 0.45) for c in range(n)]
     if sum(need) > width:
@@ -217,7 +217,7 @@ def flowables(md, st, width):
     out = []
     for b in blocks(md):
         kind = b[0]
-        if kind == "h":   # titre borné : il reste solidaire du bloc suivant, donc il ne doit jamais dépasser une page
+        if kind == "h":   # bounded title: it remains attached to the following block, so it must never exceed one page
             out.append(_para(b[2][:HEADING_MAX], st[min(b[1], 4)]))
         elif kind == "p":
             out.append(_para(b[1], st["body"]))
@@ -237,7 +237,7 @@ def flowables(md, st, width):
 
 
 class _Numbered(canvas.Canvas):
-    """Pied de page « libellé · page n / total » : le total n'est connu qu'à la fin, donc les pages sont gardées puis écrites."""
+    """Footer "label · page n / total" : the total is only known at the end, so pages are kept and then written."""
     footer = ""
 
     def __init__(self, *a, **kw):
@@ -261,7 +261,7 @@ class _Numbered(canvas.Canvas):
 
 
 def report(title, meta, markdown, footer="Fabrique"):
-    """Le PDF (octets) d'un rapport : en-tête sobre (titre, ligne de contexte), corps en Markdown, pages numérotées."""
+    """The PDF (bytes) of a report: plain header (title, context line), Markdown body, numbered pages."""
     _fonts()
     st = _styles()
     buf = io.BytesIO()
@@ -274,8 +274,8 @@ def report(title, meta, markdown, footer="Fabrique"):
     try:
         doc.build(head + flowables(markdown, st, doc.width), canvasmaker=maker)
     except Exception:
-        # Mise en page impossible (un bloc qui ne tient sur aucune page, par exemple) : le rapport sort quand même, en
-        # texte brut, plutôt qu'une erreur. Le Markdown reste téléchargeable à côté.
+        # Impossible layout (a block that fits on no page, for example): the report is still output, in
+        # plain text, rather than an error. The Markdown remains downloadable alongside.
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=20 * mm,
                                 title=clean(title)[:200], author="Fabrique")

@@ -5,41 +5,41 @@
 {% block content %}
 <div data-live="inbox" class="jobs-wrap {{ 'with-panel' if cur }}">
 {% if access_reqs %}
- <section class="access-reqs" aria-label="Demandes d'accès">
-  <h2 class="grp-h static">{{ dot('var(--accent)') }}Demandes d'accès <span class="n">{{ access_reqs|length }}</span></h2>
+ <section class="access-reqs" aria-label="Access requests">
+  <h2 class="grp-h static">{{ dot('var(--accent)') }}Access requests <span class="n">{{ access_reqs|length }}</span></h2>
   {% for u in access_reqs %}
   <div class="row acc">
    {{ dot('var(--accent)') }}<span class="r-title"><span class="t"><b>{{ u.name }}</b> <span class="mono muted">{{ u.username }}</span></span></span>
-   <span class="r-status">demande <b>{{ ROLE_LABEL[u.requested_role] }}</b>{% if u.request_note %} · « {{ u.request_note }} »{% endif %}</span>
-   <span class="req-acts"><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="role" value="{{u.requested_role}}"><button class="btn sm primary">Accorder</button></form><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="refuse" value="1"><button class="btn sm">Refuser</button></form></span>
+   <span class="r-status">request <b>{{ ROLE_LABEL[u.requested_role] }}</b>{% if u.request_note %} · “{{ u.request_note }}”{% endif %}</span>
+   <span class="req-acts"><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="role" value="{{u.requested_role}}"><button class="btn sm primary">Grant</button></form><form method="post" action="/users/{{u.id}}/role"><input type="hidden" name="refuse" value="1"><button class="btn sm">Refuse</button></form></span>
   </div>
   {% endfor %}
  </section>
 {% endif %}
 {% if repo_reqs %}
- <section class="access-reqs" aria-label="Repos à créer">
-  <h2 class="grp-h static">{{ dot('var(--amber)') }}Repos à créer <span class="n">{{ repo_reqs|length }}</span></h2>
+ <section class="access-reqs" aria-label="Repos to create">
+  <h2 class="grp-h static">{{ dot('var(--amber)') }}Repos to create <span class="n">{{ repo_reqs|length }}</span></h2>
   {% for r in repo_reqs %}{% set rs = r.settings or {} %}
   <div class="row acc">
-   {{ dot('var(--amber)') }}<span class="r-title"><span class="t"><b class="mono">{{ r.slug }}</b> <span class="muted">{{ GIT_NAME(r) }}, privé</span></span></span>
-   <span class="r-status">demandé par <b>{{ rs.requested_by or '—' }}</b>{% if rs.description %} · « {{ rs.description }} »{% endif %}</span>
-   <span class="req-acts"><form method="post" action="/repos/{{r.id}}/decide"><input type="hidden" name="verdict" value="approve"><button class="btn sm primary">Créer</button></form><form method="post" action="/repos/{{r.id}}/decide" data-confirm="Refuser la création de {{ r.slug }} ?"><input type="hidden" name="verdict" value="refuse"><button class="btn sm">Refuser</button></form></span>
+   {{ dot('var(--amber)') }}<span class="r-title"><span class="t"><b class="mono">{{ r.slug }}</b> <span class="muted">{{ GIT_NAME(r) }}, private</span></span></span>
+   <span class="r-status">requested by <b>{{ rs.requested_by or '—' }}</b>{% if rs.description %} · “{{ rs.description }}”{% endif %}</span>
+   <span class="req-acts"><form method="post" action="/repos/{{r.id}}/decide"><input type="hidden" name="verdict" value="approve"><button class="btn sm primary">Create</button></form><form method="post" action="/repos/{{r.id}}/decide" data-confirm="Refuse the creation of {{ r.slug }}?"><input type="hidden" name="verdict" value="refuse"><button class="btn sm">Refuse</button></form></span>
   </div>
   {% endfor %}
  </section>
 {% endif %}
 {% if not items and not access_reqs and not repo_reqs %}
- {{ empty('Rien ne t’attend pour l’instant.', 'Les questions des agents, les PR prêtes à relire, les specs à valider et les échecs arrivent ici.' if can(user, 'see_all') else 'Quand un agent a une question sur une de tes demandes, elle arrive ici.') }}
+ {{ empty('Nothing is waiting for you right now.', 'Agents\' questions, PRs ready for review, specs to approve and failures land here.' if can(user, 'see_all') else 'When an agent has a question about one of your requests, it lands here.') }}
 {% elif items %}
- <div class="list inbox" role="table" aria-label="Ce qui attend un humain">
+ <div class="list inbox" role="table" aria-label="Waiting for a human">
  {% for it in items %}{% set j = it.job %}
   <a class="row irow {{'sel' if sel == j.ref}}" role="row" href="?item={{j.ref}}" data-row data-ref="{{j.ref}}">
    {{ dot(it.color) }}
    <span class="i-main">
-    <span class="i-top"><span class="i-kind" style="--c:{{it.color}}">{{ it.label }}</span><span class="i-age">{{ j.updated_at|depuis }}</span></span>
+    <span class="i-top"><span class="i-kind" style="--c:{{it.color}}">{{ it.label }}</span><span class="i-age">{{ j.updated_at|since }}</span></span>
     <span class="i-title">{{ j.title }}</span>
     <span class="i-why">{{ it.why }}</span>
-    <span class="i-meta"><span class="mono">{{ j.ref }}</span>{% if j.repo %} · {{ j.repo.name }}{% endif %} · demandé par {{ j.requester }}</span>
+    <span class="i-meta"><span class="mono">{{ j.ref }}</span>{% if j.repo %} · {{ j.repo.name }}{% endif %} · requested by {{ j.requester }}</span>
    </span>
   </a>
  {% endfor %}
@@ -48,8 +48,8 @@
 </div>
 {% endblock %}
 {% block aside %}
-<aside class="panel {{ 'auto' if auto }}" id="panel" aria-label="Détail de l'élément" {% if not cur %}hidden{% endif %} data-kind="inbox" {% if cur %}data-open="{{ cur.job.ref }}"{% endif %}>
+<aside class="panel {{ 'auto' if auto }}" id="panel" aria-label="Item detail" {% if not cur %}hidden{% endif %} data-kind="inbox" {% if cur %}data-open="{{ cur.job.ref }}"{% endif %}>
  {% if cur %}{% with j = detail %}{% include "_inbox_panel.html" %}{% endwith %}{% endif %}
 </aside>
 {% endblock %}
-{% block foot %}{% if items %}{{ items|length }} élément{{'s' if items|length > 1}} t'attend{{'ent' if items|length > 1}}{% else %}Rien en attente{% endif %}{% endblock %}
+{% block foot %}{% if items %}{{ nb(items|length, "{n} item is waiting for you", "{n} items are waiting for you", items|length > 1) }}{% else %}Nothing waiting{% endif %}{% endblock %}

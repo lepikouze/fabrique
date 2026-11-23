@@ -1,4 +1,4 @@
-"""Environnement Alembic : la métadonnée vient de app.db ; l'adresse de la base de la configuration (ou de l'appelant)."""
+"""Alembic environment: the metadata comes from app.db; the database address comes from the configuration (or from the caller)."""
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from app import config, db
@@ -15,7 +15,7 @@ def run():
         return
     eng = engine_from_config({"sqlalchemy.url": url}, prefix="sqlalchemy.", poolclass=pool.NullPool)
     with eng.connect() as conn:
-        # render_as_batch : les ALTER TABLE passent aussi sous SQLite.
+        # render_as_batch: ALTER TABLE statements also work with SQLite.
         context.configure(connection=conn, target_metadata=db.meta, render_as_batch=True)
         with context.begin_transaction():
             context.run_migrations()

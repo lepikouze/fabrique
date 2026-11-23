@@ -1,43 +1,43 @@
 {% from "_macros.html" import ic, empty %}
-{# Liste des jobs archivés : la page entière la contient, et la recherche pendant la frappe la remplace seule. #}
+{# List of archived jobs: the entire page contains it, and search while typing replaces it alone. #}
 <div id="arch-list" data-total="{{ total }}">
- {% if err %}<div class="callout c-red" role="alert"><b class="ct">Recherche</b><p>{{ err }}</p></div>
- {% elif not rows %}{{ empty('Aucun job archivé ne correspond.' if (q or repo or state) else 'Aucun job archivé.', 'Élargis la recherche, ou retire un filtre.' if (q or repo or state) else 'Un job terminé s’archive depuis sa fiche ; il se retrouve et se restaure ici.') }}
+ {% if err %}<div class="callout c-red" role="alert"><b class="ct">Search</b><p>{{ err }}</p></div>
+ {% elif not rows %}{{ empty('No archived job matches.' if (q or repo or state) else 'No archived job.', 'Widen the search, or remove a filter.' if (q or repo or state) else 'A finished job is archived from its page; it can be found and restored here.') }}
  {% else %}
- <p class="muted small arch-count" role="status">{{ total }} job{{ 's' if total != 1 }} archivé{{ 's' if total != 1 }}{% if q or repo or state %} pour cette recherche{% endif %}{% if pages > 1 %} · page {{ pg }} sur {{ pages }}{% endif %}</p>
+ <p class="muted small arch-count" role="status">{{ nb(total, "{n} archived job", "{n} archived jobs") }}{% if q or repo or state %} for this search{% endif %}{% if pages > 1 %} · page {{ pg }} of {{ pages }}{% endif %}</p>
  <form method="post" action="/archives/bulk" id="arch-bulk">
  <table class="tbl arch-tbl"><thead><tr>
-  {% if can(user, 'archive') %}<th class="col-chk"><input type="checkbox" data-check-all aria-label="Tout sélectionner sur cette page"></th>{% endif %}
-  <th>Job</th><th>Titre</th><th class="c-x">Repo</th><th>Issue</th><th class="c-x">Demandé par</th><th>Terminé</th><th class="num c-x">Coût</th><th class="c-x"></th></tr></thead><tbody>
+  {% if can(user, 'archive') %}<th class="col-chk"><input type="checkbox" data-check-all aria-label="Select everything on this page"></th>{% endif %}
+  <th>Job</th><th>Title</th><th class="c-x">Repo</th><th>Outcome</th><th class="c-x">Requested by</th><th>Done</th><th class="num c-x">Cost</th><th class="c-x"></th></tr></thead><tbody>
  {% for j in rows %}
   <tr>
-   {% if can(user, 'archive') %}<td class="col-chk"><input type="checkbox" name="ref" value="{{ j.ref }}" aria-label="Sélectionner {{ j.ref }}" {{ 'disabled' if j.source == 'démo' }}></td>{% endif %}
+   {% if can(user, 'archive') %}<td class="col-chk"><input type="checkbox" name="ref" value="{{ j.ref }}" aria-label="Select {{ j.ref }}" {{ 'disabled' if j.source == 'demo' }}></td>{% endif %}
    <td class="mono nowrap"><a class="link" href="/archives?{{ qs ~ '&' if qs }}job={{ j.ref }}" data-row data-ref="{{ j.ref }}">{{ j.ref }}</a></td>
    <td class="arch-title"><a class="plain" href="/archives?{{ qs ~ '&' if qs }}job={{ j.ref }}" data-row-proxy="{{ j.ref }}" tabindex="-1">{{ j.title }}</a></td>
    <td class="mono muted c-x">{{ j.repo.slug if j.repo else '—' }}</td>
    <td><span class="pill out-{{ j.outcome }}">{{ OUTCOMES[j.outcome] }}</span></td>
    <td class="muted c-x">{{ j.requester }}</td>
-   <td class="muted nowrap">{{ j.updated_at|quand }}</td>
+   <td class="muted nowrap">{{ j.updated_at|when }}</td>
    <td class="mono num c-x">{{ j.cost|money }}</td>
    <td class="actions c-x">
-    {% if can(user, 'archive') %}<button class="btn sm" formaction="/jobs/{{ j.ref }}/archive" name="restore" value="1" formnovalidate>Restaurer</button>{% endif %}
-    {% if can(user, 'settings') %}{% if j.source != 'démo' %}<button type="button" class="btn sm ghostb danger-t" data-delete-ref="{{ j.ref }}" data-delete-phrase="{{ PHRASE(j) }}" data-delete-title="{{ j.title }}">Supprimer</button>
-    {% else %}<span class="pill" title="Job de démonstration (fictif) : il ne se supprime pas à la main, le simulateur ne garde que les plus récents.">démo</span>{% endif %}{% endif %}
+    {% if can(user, 'archive') %}<button class="btn sm" formaction="/jobs/{{ j.ref }}/archive" name="restore" value="1" formnovalidate>Restore</button>{% endif %}
+    {% if can(user, 'settings') %}{% if j.source != 'demo' %}<button type="button" class="btn sm ghostb danger-t" data-delete-ref="{{ j.ref }}" data-delete-phrase="{{ PHRASE(j) }}" data-delete-title="{{ j.title }}">Delete</button>
+    {% else %}<span class="pill" title="Demo job (made up): it cannot be deleted by hand, the simulator only keeps the most recent ones.">demo</span>{% endif %}{% endif %}
    </td>
   </tr>
  {% endfor %}
  </tbody></table>
  {% if can(user, 'archive') %}
  <div class="arch-bulk" data-bulk hidden>
-  <span class="muted"><b data-bulk-n>0</b> sélectionné(s)</span>
-  <button class="btn sm" name="action" value="restore">Restaurer la sélection</button>
-  {% if can(user, 'settings') %}<button type="button" class="btn sm ghostb danger-t" data-bulk-delete>Supprimer la sélection…</button>{% endif %}
+  <span class="muted"><b data-bulk-n>0</b> selected</span>
+  <button class="btn sm" name="action" value="restore">Restore the selection</button>
+  {% if can(user, 'settings') %}<button type="button" class="btn sm ghostb danger-t" data-bulk-delete>Delete the selection…</button>{% endif %}
  </div>{% endif %}
  </form>
  {% if pages > 1 %}<nav class="pager" aria-label="Pages">
-  {% if pg > 1 %}<a class="btn sm" href="/archives?{{ qs ~ '&' if qs }}page={{ pg - 1 }}">← Plus récents</a>{% endif %}
-  <span class="muted small">page {{ pg }} sur {{ pages }}</span>
-  {% if pg < pages %}<a class="btn sm" href="/archives?{{ qs ~ '&' if qs }}page={{ pg + 1 }}">Plus anciens →</a>{% endif %}
+  {% if pg > 1 %}<a class="btn sm" href="/archives?{{ qs ~ '&' if qs }}page={{ pg - 1 }}">← Newer</a>{% endif %}
+  <span class="muted small">page {{ pg }} of {{ pages }}</span>
+  {% if pg < pages %}<a class="btn sm" href="/archives?{{ qs ~ '&' if qs }}page={{ pg + 1 }}">Older →</a>{% endif %}
  </nav>{% endif %}
  {% endif %}
 </div>

@@ -5,8 +5,8 @@ WORKDIR /srv
 COPY app/requirements.txt app/requirements.txt
 RUN pip install --no-cache-dir -r app/requirements.txt
 COPY app app
-# /data et /bootstrap appartiennent à l'utilisateur de l'application : un volume nommé monté là en hérite, sans étape d'initialisation.
-# Groupe 10001 : celui du fichier du token du runner intégré ; le runner le reçoit en groupe supplémentaire (compose).
+# /data and /bootstrap belong to the application user: a named volume mounted there inherits that ownership, with no initialization step.
+# Group 10001: that of the built-in runner's token file; the runner receives it as an additional group (compose).
 RUN groupadd -g 10001 fabrique && useradd -u 10001 -g 10001 -d /data fabrique && mkdir -p /data /bootstrap \
  && chown fabrique:fabrique /data /bootstrap && chmod 0750 /bootstrap
 USER fabrique

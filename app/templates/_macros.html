@@ -3,31 +3,31 @@
 {% macro stage_pill(st) %}<span class="pill stage" style="--c:{{st.color}}"><i class="dot" style="--c:{{st.color}}"></i>{{ st.label }}</span>{% endmacro %}
 {% macro model_badge(m) %}<span class="pill model {{ 'claude' if m.startswith('claude') else 'local' }}">{{ m }}</span>{% endmacro %}
 {% macro empty(title, text) %}<div class="empty"><b>{{ title }}</b><p>{{ text }}</p></div>{% endmacro %}
-{# Liste unique « Modèle ou profil » : un modèle seul sert à tout ; un profil donne un modèle par rôle. On choisit l'un ou
-   l'autre, jamais les deux. Valeurs : « p:<profil> » ou « m:<modèle> » ; « inherit » ajoute une première option vide. #}
+{# Unique "Model or profile" list: a single model serves everything; a profile provides one model per role. You choose one
+   or the other, never both. Values: "p:<profile>" or "m:<model>"; "inherit" adds an initial empty option. #}
 {% macro model_or_profile(profs, models, sel_model, sel_profile, inherit='', compat=False) %}
 {% if inherit %}<option value="">{{ inherit }}</option>{% endif %}
-{% if profs %}<optgroup label="Profils : un modèle par rôle">{% for p in profs %}{% set am = models|selectattr('id', 'equalto', p.roles.agent.model)|first %}<option value="p:{{ p.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(am)|join(' ') if am else 'claude-code' }}"{% endif %} {{ 'selected' if sel_profile == p.id }}>{{ p.name }}</option>{% endfor %}</optgroup>{% endif %}
-<optgroup label="Modèles : un seul pour tout">{% for m in models %}<option value="m:{{ m.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(m)|join(' ') }}"{% endif %} {{ 'selected' if not sel_profile and sel_model == m.id }}>{{ m.name }}</option>{% endfor %}</optgroup>
+{% if profs %}<optgroup label="Profiles: one model per role">{% for p in profs %}{% set am = models|selectattr('id', 'equalto', p.roles.agent.model)|first %}<option value="p:{{ p.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(am)|join(' ') if am else 'claude-code' }}"{% endif %} {{ 'selected' if sel_profile == p.id }}>{{ p.name }}</option>{% endfor %}</optgroup>{% endif %}
+<optgroup label="Models: a single one for everything">{% for m in models %}<option value="m:{{ m.id }}" {% if compat %}data-harnesses="{{ HARNESSES_FOR(m)|join(' ') }}"{% endif %} {{ 'selected' if not sel_profile and sel_model == m.id }}>{{ m.name }}</option>{% endfor %}</optgroup>
 {% endmacro %}
-{# Changements d'un job : liste des fichiers et diff du commit vérifié, envoyé par le runner et lu ici même. Le diff est
-   chargé à l'ouverture (app.js) ; rien ne s'affiche tant que le runner n'en a pas envoyé pour le commit vérifié. #}
+{# Job changes: list of files and diff of the reviewed commit, sent by the runner and read right here. The diff is
+   loaded on opening (app.js); nothing is displayed until the runner has sent one for the reviewed commit. #}
 {% macro changes(j) %}
 {% set p = PATCH(j) %}
 {% if p %}
 <section class="sec changes">
- <h3>Changements <span class="muted right mono">{{ p.sha }}</span></h3>
- <p class="muted small">{{ p.n }} fichier(s), <span class="ok">+{{ p.add }}</span> <span class="bad">−{{ p.rem }}</span> · diff du commit vérifié, envoyé par le runner{% if p.truncated %} · <b class="amber">tronqué</b>{% endif %}</p>
- <ul class="dfiles">{% for f in p.files %}<li><a href="/jobs/{{ j.ref }}/diff?sha={{ p.sha }}" class="mono dpath" data-diff-file="{{ loop.index0 }}" title="Lire le diff de ce fichier">{{ f.path }}</a>{% if f.status == 'added' %}<span class="pill">ajouté</span>{% elif f.status == 'deleted' %}<span class="pill">supprimé</span>{% elif f.status == 'binary' %}<span class="pill">binaire</span>{% endif %}<span class="mono right"><span class="ok">+{{ f.add }}</span> <span class="bad">−{{ f.rem }}</span></span></li>{% endfor %}</ul>
+ <h3>Changes <span class="muted right mono">{{ p.sha }}</span></h3>
+ <p class="muted small">{{ p.n }} file(s), <span class="ok">+{{ p.add }}</span> <span class="bad">−{{ p.rem }}</span> · diff of the verified commit, sent by the runner{% if p.truncated %} · <b class="amber">truncated</b>{% endif %}</p>
+ <ul class="dfiles">{% for f in p.files %}<li><a href="/jobs/{{ j.ref }}/diff?sha={{ p.sha }}" class="mono dpath" data-diff-file="{{ loop.index0 }}" title="Read the diff of this file">{{ f.path }}</a>{% if f.status == 'added' %}<span class="pill">added</span>{% elif f.status == 'deleted' %}<span class="pill">deleted</span>{% elif f.status == 'binary' %}<span class="pill">binary</span>{% endif %}<span class="mono right"><span class="ok">+{{ f.add }}</span> <span class="bad">−{{ f.rem }}</span></span></li>{% endfor %}</ul>
  <details class="diffbox" data-key="diff-{{ j.ref }}" data-diff="/jobs/{{ j.ref }}/diff?sha={{ p.sha }}">
-  <summary><b>Lire le diff</b><span class="muted">sans quitter la Fabrique</span></summary>
-  <div class="diff-body" data-diff-body><p class="muted small">Chargement du diff…</p></div>
+  <summary><b>Read the diff</b><span class="muted">without leaving Fabrique</span></summary>
+  <div class="diff-body" data-diff-body><p class="muted small">Loading the diff…</p></div>
  </details>
 </section>
-{% elif DIFF_OFF(j) and j.source != 'étude' and (j.pr_url or j.verified_sha) %}
+{% elif DIFF_OFF(j) and j.source != 'study' and (j.pr_url or j.verified_sha) %}
 <section class="sec changes">
- <h3>Changements</h3>
- <p class="muted small">Le diff n'est pas conservé dans la Fabrique pour ce repo (réglage du repo).{% set u = CHANGES_URL(j) %}{% if u %} <a class="link" href="{{ u }}" target="_blank" rel="noopener noreferrer">Lire les changements sur la forge {{ ic('ext') }}</a>{% endif %}</p>
+ <h3>Changes</h3>
+ <p class="muted small">The diff is not kept in Fabrique for this repo (repo setting).{% set u = CHANGES_URL(j) %}{% if u %} <a class="link" href="{{ u }}" target="_blank" rel="noopener noreferrer">Read the changes on the Git host {{ ic('ext') }}</a>{% endif %}</p>
 </section>
 {% endif %}
 {% endmacro %}

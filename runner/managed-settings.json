@@ -1,10 +1,10 @@
 {
   "hooks": {
     "PreToolUse": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/garde.py", "timeout": 10}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/guard.py", "timeout": 10}]}
     ],
     "PostToolUse": [
-      {"matcher": "Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/controle.py hook", "timeout": 30}]}
+      {"matcher": "Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": "python3 /opt/fabrique/runner/security_check.py hook", "timeout": 30}]}
     ]
   },
   "permissions": {

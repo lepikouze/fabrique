@@ -1,17 +1,17 @@
-"""Environnement de test isolé : une base SQLite neuve par test (migrations Alembic appliquées), pas de simulateur."""
+"""Isolated test environment: a new SQLite database per test (Alembic migrations applied), no simulator."""
 import os, tempfile
 os.environ["FABRIQUE_DATA"] = tempfile.mkdtemp(prefix="fabrique-test-")
 os.environ["FABRIQUE_DEMO"] = "0"
 os.environ["FABRIQUE_SIMULATOR"] = "0"
 os.environ["FABRIQUE_NOTIFY"] = "0"
-os.environ["FABRIQUE_OPEN"] = "1"   # mode ouvert : la plupart des tests n'ont pas à se connecter
+os.environ["FABRIQUE_OPEN"] = "1"   # open mode: most tests do not have to connect
 
 import pytest
 from starlette.testclient import TestClient
 from app import auth, config, db, main
 
 ADMIN = {"user": "alice", "name": "Alice", "role": "admin"}
-VERIF = {"user": "vera", "name": "Vera", "role": "verifier"}
+REVIEWER = {"user": "vera", "name": "Vera", "role": "reviewer"}
 REQ = {"user": "rémi", "name": "Rémi", "role": "requester"}
 
 
@@ -20,7 +20,11 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
     db.reset_engine(); auth.invalidate()
     db.migrate()
-    # Une installation neuve n'a ni modèle local ni forge par défaut : les tests en déclarent (noms fictifs).
+    # The tests were written in French: interface and jobs in French, except when a test chooses another language.
+    monkeypatch.setenv("FABRIQUE_LANG", "en")
+    with db.tx() as c:
+        db.set_setting(c, "languages", {"jobs": "en"}, "test")
+    # A new installation has neither a local model nor a default forge: tests declare (fictitious names).
     local = [{"id": m, "name": m, "provider": "openai", "base_url": "http://modele.test:8080/v1"} for m in ("gemma-4-26b-a4b", "qwen3.8-27b", "gpt-oss-120b")]
     claude = [{"id": m, "name": n, "provider": "anthropic", "base_url": ""} for m, n in (
         ("claude-opus-5-5", "Claude Opus 5.5"), ("claude-sonnet-5-5", "Claude Sonnet 5.5"), ("claude-haiku-5-5", "Claude Haiku 5.5"))]
@@ -50,7 +54,7 @@ def repo():
 
 @pytest.fixture
 def demo_on(monkeypatch):
-    """Mode démonstration actif et données affichées."""
+    """Demo mode active and data displayed."""
     from app import jobs
     monkeypatch.setattr(config, "DEMO", True)
     with db.tx() as c:

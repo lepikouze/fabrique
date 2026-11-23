@@ -1,29 +1,29 @@
 {% extends "base.html" %}{% from "_macros.html" import ic %}
 {% block title %}Archives{% endblock %}
-{% block h1 %}Jobs archivés{% endblock %}
+{% block h1 %}Archived jobs{% endblock %}
 {% block counters %}{% endblock %}
-{% block tools %}<a class="tool keep" href="/jobs">{{ ic('board') }}Jobs en cours</a>{% endblock %}
+{% block tools %}<a class="tool keep" href="/jobs">{{ ic('board') }}Current jobs</a>{% endblock %}
 {% block content %}
 <div class="pad arch jobs-wrap {{ 'with-panel' if detail }}">
  <form method="get" action="/archives" class="arch-search" role="search" data-arch-search>
-  <label for="a-q" class="arch-q-l">Rechercher dans les archives</label>
+  <label for="a-q" class="arch-q-l">Search the archives</label>
   <input id="a-q" name="q" type="search" value="{{ q }}" maxlength="200" autocomplete="off" spellcheck="false" autofocus
-         placeholder="Référence, titre, demande, demandeur, repo…">
+         placeholder="Reference, title, request, requester, repo…">
   <div class="arch-filters">
-   <select name="repo" aria-label="Repo"><option value="">Tous les repos</option>{% for r in repos %}<option value="{{ r.id }}" {{ 'selected' if repo == r.id }}>{{ r.slug }}</option>{% endfor %}</select>
-   <select name="state" aria-label="Issue"><option value="">Toutes les issues</option>{% for k, v in OUTCOMES.items() %}<option value="{{ k }}" {{ 'selected' if state == k }}>{{ v }}</option>{% endfor %}</select>
-   <label class="check-row"><input type="checkbox" name="regex" value="1" {{ 'checked' if regex }}> Expression régulière</label>
-   <button class="btn">Rechercher</button>
-   {% if q or repo or state or regex %}<a class="link" href="/archives">Tout afficher ({{ all_n }})</a>{% endif %}
+   <select name="repo" aria-label="Repo"><option value="">All repos</option>{% for r in repos %}<option value="{{ r.id }}" {{ 'selected' if repo == r.id }}>{{ r.slug }}</option>{% endfor %}</select>
+   <select name="state" aria-label="Outcome"><option value="">All outcomes</option>{% for k, v in OUTCOMES.items() %}<option value="{{ k }}" {{ 'selected' if state == k }}>{{ v }}</option>{% endfor %}</select>
+   <label class="check-row"><input type="checkbox" name="regex" value="1" {{ 'checked' if regex }}> Regular expression</label>
+   <button class="btn">Search</button>
+   {% if q or repo or state or regex %}<a class="link" href="/archives">Show all ({{ all_n }})</a>{% endif %}
   </div>
-  <p class="muted small">Sans la case : tous les mots saisis doivent apparaître, sans tenir compte de la casse. Avec : un motif comme <span class="mono">^FAB-1[0-9]$</span> ou <span class="mono">export|import</span>.</p>
+  <p class="muted small">Without the box: every word typed must appear, case-insensitive. With it: a pattern such as <span class="mono">^FAB-1[0-9]$</span> or <span class="mono">export|import</span>.</p>
  </form>
  {% include "_archives_list.html" %}
 </div>
 {% endblock %}
 {% block aside %}
-<aside class="panel" id="panel" aria-label="Détail du job" {% if not detail %}hidden{% endif %} data-kind="job" data-view="list">
+<aside class="panel" id="panel" aria-label="Job detail" {% if not detail %}hidden{% endif %} data-kind="job" data-view="list">
  {% if detail %}{% with j = detail, full = False %}{% include "_job_panel.html" %}{% endwith %}{% endif %}
 </aside>
 {% endblock %}
-{% block foot %}{{ all_n }} job{{ 's' if all_n != 1 }} archivé{{ 's' if all_n != 1 }}{% endblock %}
+{% block foot %}{{ nb(all_n, "{n} archived job", "{n} archived jobs") }}{% endblock %}

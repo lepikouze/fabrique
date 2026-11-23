@@ -1,13 +1,21 @@
-"""Où s'exécute le code du dépôt (installation, agent, contrôles, relecteurs). Deux modes, même interface :
+"""Where the repo code runs (installation, agent, checks, reviewers). Two modes, same interface:
 
-- « local » (atelier partagé) : dans le conteneur du runner, sous l'utilisateur de l'agent (setpriv). Simple, mais tous
-  les jobs partagent le même conteneur que le runner et ses secrets ne sont protégés que par l'utilisateur Unix.
-- « docker » (un conteneur par job) : le runner demande au LANCEUR de créer un conteneur jetable pour le job, puis d'y
-  exécuter les commandes. Le runner n'a aucun accès à Docker ; le conteneur du job n'a ni secret, ni Git, ni réseau
-  local (réseau interne, sortie par le proxy en liste blanche).
+- "local" (shared workshop): in the runner container, under the agent user (setpriv). Simple, but all
+  jobs share the same container as the runner and its secrets are only protected by the Unix user.
+- "docker" (one container per job): the runner asks the LAUNCHER to create a disposable container for the job, then
+  execute commands in it. The runner has no access to Docker; the job container has no secrets, no Git, and no
+  local network (internal network, egress via the allowlist proxy).
 
-Le clone initial et la poussée restent dans le runner (miroir, configuration figée). Les opérations Git sur le dépôt de
-l'agent, après son passage, passent par ici : elles s'exécutent là où le code de l'agent tourne déjà (voir main.jgit)."""
+The initial clone and push remain in the runner (mirror, frozen configuration). Git operations on the agent
+repo, after its agent run, pass through here: they run where the agent code is already running (see main.jgit)."""
+try:
+    from .texts import M
+except ImportError:
+    try:
+        from texts import M
+    except ImportError:
+        def M(t, **p):
+            return t.format(**p) if p else t
 import json, logging, os, signal, subprocess, threading
 import httpx
 from . import config
@@ -20,11 +28,11 @@ class Result:
         self.returncode, self.stdout, self.stderr = code, out, err
 
 
-SETPRIV = "/usr/bin/setpriv"   # chemin absolu : jamais résolu par un PATH que l'agent pourrait influencer
+SETPRIV = "/usr/bin/setpriv"   # absolute path: never resolved by a PATH that the agent could influence
 
 
 def as_agent():
-    """Préfixe qui fait tourner une commande sous l'utilisateur de l'agent (sans capacités), en mode local."""
+    """Prefix that runs a command under the agent user (without capabilities), in local mode."""
     if not config.AGENT_UID:
         return []
     u = config.AGENT_UID
@@ -32,7 +40,7 @@ def as_agent():
 
 
 def kill_agent_leftovers():
-    """Mode local : tue tout processus restant de l'utilisateur de l'agent."""
+    """Local mode: kills every remaining process of the agent's user."""
     if not config.AGENT_UID:
         return
     for pid in os.listdir("/proc"):
@@ -67,11 +75,11 @@ class Local:
             p = subprocess.run(as_agent() + argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             self.kill(ctx)
-            return Result(124, "", f"délai dépassé ({timeout} s)")
+            return Result(124, "", M("timeout exceeded ({timeout} s)", timeout=timeout))
         return Result(p.returncode, p.stdout, p.stderr)
 
     def stream(self, ctx, argv, env, cwd, on_line):
-        """Lance la commande et appelle on_line pour chaque ligne de sortie ; renvoie (code, fin de stderr)."""
+        """Runs the command and calls on_line for each line of output; returns (code, stderr end)."""
         proc = subprocess.Popen(as_agent() + argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, bufsize=1, start_new_session=True)
         self.procs[ctx.ref] = proc
@@ -98,7 +106,7 @@ class Local:
 
 
 class Docker:
-    """Client du lanceur (réseau privé, jeton). Chaque job a son conteneur `fabrique-job-<ref>`."""
+    """Launcher client (private network, token). Each job has its own `fabrique-job-<ref>` container."""
     name = "docker"
 
     def __init__(self, base=None, token=None, transport=None):
@@ -114,7 +122,7 @@ class Docker:
     def _post(self, path, body=None):
         r = self.h.post(path, json=body or {})
         if r.status_code != 200:
-            raise RuntimeError(f"lanceur : {path} refusé ({r.status_code}) {r.text[:200]}")
+            raise RuntimeError(M("launcher: {path} refused ({status_code}) {p}", path=path, status_code=r.status_code, p=r.text[:200]))
         return r.json()
 
     def start(self, ctx):
@@ -124,20 +132,20 @@ class Docker:
         try:
             self._post(f"/jobs/{ctx.ref}/stop")
         except Exception as e:
-            log.warning("%s : arrêt du conteneur impossible (%s)", ctx.ref, e)
+            log.warning("%s: cannot stop the container (%s)", ctx.ref, e)
 
     def kill(self, ctx):
         try:
             self._post(f"/jobs/{ctx.ref}/kill")
         except Exception as e:
-            log.warning("%s : arrêt des processus impossible (%s)", ctx.ref, e)
+            log.warning("%s: cannot stop the processes (%s)", ctx.ref, e)
 
     def net(self, ctx):
-        """Sorties réseau du job (journal du proxy, lu par le lanceur), ou None si le lanceur ne sait pas le dire."""
+        """Network egress of the job (proxy log, read by the launcher), or None if the launcher does not know."""
         try:
             r = self._post(f"/jobs/{ctx.ref}/net")
-        except Exception as e:   # ancien lanceur (pas d'action « net »), proxy introuvable… : pas de ligne Réseau
-            log.info("%s : sorties réseau indisponibles (%s)", ctx.ref, e)
+        except Exception as e:   # old launcher (no "net" action), proxy not found...: no Network line
+            log.info("%s: network egress unavailable (%s)", ctx.ref, e)
             return None
         return r if r.get("known") else None
 
@@ -146,7 +154,7 @@ class Docker:
         with self.h.stream("POST", f"/jobs/{ctx.ref}/exec", json={"argv": argv, "env": env, "workdir": cwd, "timeout": timeout}) as r:
             if r.status_code != 200:
                 r.read()
-                raise RuntimeError(f"lanceur : exécution refusée ({r.status_code}) {r.text[:200]}")
+                raise RuntimeError(M("launcher: execution refused ({status_code}) {p}", status_code=r.status_code, p=r.text[:200]))
             for line in r.iter_lines():
                 if not line:
                     continue

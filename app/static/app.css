@@ -1,5 +1,5 @@
-/* Fabrique — panneau sombre et dense. Orange de marque (#F2541B) réservé aux actions principales et à la sélection ;
-   ambre = « attend ta réponse » ; vert / rouge = états ; une teinte par étape. Texte sombre sur les boutons orange (contraste 5,5). */
+/* Fabrique — dark and dense dashboard. Brand orange (#F2541B) reserved for primary actions and selection;
+   amber = "waiting for your response"; green / red = states; one shade per step. Dark text on orange buttons (5.5 contrast). */
 @font-face { font-family: "Inter"; src: url("/static/fonts/inter-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Jost"; src: url("/static/fonts/jost-latin-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
 @font-face { font-family: "JetBrains Mono"; src: url("/static/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
@@ -44,10 +44,10 @@ a.link, .prose a { color: var(--link); text-decoration: underline; text-underlin
 kbd { display: inline-block; min-width: 20px; padding: 0 5px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 5px; background: var(--surface-2); color: var(--ink-2); font-size: 11px; line-height: 17px; text-align: center; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--ink-3)); flex: none; }
 
-/* ---------- Gabarit : barre latérale | colonne principale | panneau ---------- */
+/* ---------- Layout: side panel | main column | dashboard ---------- */
 .shell { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: 100vh; height: 100dvh; }
 html.side-min .shell { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
-/* Zone de travail : contenu + panneau de détail, sous la barre d'outils et les compteurs (qui gardent toute la largeur) */
+/* Workspace area: content + detail panel, below the toolbar and counters (which take full width) */
 .work { flex: 1; min-height: 0; display: flex; }
 .work > .content { flex: 1; min-width: 0; }
 .side { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; background: var(--bg-side); border-right: 1px solid var(--line); overflow: hidden; }
@@ -96,11 +96,11 @@ html.side-min .me { justify-content: center; padding: 6px 0; }
 .foot .keys { display: flex; align-items: center; gap: 5px; color: var(--ink-3); }
 .foot .keys kbd + kbd { margin-left: -2px; }
 
-/* ---------- Contrôles ---------- */
+/* ---------- Controls ---------- */
 .btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap; }
 .btn:hover { background: var(--surface-2); border-color: var(--ink-3); }
 .btn .ic { width: 16px; height: 16px; }
-/* .cta : l'orange de marque, réservé à « Nouvelle demande ». .primary : action principale d'un formulaire, sobre. */
+/* .cta : brand orange, reserved for "New request". .primary : main action of a form, understated. */
 .btn.cta { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn.cta:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.primary { background: var(--surface-3); border-color: var(--line-2); color: var(--ink); font-weight: 600; }
@@ -136,12 +136,12 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .pill.off { color: var(--ink-3); }
 .pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); background: var(--bad-bg); }
 .pill.role-admin { color: var(--accent); border-color: var(--accent-line); }
-.pill.role-verifier { color: var(--blue); }
+.pill.role-reviewer { color: var(--blue); }
 .spin { display: inline-block; width: 11px; height: 11px; border: 1.6px solid var(--ink-3); border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; border-top-color: var(--ink-3); border-style: dotted; } }
 
-/* ---------- Tableau (kanban) ---------- */
+/* ---------- Board (kanban) ---------- */
 .jobs-wrap { height: 100%; }
 .board { display: flex; gap: 0; height: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
 .col { flex: 0 0 300px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
@@ -163,7 +163,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .c-foot .run { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 0 7px; height: 20px; border: 1px solid var(--line-2); border-radius: 10px; }
 .c-foot .run .dot { width: 6px; height: 6px; }
 
-/* ---------- Liste ---------- */
+/* ---------- List ---------- */
 .list { display: flex; flex-direction: column; }
 .grp { border-bottom: 1px solid var(--line); }
 .grp-h { display: flex; align-items: center; gap: 9px; padding: 9px 16px; background: var(--surface); cursor: pointer; list-style: none; font-weight: 550; font-size: 13.5px; position: sticky; top: 0; z-index: 1; }
@@ -187,7 +187,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .with-panel .hide-narrow { display: none; }
 .with-panel .list:not(.inbox) .grp .row { grid-template-columns: 10px 76px minmax(140px, 2fr) minmax(0, 1.6fr) minmax(0, 1fr) 70px 48px; }
 
-/* ---------- Panneau de détail ---------- */
+/* ---------- Detail panel ---------- */
 .panel { width: var(--panel-w); border-left: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; min-height: 0; position: relative; }
 .panel[hidden] { display: none; }
 .p-bar { position: absolute; top: 10px; right: 12px; display: flex; gap: 2px; z-index: 2; }
@@ -256,7 +256,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .events { max-height: 340px; overflow-y: auto; font-size: 12px; line-height: 1.7; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; background: var(--surface); }
 .events li { overflow-wrap: anywhere; } .events b { color: var(--ink); font-weight: 600; }
 
-/* Plein écran : deux colonnes qui défilent chacune */
+/* Full screen: two columns that each scroll */
 .full-page { height: 100%; position: relative; }
 .full2 { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); height: 100%; }
 .fcol { overflow-y: auto; padding: 22px 28px 48px; }
@@ -318,7 +318,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .dlg::backdrop { background: rgba(0, 0, 0, .55); }
 .dlg h2 { margin: 0 0 6px; font-size: 16px; }
 
-/* ---------- Toasts et connexion ---------- */
+/* ---------- Toasts and sign-in ---------- */
 .toasts { position: fixed; right: 18px; bottom: 48px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
 .toast { display: flex; align-items: center; gap: 9px; padding: 10px 14px; border-radius: var(--r); background: var(--surface-3); border: 1px solid var(--line-2); box-shadow: var(--shadow); max-width: 420px; animation: toast-in .2s ease-out; }
 .toast.ok .ic { color: var(--ok); } .toast.err { border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: var(--bad-bg); }
@@ -330,7 +330,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .logo.big { width: 48px; height: 48px; font-size: 24px; border-radius: 12px; margin: 0 auto; }
 .auth-box .btn { margin-top: 10px; }
 
-/* ---------- Écrans étroits ---------- */
+/* ---------- Narrow screens ---------- */
 @media (max-width: 1180px) {
   .stats small { display: none; }
   .foot .keys { display: none; }
@@ -361,7 +361,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 
 
-/* Rôles et demandes d'accès */
+/* Roles and access requests */
 .auth-box.wide { max-width: 520px; }
 .frm.left { text-align: left; margin-top: 14px; }
 .links { margin-top: 18px; display: flex; gap: 12px; justify-content: center; align-items: center; }
@@ -380,7 +380,7 @@ a.me { border-radius: var(--r); } a.me:hover { background: var(--surface-2); }
 .box form { margin-top: 8px; }
 .pad.pad-top { padding-bottom: 0; } .pad.pad-top:empty { display: none; }
 
-/* Menu utilisateur (replié par défaut) et version */
+/* User menu (collapsed by default) and version */
 .usermenu { position: relative; }
 .usermenu > summary { list-style: none; cursor: pointer; border-radius: var(--r); }
 .usermenu > summary::-webkit-details-marker { display: none; }
@@ -392,6 +392,9 @@ a.me { border-radius: var(--r); } a.me:hover { background: var(--surface-2); }
 .theme-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; margin: 0 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-side); }
 .theme-pick button { border: 0; background: none; color: var(--ink-2); font: 500 12.5px var(--font); padding: 5px 0; border-radius: 4px; cursor: pointer; }
 .theme-pick button[aria-checked="true"] { background: var(--surface-3); color: var(--ink); }
+.usermenu form.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0; padding: 2px 8px 8px; }
+.usermenu form.menu-row label { display: inline; margin: 0; font: 500 12.5px var(--font); color: var(--ink-2); white-space: nowrap; }
+.usermenu form.menu-row select { flex: 0 1 128px; min-width: 0; width: auto; padding: 4px 22px 4px 8px; font: 500 12.5px var(--font); }
 .menu-i { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; border-radius: 0; }
 .menu-i:hover { background: var(--surface-2); }
 .menu-i .ic { width: 15px; height: 15px; color: var(--ink-2); }
@@ -399,7 +402,7 @@ a.me { border-radius: var(--r); } a.me:hover { background: var(--surface-2); }
 .version { display: block; padding: 2px 8px 0; color: var(--ink-3); font: 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 html.side-min .usermenu .menu { left: 0; }
 html.side-min .version { display: none; }
-/* Bulle d'aide ⓘ */
+/* Help bubble ⓘ */
 .info { display: inline-block; position: relative; vertical-align: middle; margin-left: 6px; }
 .info > summary { list-style: none; cursor: pointer; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-2); color: var(--ink-2); font: 600 11px var(--font); }
 .info > summary::-webkit-details-marker { display: none; }
@@ -416,7 +419,7 @@ html.side-min .version { display: none; }
 .adv { margin-top: 8px; }
 .review-body { padding: 0 2px 10px 26px; font-size: 13px; color: var(--ink-2); } .review-body p { margin: 0 0 6px; }
 
-/* Barre repliée (ou écran étroit) : le menu utilisateur s'ouvre à droite du rail au lieu d'être rogné */
+/* Collapsed bar (or narrow screen): the user menu opens to the right of the rail instead of being clipped */
 html.side-min .side { overflow: visible; }
 html.side-min .usermenu .menu { left: calc(100% + 12px); bottom: 0; }
 html.side-min .usermenu > summary { justify-content: center; padding: 6px 0; }
@@ -426,11 +429,11 @@ html.side-min .usermenu > summary { justify-content: center; padding: 6px 0; }
   .usermenu > summary { justify-content: center; padding: 6px 0; }
   .version { display: none; }
 }
-/* Boîte de réception : liens vers les changements et relance des relectures */
+/* Inbox: links to changes and restart reviews */
 .links { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0; }
 .callout ul.bul { margin: 4px 0 0; }
 .decide + form.inline { margin-top: 8px; }
-/* Dépôts : le nom passe avant la pastille d'onboarding et le chemin */
+/* Repos: the name comes before the onboarding badge and the path */
 .row.repo .r-title .t { flex: 0 1 auto; min-width: 3ch; }
 .row.repo .r-title .pill { flex-shrink: 0; }
 .list:not(.inbox) > .row.repo { grid-template-columns: 10px minmax(220px, 2fr) minmax(0, 1.2fr) minmax(0, 140px) 56px; }
@@ -439,18 +442,18 @@ details.long > summary { cursor: pointer; list-style: none; } details.long > sum
 details.long[open] > summary { display: none; }
 .tbl td.actions { white-space: nowrap; text-align: right; } .tbl td.actions > * { display: inline-flex; vertical-align: middle; margin-left: 6px; }
 
-/* Notifications : événements d'un canal sur trois colonnes */
+/* Notifications: events from a channel on three columns */
 fieldset.evts { border: 0; padding: 0; margin: 12px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 16px; }
 fieldset.evts legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
 
-/* Références de jobs : jamais coupées (jusqu'à « FAB-123456789 ») */
+/* Job references: never truncated (up to "FAB-123456789") */
 .audit-tbl th.col-ref { min-width: 15ch; } .audit-tbl td:nth-child(4) { white-space: nowrap; }
 
-/* Pages de connexion et de premier démarrage */
+/* Login and onboarding pages */
 .auth-form { text-align: left; display: grid; gap: 6px; margin-top: 14px; min-width: min(360px, 86vw); } .auth-form button { margin-top: 10px; justify-content: center; }
 .auth-box .bad { color: var(--bad, #ef4444); }
 
-/* Mise en route */
+/* Getting started */
 .start-steps { list-style: none; margin: 16px 0; padding: 0; display: grid; gap: 10px; }
 .start-steps li { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; }
 .start-steps li > div { flex: 1; } .start-steps li p { margin: 2px 0 0; }
@@ -458,13 +461,13 @@ fieldset.evts legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
 .start-steps li.done .st { background: var(--ok, #22c55e); color: #0b0b0b; border-color: transparent; }
 
 .auth-hint { margin: 2px 0 6px; text-align: left; } .inline-form p.small { margin: 8px 0 0; }
-/* Nouvelle demande : type (changement ou étude) ; rapport d'étude dans le job */
+/* New request: type (change or study); study report in the job */
 fieldset.kind { margin: 0 0 14px; display: grid; gap: 6px; }
 fieldset.kind legend { padding: 0; margin-bottom: 6px; font-weight: 600; }
 fieldset.kind .check-row { align-items: flex-start; }
 fieldset.kind .check-row input { margin-top: 3px; flex: none; }
 .report { white-space: pre-wrap; max-height: 70vh; overflow: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px; line-height: 1.55; }
-/* ---------- Inbox : une carte par élément (type, âge, titre, raison en entier, contexte) ---------- */
+/* ---------- Inbox: one card per item (type, age, title, full reason, context) ---------- */
 .list.inbox .row.irow { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: start; gap: 12px; padding: 12px 16px 12px 22px; min-height: 0; }
 .irow > .dot { margin-top: 6px; }
 .i-main { display: grid; gap: 3px; min-width: 0; }
@@ -479,11 +482,11 @@ details.ctx { margin: 0 0 14px; } details.ctx > summary { cursor: pointer; font-
 details.ctx[open] > summary .link { display: none; }
 .p-body .report { max-height: 46vh; }
 @media (max-width: 900px) {
-  .work > .panel.auto { display: none; }   /* petit écran : la liste d'abord, le détail au toucher */
+  .work > .panel.auto { display: none; }   /* small screen: list first, detail on touch */
 }
 .repo-info { margin: 6px 0 14px; }
 details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13px; }
-/* ---------- Jobs : vues personnelles (menu utilisateur). Par défaut, une colonne et un groupe par étape. ---------- */
+/* ---------- Jobs: personal views (user menu). By default, one column and one group per step. ---------- */
 .board.compact { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow-x: hidden; }
 .board.compact > .col { width: auto; min-width: 0; flex: none; }
 .c-stage .pill { font-size: 12px; }
@@ -495,17 +498,17 @@ details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13p
 .usermenu form.theme-pick { display: grid; grid-template-columns: repeat(2, 1fr); }
 .list.flat .r-status .st { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) { .board.compact { grid-template-columns: repeat(4, minmax(240px, 1fr)); overflow-x: auto; } }
-/* Nouvelle demande : libellés selon le type choisi (changement ou étude) */
+/* New request: labels according to the chosen type (change or study) */
 .kinded .k-study, .kinded.is-study .k-change { display: none; }
 .kinded.is-study .k-study { display: revert; }
 .kinded > .lead { margin: 0 0 16px; }
 .account-page { max-width: 560px; padding: 24px 24px 60px; }
-/* Providers Git : résultat du test, actions de ligne */
+/* Git providers: test result, line actions */
 .git-test { margin: 8px 0 0; }
 .git-test.err { color: var(--red, #e5484d); }
 .row-acts { display: flex; gap: 6px; justify-content: flex-end; }
 .danger-zone { padding-bottom: 72px; }
-/* Petit écran : la barre latérale s'ouvre par-dessus la page (bouton de la barre du haut) */
+/* Small screen: the sidebar opens over the page (top bar button) */
 @media (max-width: 900px) {
   html.side-open .side { position: fixed; inset: 0 auto 0 0; width: min(80vw, 264px); z-index: 60; box-shadow: var(--shadow); overflow-y: auto; }
   html.side-open .side .lbl { display: revert; } html.side-open .me .lbl { display: flex; }
@@ -514,19 +517,19 @@ details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13p
   html.side-open .me { justify-content: flex-start; padding: 6px; }
   html.side-open .version { display: block; }
 }
-/* Petit écran : les outils marqués .keep restent accessibles, réduits à leur icône (les jobs archivés) */
+/* Small screen: tools marked .keep remain accessible, reduced to their icon (archived jobs) */
 @media (max-width: 900px) {
   .top-tools .tool.keep { display: inline-flex; font-size: 0; gap: 0; padding: 0 7px; }
   .top-tools .tool.keep .ic { width: 18px; height: 18px; } .top-tools .tool.keep .n { font-size: 11px; margin-left: 3px; }
   .top h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
-/* Petit écran : Settings lisibles sans défilement horizontal de la page */
+/* Small screen: Settings readable without horizontal page scrolling */
 @media (max-width: 900px) {
   .settings { grid-template-columns: minmax(0, 1fr); }
   .tabs { padding: 8px 10px; gap: 4px; } .tabs a { white-space: nowrap; flex: none; }
   .tab-body { min-width: 0; padding: 14px 12px 40px; }
   .box { padding: 14px 12px; min-width: 0; }
-  .box .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }   /* un tableau large défile dans son cadre */
+  .box .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; white-space: nowrap; }   /* a wide table scrolls within its frame */
   .box .mono, .box code, .now { overflow-wrap: anywhere; }
   .status-line { display: flex; flex-wrap: wrap; gap: 6px; }
   .row-end { justify-content: flex-start; } .row-end small { margin-right: 0; flex-basis: 100%; }
@@ -534,9 +537,9 @@ details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13p
   .frm input, .frm select, .frm textarea { max-width: 100%; min-width: 0; }
 }
 @media (max-width: 900px) { .status-line .pill, .tab-body .pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; height: auto; } }
-/* Cellules d'actions : boutons et formulaires sur une même ligne, centrés verticalement */
+/* Action cells: buttons and forms on the same line, vertically centered */
 .tbl td.actions form { margin: 0; } .tbl td.actions > * { align-items: center; } .tbl td.actions .btn { margin: 0; }
-/* Connexion : SSO mis en avant, connexion locale repliée en dessous */
+/* Login: SSO highlighted, local login collapsed below */
 .auth-choices { display: grid; gap: 10px; margin-top: 18px; width: min(360px, 86vw); }
 .auth-choices .btn { margin-top: 0; }
 .auth-wide { display: flex; justify-content: center; width: 100%; height: 40px; font-weight: 600; }
@@ -545,13 +548,13 @@ details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13p
 .auth-local > summary { list-style: none; cursor: pointer; } .auth-local > summary::-webkit-details-marker { display: none; }
 .auth-local[open] > summary { margin-bottom: 4px; }
 .auth-local .auth-form { min-width: 0; }
-/* Fenêtre modale : bouton de fermeture */
+/* Modal window: close button */
 .dlg { position: relative; } .dlg-x { position: absolute; top: 12px; right: 12px; }
-/* Logo : symbole « F convoyeur » et nom en Jost */
+/* Logo: "F conveyor" symbol and name in Jost */
 .logo-mark { width: 23.4px; height: 31px; flex: none; fill: var(--accent); }
 .brand .lbl { font-family: "Jost", var(--font, sans-serif); font-weight: 600; letter-spacing: -.01em; font-size: 25px; line-height: 1; }
 .logo-icon { display: block; width: 48px; height: 48px; margin: 0 auto; }
-/* Profils de modèles : tableau des rôles, empilé sur téléphone (un bloc par rôle, modèle puis effort) */
+/* Model profiles: roles table, stacked on mobile (one block per role, model then effort) */
 .tbl.roles td select { width: 100%; min-width: 0; }
 .tbl.roles .m-lbl { display: none; }
 @media (max-width: 900px) {
@@ -563,7 +566,7 @@ details.ctx > summary .link { margin-left: 8px; font-weight: 400; font-size: 13p
   .tbl.roles .m-lbl { display: block; margin-bottom: 4px; }
 }
 .tbl.roles .example { color: var(--ink-2); font-style: italic; }
-/* Logo complet dans la barre latérale (F atelier + « abrique ») ; le F seul quand la barre est réduite */
+/* Full logo in the side panel (F workshop + "abrique"); the F alone when the bar is collapsed */
 .brand .wordmark { display: block; height: 50px; width: auto; color: var(--ink); }
 .brand .lbl { display: block; line-height: 0; }
 .brand .logo-mark { display: none; width: 28px; height: 35px; }
@@ -574,7 +577,7 @@ html.side-min .brand .logo-mark { display: block; }
   .brand .logo-mark { display: block; } .brand .lbl { display: none; }
   html.side-open .brand .logo-mark { display: none; } html.side-open .brand .lbl { display: block; }
 }
-/* Archives : écran de recherche dépouillé, puis la liste */
+/* Archives: stripped-down search screen, then the list */
 .arch-search { max-width: 980px; margin: 4px 0 14px; }
 .arch-q-l { display: block; font-weight: 600; margin-bottom: 6px; }
 .arch-search input[type=search] { width: 100%; height: 44px; font-size: 16px; padding: 0 14px; border-radius: var(--r-lg); }
@@ -600,11 +603,11 @@ html.side-min .brand .logo-mark { display: block; }
 }
 .arch-tbl tr:has(a.sel) { background: var(--surface-2, rgba(128,128,128,.10)); }
 .arch-title a.plain { color: inherit; text-decoration: none; } .arch-title a.plain:hover { text-decoration: underline; }
-/* Archives avec le panneau ouvert : la liste se resserre sur l'essentiel (les actions sont dans le panneau) */
+/* Archives with the dashboard open: the list narrows down to the essentials (actions are in the dashboard) */
 .arch-title { min-width: 180px; overflow-wrap: break-word; }
 @media (min-width: 901px) { .with-panel .arch-tbl .c-x { display: none; } }
 
-/* ---- Diff d'un job (fiche du job et inbox) ---- */
+/* ---- Diff of a job (job card and inbox) ---- */
 .dfiles { list-style: none; margin: 0 0 8px; padding: 0; max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); }
 .dfiles li { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12.5px; min-width: 0; }
 .dfiles li + li { border-top: 1px solid var(--line); }
@@ -632,3 +635,11 @@ html.side-min .brand .logo-mark { display: block; }
 .dl.rem { background: var(--bad-bg); } .dl.rem .tx::before { content: "−"; color: var(--bad); }
 .dl.hunk { background: var(--blue-bg); color: var(--ink-2); } .dl.hunk .tx::before { content: ""; width: 0; }
 .dl.note .tx { color: var(--ink-3); font-style: italic; }
+/* Machine translation of a job's texts: the bar that offers or announces it, and the translated texts themselves. */
+.tx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0 2px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }
+.tx-bar form { margin: 0; }
+.tx-note { font-weight: 600; color: var(--blue); }
+.mt { text-decoration: underline dotted; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
+
+.hint-warn { color: var(--amber); }
+p.hint-warn { margin-top: 4px; }

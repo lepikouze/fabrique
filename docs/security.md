@@ -66,13 +66,36 @@ The agent writes the whole workspace, `.git` folder included. So the runner neve
 
 ## Instructions are not gates
 
-The instructions given to the agent, and the hook that filters its commands in Claude Code (`runner/garde.py`), reduce
+The instructions given to the agent, and the hook that filters its commands in Claude Code (`runner/guard.py`), reduce
 mistakes; they are not security boundaries. The boundaries are the container, the network, the absence of secrets and
-the verifications done by the runner and the dashboard.
+the checks done by the runner and the dashboard.
+
+What the hook does with a Bash command: it reads the line the way a shell does and refuses a network tool, a container
+or privilege tool, `env`/`printenv`/`export`, or a remote Git operation wherever it is *run* (any command position,
+`$(...)`, `sh -c`, `eval`, `xargs`, `find -exec`, a path such as `/usr/bin/env`, a name spelled with quotes, a command
+name held in a variable). A file name or a quoted text that merely contains such a word passes (`cat docker-compose.yml`,
+`git commit -m "add CSV export"`). References to the sensitive variables and to `/proc` are refused anywhere. A line
+that cannot be parsed falls back on the broad rule: the word anywhere refuses it.
+
+Known limits of the hook, which it does not claim to cover:
+
+- a script the agent writes and then runs (`python tool.py`, `sh build.sh`, a `Makefile` target, an `npm run` script)
+  is not inspected: it can read its own environment or call any program present in the image;
+- inline code is only matched against words (`environ`, `getenv`, the forbidden program names): code that builds these
+  names at run time, or decodes itself, passes;
+- wrappers the hook does not know (it knows the common ones: `xargs`, `timeout`, `nohup`, `poetry run`, `npx`…) hide
+  the command they start.
+
+This is acceptable because of what the job's environment holds. The container itself starts with `HOME` only. The agent's
+process receives: `PATH`, `HOME`, the Git author name and e-mail, the egress proxy address, the model name, the address
+of the runner's key gateway with **the job's own token** (valid for this job, within its budget, for its models only),
+and the `fab` relay address with **the job's relay token** (it can only report on this job). It never holds a Git
+token, a model provider key, or any credential of the runner; there is no Docker socket and no container tool in the
+job image.
 
 ## Code kept by the dashboard
 
-The dashboard never clones a repo and holds no Git token of its own use. Since 0.7.5 it does keep **text that comes
+The dashboard never clones a repo and uses no Git token itself. Since 0.7.5 it does keep **text that comes
 from the repos**, sent by the runner: the diff of each job's verified commit, so that a reviewer can read it in place.
 
 - **Where**: the `diffs` table of the dashboard's database, one row per job (the latest diff replaces the previous
@@ -82,7 +105,7 @@ from the repos**, sent by the runner: the diff of each job's verified commit, so
 - **How long**: as long as the job exists. Deleting a job deletes its diff.
 - **What it is used for**: display only. It is escaped like any other text from a repo or an agent (strict content
   security policy, no inline script), and no gate reads it.
-- **Turning it off for a confidential repo**: untick « Afficher le diff dans la Fabrique » in the repo's settings
+- **Turning it off for a confidential repo**: untick “Show the diff in Fabrique” in the repo's settings
   (admins only, on by default). From then on the runner sends no diff for that repo, the dashboard refuses to store one
   even if a runner sends it, and the diffs already stored for that repo are deleted at once (the audit log says how
   many). The job page says the diff is not kept and links to the pull request: the review happens on the Git host.
@@ -91,6 +114,41 @@ from the repos**, sent by the runner: the diff of each job's verified commit, so
 
 Check outputs, the agent's messages and study reports were already kept in the same database; they too can quote the
 repo.
+
+## What goes to the translation model
+
+Translating a job (the “Translate” button, never automatic) sends text from the dashboard to the model chosen as
+translation model. A deployment that must keep everything on its own network chooses a local model, or none: without
+a chosen model the button does not exist.
+
+- **Sent**: the prose written by the job's agents and reviewers, and nothing else: interpretation, assumptions,
+  verdict, notes, questions, study report, reviewers' summaries and points, step summaries.
+- **Never sent**: the code, the diff, the output of checks and commands, the request typed by a person, secrets, the
+  audit log.
+- This prose can quote file names or short pieces of code the agent mentioned. A study report is prose about the
+  repository: on a confidential repo, treat the translation model like the model that ran the study.
+- The text is framed as data: the model is told never to follow an instruction it contains. A translation is only
+  displayed, escaped, and never acted upon.
+- The translation is stored in the dashboard's database, per job and language, and deleted with the job. The audit log
+  records who asked, the language, the number of texts, the model and the cost, never the texts.
+
+## What goes to the model when a request is filed
+
+When a change request is sent from the form, Fabrique makes one short call to the model that would run the job, to
+check the request against a fixed grid (what must change, where, how to know it is done).
+
+- **Sent**: the title, the need and the “Done when” criterion typed by the requester. Nothing from the repo, no code,
+  no other job.
+- **To which model**: the one the job would use (request choice, then repo, then global setting). A confidential repo
+  whose jobs run on a local model is therefore checked by that local model.
+- **The request is data.** The model is told never to follow an instruction it contains, and its answer is read
+  strictly: a JSON object saying “clear”, or one to three questions, each cut to 240 characters. Anything else is
+  ignored. The questions are only ever shown, escaped, to the person who wrote the request; they change no gate, no
+  setting and no right.
+- **Never blocking**: a model that is missing, slow (8 seconds) or failing is ignored and the request is filed.
+- **Audit**: one line per check, with the model, the outcome, the cost and the duration; never the request nor the
+  questions.
+- Studies and requests created through the API are not checked.
 
 ## Sign-in and secrets
 
@@ -103,10 +161,10 @@ repo.
 - **A secret does not follow a change of destination.** Changing the address of a model provider, a Git provider, a
   Jira or an SMTP server requires entering the key, token or password again: a stored secret is never sent to an
   address it was not entered for.
-- Runner tokens are only kept as a hash. « Renouveler le token » issues a new one without recreating the runner (the
-  old one stops working at once); « Révoquer » cuts access immediately.
-- **Revocable sessions.** Signing out, changing your password or an admin's « Déconnecter » button (Settings →
-  Utilisateurs) closes all the account's open sessions, server-side: a copied session cookie is worth nothing. Removing
+- Runner tokens are only kept as a hash. “Renew the token” issues a new one without recreating the runner (the
+  old one stops working at once); “Revoke” cuts access immediately.
+- **Revocable sessions.** Signing out, changing your password or an admin's “Sign out” button (Settings →
+  Users) closes all the account's open sessions, server-side: a copied session cookie is worth nothing. Removing
   someone's role removes all their access from the next request.
 - Requests that change state are refused if they come from another origin.
 - **Generated secrets.** `SESSION_SECRET` and `FABRIQUE_SECRET_KEY`, if they do not come from the environment, are

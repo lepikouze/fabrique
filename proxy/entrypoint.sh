@@ -1,11 +1,11 @@
 #!/bin/sh
-# Proxy de sortie des jobs : liste blanche STRICTE (FilterDefaultDeny), noms d'hôtes ou adresses en expressions régulières
-# séparées par des virgules dans PROXY_ALLOW. Tout le reste est refusé (réseau local compris).
-# Derrière un proxy d'entreprise : PROXY_UPSTREAM=http://hôte:port envoie les requêtes autorisées à ce proxy au lieu de
-# sortir en direct ; PROXY_NO_UPSTREAM liste les domaines internes à joindre sans lui (ex. « .exemple.org,depot.interne »).
+# Jobs egress proxy: STRICT allowlist (FilterDefaultDeny), hostnames or addresses in regular expressions
+# separated by commas in PROXY_ALLOW. Everything else is refused (including local network).
+# Behind an enterprise proxy: PROXY_UPSTREAM=http://host:port sends authorized requests to this proxy instead of
+# going out directly; PROXY_NO_UPSTREAM lists the internal domains to reach without it (e.g. ".example.org,git.internal").
 set -eu
-: "${PROXY_ALLOW:?PROXY_ALLOW manquant}"
-conf=/tmp/tinyproxy.conf; filt=/tmp/filtre
+: "${PROXY_ALLOW:?PROXY_ALLOW missing}"
+conf=/tmp/tinyproxy.conf; filt=/tmp/filter
 printf '%s\n' "$PROXY_ALLOW" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' > "$filt"
 cat > "$conf" <<CONF
 Port 3128
@@ -25,12 +25,12 @@ ConnectPort 443
 CONF
 up=$(printf '%s' "${PROXY_UPSTREAM:-}" | sed -E 's#^[a-zA-Z]+://##; s#/+$##')
 if [ -n "$up" ]; then
-  printf '%s' "$up" | grep -Eq '^[A-Za-z0-9._-]+:[0-9]{1,5}$' || { echo "PROXY_UPSTREAM invalide (attendu : http://hôte:port, sans identifiant)" >&2; exit 1; }
+  printf '%s' "$up" | grep -Eq '^[A-Za-z0-9._-]+:[0-9]{1,5}$' || { echo "invalid PROXY_UPSTREAM (expected: http://host:port, without credentials)" >&2; exit 1; }
   echo "Upstream http $up" >> "$conf"
   printf '%s\n' "${PROXY_NO_UPSTREAM:-}" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -E '^[A-Za-z0-9._-]+$' | while read -r d; do
     echo "Upstream none \"$d\"" >> "$conf"
   done
-  echo "proxy de sortie, en amont : $up"
+  echo "egress proxy, upstream: $up"
 fi
-echo "proxy de sortie, autorisé :"; sed 's/^/  - /' "$filt"
+echo "egress proxy, allowed:"; sed 's/^/  - /' "$filt"
 exec tinyproxy -d -c "$conf"

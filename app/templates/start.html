@@ -3,14 +3,14 @@
 {% block content %}
 <section class="box start-box">
  <h2>Setup</h2>
- <p class="muted">Ce qu'il faut avant de déposer une première demande. Cette page disparaît du menu quand tout est fait.</p>
+ <p class="muted">What is needed before filing a first request. This page leaves the menu once everything is done.</p>
  <ol class="start-steps">
  {% for label, done, link, help in steps %}
   <li class="{{ 'done' if done }}"><span class="st" aria-hidden="true">{{ '✓' if done else loop.index }}</span>
-   <div><b>{{ label }}</b>{% if done %} <span class="ok">fait</span>{% endif %}<p class="muted">{{ help }}</p></div>
-   {% if not done %}<a class="btn" href="{{ link }}">Régler</a>{% endif %}</li>
+   <div><b>{{ label }}</b>{% if done %} <span class="ok">done</span>{% endif %}<p class="muted">{{ help }}</p></div>
+   {% if not done %}<a class="btn" href="{{ link }}">Set up</a>{% endif %}</li>
  {% endfor %}
  </ol>
- {% if steps|rejectattr(1)|list|length == 0 %}<p><a class="btn primary" href="/new">Déposer une première demande</a></p>{% endif %}
+ {% if steps|rejectattr(1)|list|length == 0 %}<p><a class="btn primary" href="/new">File a first request</a></p>{% endif %}
 </section>
 {% endblock %}

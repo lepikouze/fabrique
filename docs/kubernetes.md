@@ -46,7 +46,7 @@ administrator account, then follow the Setup page. The built-in runner registers
 
 Every value is commented in [`values.yaml`](../deploy/helm/fabrique/values.yaml). For a presentation or a trial,
 `dashboard.demo: true` turns on demonstration mode (fictitious jobs, runners and costs, shown or hidden in Settings →
-Démonstration); leave it at `false` in real use.
+Demo); leave it at `false` in real use.
 
 ## Secrets
 

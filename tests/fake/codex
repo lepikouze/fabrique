@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Faux Codex CLI (codex exec --json) pour les tests du runner : événements JSONL, fab, modification du dépôt."""
+"""Fake Codex CLI (codex exec --json) for the runner tests: JSONL events, fab, a change to the repo."""
 import json, os, subprocess, sys
 args = sys.argv[1:]
 assert args[0] == "exec"
@@ -12,16 +12,16 @@ def fab(*a): subprocess.run(FAB + list(a), check=True, capture_output=True)
 assert os.path.isdir(os.environ["CODEX_HOME"]) and os.environ.get("FAB_MODEL_KEY")
 cfg = [args[i + 1] for i, a in enumerate(args) if a == "-c"]
 assert 'model_provider="fabrique"' in cfg and any(c.startswith("model_providers.fabrique=") for c in cfg)
-assert resume or "<consignes_fabrique>" in prompt
+assert resume or "<fabrique_instructions>" in prompt
 out({"type": "thread.started", "thread_id": resume or "thr-codex-1"})
 out({"type": "turn.started"})
 out({"type": "item.started", "item": {"id": "i1", "type": "command_execution", "command": "bash -lc ls", "status": "in_progress"}})
-fab("etape", "triage", "compris (codex)")
-with open("carnet.py", "w") as f:
+fab("step", "triage", "compris (codex)")
+with open("notebook.py", "w") as f:
     f.write("def ok():\n    return True\n")
-out({"type": "item.completed", "item": {"id": "i2", "type": "file_change", "changes": [{"path": "carnet.py", "kind": "update"}]}})
+out({"type": "item.completed", "item": {"id": "i2", "type": "file_change", "changes": [{"path": "notebook.py", "kind": "update"}]}})
 subprocess.run(["git", "add", "-A"], check=True)
 subprocess.run(["git", "commit", "-qm", "changement de codex"], check=True, capture_output=True)
-fab("decision", "--confiant", "oui", "--verdict", "fait", "--interpretation", "compris")
+fab("decision", "--confident", "yes", "--verdict", "fait", "--interpretation", "compris")
 out({"type": "item.completed", "item": {"id": "i3", "type": "agent_message", "text": "fini"}})
 out({"type": "turn.completed", "usage": {"input_tokens": 100000, "cached_input_tokens": 50000, "output_tokens": 10000}})

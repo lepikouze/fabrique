@@ -1,5 +1,6 @@
-"""Fabrique — dashboard (plan de check) : inbox, jobs (tableau / liste, dashboard latéral agrandissable),
-nouvelle demande, runners, repos, settings, activité. Temps réel par SSE (/events/stream)."""
+"""Fabrique — dashboard (control plane): inbox, jobs (board / list, side panel that can be expanded),
+new request, runners, repos, settings, activity. Real-time via SSE (/events/stream)."""
+from .i18n import M
 import asyncio, datetime as dt, json, logging, os, re, time
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlencode, quote, urlsplit
@@ -9,11 +10,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import insert, select, update
-from . import auth, config, db, demo, forges, jobs, notify, profiles, providers, work
+from . import auth, config, db, demo, forges, i18n, jobs, notify, profiles, providers, translate, work, challenge
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 HERE = os.path.dirname(__file__)
-MOIS = ("janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc.")
 
 
 @asynccontextmanager
@@ -45,65 +45,56 @@ def hms(ts):
     return dt.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "—"
 
 
-def quand(ts):
-    """14:03 aujourd'hui, sinon « 9 nov. »."""
+def when(ts):
+    """14:03 today, otherwise "Nov 9"."""
     if not ts:
         return "—"
     d = dt.datetime.fromtimestamp(ts)
-    return d.strftime("%H:%M") if d.date() == dt.date.today() else f"{d.day} {MOIS[d.month - 1]}"
+    return d.strftime("%H:%M") if d.date() == dt.date.today() else i18n.short_date(d)
 
 
-def depuis(ts):
-    """Âge lisible : « à l'instant », « depuis 12 min », « depuis 3 h », « depuis 2 j »."""
+def since(ts):
+    """Readable age: "just now", "12 min ago", "3 h ago", "2 d ago"."""
     if not ts:
         return "—"
-    s = max(0, time.time() - ts)
-    if s < 90:
-        return "à l'instant"
-    if s < 3600:
-        return f"depuis {int(s // 60)} min"
-    if s < 86400:
-        return f"depuis {int(s // 3600)} h"
-    return f"depuis {int(s // 86400)} j"
+    return i18n.since(ts, "since")
 
 
-def date_longue(ts):
-    d = dt.datetime.fromtimestamp(ts)
-    return f"{d.day} {MOIS[d.month - 1]} {d.year} à {d:%H:%M}"
+def long_date(ts):
+    return i18n.long_date(dt.datetime.fromtimestamp(ts))
 
 
-def il_y_a(ts):
-    s = max(0, time.time() - (ts or 0))
-    return "à l'instant" if s < 60 else f"il y a {int(s // 60)} min" if s < 3600 else f"il y a {int(s // 3600)} h" if s < 86400 else f"il y a {int(s // 86400)} j"
+def ago(ts):
+    return i18n.since(ts, "ago")
 
 
 def tokens(n):
-    n = n or 0
-    return (f"{n / 1e6:.1f}".replace(".", ",") + "\u202fM") if n >= 1e6 else f"{n / 1e3:.0f}\u202fk" if n >= 1e3 else str(n)
+    return i18n.tokens(n)
 
 
 def money(x):
-    return f"{x or 0:.2f}".replace(".", ",") + "\u202f$"
+    return i18n.money(x)
 
 
-def duree(ms):
+def duration(ms):
     return f"{ms} ms" if ms < 1000 else f"{ms / 1000:.0f} s" if ms >= 10000 else f"{ms / 1000:.1f} s"
 
 
-templates.env.filters.update(hm=hm, hms=hms, quand=quand, depuis=depuis, date_longue=date_longue, il_y_a=il_y_a, tokens=tokens, money=money, duree=duree)
+i18n.install(templates.env)
+templates.env.filters.update(hm=hm, hms=hms, when=when, since=since, long_date=long_date, ago=ago, tokens=tokens, money=money, duration=duration)
 def _git_name(repo):
-    """Nom du provider Git d'un repo (« GitLab interne »), pour l'affichage."""
+    """Git provider name of a repo ("Internal GitLab"), for display."""
     with db.tx() as c:
         return forges.label(c, dict(repo))
 
 
-templates.env.globals.update(GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, PATCH=jobs.patch_info, DIFF_OFF=jobs.diff_off, REPORT_FORMATS=jobs.report_formats, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
+templates.env.globals.update(DONE_WHEN=jobs.done_when_of, DEFAULT_DONE=jobs.DEFAULT_DONE, GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, PATCH=jobs.patch_info, DIFF_OFF=jobs.diff_off, REPORT_FORMATS=jobs.report_formats, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
                              can=auth.can, PROVIDERS={"forgejo": "Forgejo", "gitea": "Gitea", "gitlab": "GitLab", "github": "GitHub"},
                              ONB={"pending": ("Onboarding", "var(--blue)"), "analyzing": ("Onboarding", "var(--blue)"),
-                                  "requested": ("Création à valider", "var(--amber)"), "creating": ("Création", "var(--blue)"),
-                                  "waiting": ("En attente du repo", "var(--amber)"), "empty": ("Repo vide", "var(--amber)"),
-                                  "blank": ("Vierge", "var(--blue)"),
-                                  "ready": ("Prêt", "var(--ok)"), "failed": ("Échec", "var(--bad)")})
+                                  "requested": (M("Creation to approve"), "var(--amber)"), "creating": (M("Creation"), "var(--blue)"),
+                                  "waiting": (M("Waiting for the repo"), "var(--amber)"), "empty": (M("Empty repo"), "var(--amber)"),
+                                  "blank": (M("Blank"), "var(--blue)"),
+                                  "ready": (M("Ready"), "var(--ok)"), "failed": (M("Failed"), "var(--bad)")})
 auth.templates = templates
 
 SECURITY_HEADERS = {
@@ -112,19 +103,37 @@ SECURITY_HEADERS = {
                                "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 }
 app.add_middleware(auth.AuthLayer)
-app.add_middleware(db.RequestCache)   # ajouté en dernier : le plus à l'extérieur, il couvre aussi l'authentification
+app.add_middleware(db.RequestCache)   # added last: the outermost one, it also covers authentication
 app.include_router(auth.router)
 
 
 @app.middleware("http")
+async def language(request: Request, call_next):
+    """Request language: the person's choice (cookie), otherwise their browser, otherwise the instance language."""
+    cookie = request.cookies.get(i18n.COOKIE, "")
+    if cookie in i18n.LANGS:
+        lang = cookie
+    else:
+        codes = (p.split(";")[0].strip().lower()[:2] for p in request.headers.get("accept-language", "").split(","))
+        lang = next((code for code in codes if code in i18n.LANGS), None) or i18n.default_lang()
+    token = i18n.use(lang, choice=cookie)
+    i18n.show_translations(None)
+    i18n.original(request.query_params.get("orig") == "1")      # the reader asked for the original texts of a job
+    try:
+        return await call_next(request)
+    finally:
+        i18n._lang.reset(token)
+
+
+@app.middleware("http")
 async def same_origin_guard(request: Request, call_next):
-    """Anti-CSRF sans token : une requête qui modifie l'état doit venir du dashboard lui-même."""
+    """Non-token anti-CSRF: a request that modifies state must come from the dashboard itself."""
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         host = request.headers.get("host", "")
         sfs = request.headers.get("sec-fetch-site")
         origin = request.headers.get("origin") or request.headers.get("referer")
         if sfs in ("cross-site", "same-site") or (origin and urlsplit(origin).netloc != host):
-            return JSONResponse({"error": "requête d'une autre origine refusée"}, status_code=403)
+            return JSONResponse({"error": M("request from another origin refused")}, status_code=403)
     resp = await call_next(request)
     for k, v in SECURITY_HEADERS.items():
         resp.headers.setdefault(k, v)
@@ -138,7 +147,7 @@ FLASH = "fabrique_flash"
 
 
 def back(url, ok=None, err=None):
-    """Redirection après un formulaire, avec un message (cookie de courte durée, lu une fois)."""
+    """Redirection after a form, with a message (short-lived cookie, read once)."""
     r = RedirectResponse(url, status_code=303)
     if ok or err:
         r.set_cookie(FLASH, quote(json.dumps({"ok": ok, "err": err}, ensure_ascii=False)), max_age=30, httponly=True, samesite="lax",
@@ -159,7 +168,7 @@ def _flash(request):
 
 
 class PendingAccess(Exception):
-    """Compte connu mais sans rôle (en attente d'un admin) : seule la page « Mon accès » est ouverte."""
+    """Known account but without a role (awaiting an admin): only the "My access" page is open."""
 
 
 def user_of(request, pending_ok=False):
@@ -172,7 +181,7 @@ def user_of(request, pending_ok=False):
 
 
 def start_steps():
-    """Setup d'une installation neuve : ce qui reste à faire avant le premier job (pour les admins)."""
+    """Setup of a new installation: what remains to be done before the first job (for admins)."""
     with db.tx() as c:
         runners = db.rows(c, select(db.runners.c.online, db.runners.c.token_hash))
         provs = [p for p in providers.listing(c) if p.get("has_key") or p.get("type") == "compatible"]
@@ -182,12 +191,12 @@ def start_steps():
         repos = db.rows(c, select(db.repos.c.onboarding, db.repos.c.recipe))
     live = [r for r in runners if r["token_hash"]]
     return [
-        ("Compte administrateur", True, "/settings?tab=users", "Créé au premier démarrage ; c'est aussi le compte de secours."),
-        ("Un runner en ligne", any(r["online"] for r in live), "/runners", "Le runner intégré s'enregistre seul ; il apparaît en ligne en moins d'une minute."),
-        ("Un modèle par défaut", bool(provs) and model_ok, "/settings?tab=agents",
-         "Ajoute un provider (Anthropic, OpenAI ou serveur local), sa clé, coche les modèles à proposer, puis choisis l'agent et le modèle par défaut."),
-        ("Un provider Git", any(g.get("token") for g in git) or bool(repos), "/settings?tab=git", "Adresse de la forge et token d'un compte robot dédié."),
-        ("Un premier repo", any(r["onboarding"] in ("ready", "blank") or r["recipe"] is not None for r in repos), "/repos", "Ajoute un repo : son onboarding démarre seul, puis merge la PR de recipe."),
+        (M("Administrator account"), True, "/settings?tab=users", M("Created at first start; it is also the fallback account.")),
+        (M("A runner online"), any(r["online"] for r in live), "/runners", M("The built-in runner registers itself; it shows up online in less than a minute.")),
+        (M("A default model"), bool(provs) and model_ok, "/settings?tab=agents",
+         M("Add a provider (Anthropic, OpenAI or local server), its key, tick the models to offer, then choose the default agent and model.")),
+        (M("A Git provider"), any(g.get("token") for g in git) or bool(repos), "/settings?tab=git", M("Git host address and the token of a dedicated bot account.")),
+        (M("A first repo"), any(r["onboarding"] in ("ready", "blank") or r["recipe"] is not None for r in repos), "/repos", M("Add a repo: its onboarding starts on its own; then merge the recipe PR.")),
     ]
 
 
@@ -197,25 +206,35 @@ def render(request, name, page, status=200, **kw):
     if u.get("role") == "admin" and not config.DEMO:
         todo = sum(1 for s in start_steps() if not s[1])
     access_request = None
-    if u.get("role") not in ("admin", None) and auth.mode() == "on":   # demande de rôle en cours, pour la fenêtre du menu
+    if u.get("role") not in ("admin", None) and auth.mode() == "on":   # role request in progress, for the menu window
         with db.tx() as c:
             me = db.one(c, select(db.users.c.requested_role, db.users.c.request_note).where(db.users.c.username == u.get("user", "")))
         if me and me["requested_role"]:
             access_request = {"role": me["requested_role"], "note": me["request_note"]}
+    prefs = view_prefs(request, u)
+    chosen = getattr(request.state, "account_lang", None)     # the choice kept on the account follows the person from one computer to another
+    if chosen in i18n.LANGS:
+        i18n.use(chosen, choice=chosen)
     ctx = dict(user=u, page=page, mode=auth.mode(), access_request=access_request, demo=jobs.demo_visible(), demo_mode=config.DEMO, flash=_flash(request),
-               view_prefs=view_prefs(request, u),
+               view_prefs=prefs,
                counters=jobs.counters(u), start_todo=todo, **kw)
     resp = templates.TemplateResponse(request, name, ctx, status_code=status)
     if ctx["flash"]:
         resp.delete_cookie(FLASH)
+    if chosen in i18n.LANGS and request.cookies.get(i18n.COOKIE) != chosen:
+        _lang_cookie(resp, chosen)
     return resp
 
 
-def forbidden(request, what="cette page"):
-    return render(request, "denied.html", "denied", status=403, what=what)
+def _lang_cookie(resp, lang):
+    resp.set_cookie(i18n.COOKIE, lang, max_age=365 * 86400, httponly=True, samesite="lax", secure=config.PUBLIC_URL.startswith("https://"))
 
 
-PREFS = "fabrique_jobs"   # sans compte (mode ouvert) : la préférence d'affichage reste dans le navigateur
+def forbidden(request, what=None):
+    return render(request, "denied.html", "denied", status=403, what=what or M("this page"))
+
+
+PREFS = "fabrique_jobs"   # without an account (open mode): the display preference remains in the browser
 PREF_CHOICES = {"board": ("stages", "compact"), "list": ("grouped", "flat")}
 
 
@@ -224,13 +243,14 @@ def _clean_prefs(got):
 
 
 def view_prefs(request, u=None):
-    """{'board': 'stages' | 'compact', 'list': 'grouped' | 'flat'} ; par défaut une colonne et un groupe par étape.
-    La préférence est gardée sur le compte : elle suit la personne d'un poste à l'autre."""
+    """{'board': 'stages' | 'compact', 'list': 'grouped' | 'flat'} ; by default one column and one group per step.
+    The preference is kept on the account: it follows the person from one computer to another."""
     u = u or auth.who(request) or {}
     if not u.get("local") and u.get("user"):
         with db.tx() as c:
             row = db.one(c, select(db.users.c.prefs).where(db.users.c.username == u["user"]))
         if row is not None:
+            request.state.account_lang = (row["prefs"] or {}).get("lang")
             return _clean_prefs((row["prefs"] or {}).get("jobs") or {})
     return _clean_prefs(dict(p.split(":", 1) for p in (request.cookies.get(PREFS) or "").split(",") if ":" in p))
 
@@ -273,7 +293,7 @@ def jobs_page(request: Request, view: str = "board", repo: int = 0, job: str = "
     with db.tx() as c:
         repo_list = db.rows(c, select(db.repos).order_by(db.repos.c.name))
     fam = f if f in jobs.FAMILY_OF.values() else ""
-    if flat:   # liste à plat : une ligne par job, par dernière activité ; filtre par famille d'étapes
+    if flat:   # flat list: one line per job, per last activity; filter by stage family
         shown = [j for j in js if not fam or jobs.FAMILY_OF.get(j["stage"]) == fam]
         groups = [(None, shown)]
     else:
@@ -284,7 +304,7 @@ def jobs_page(request: Request, view: str = "board", repo: int = 0, job: str = "
 
 @app.post("/prefs/jobs")
 def prefs_jobs(request: Request, board: str = Form(""), list_: str = Form("", alias="list")):
-    """Chacun choisit sa vue des jobs (menu utilisateur) ; rien n'est imposé aux autres."""
+    """Each user chooses their job view (user menu); nothing is imposed on others."""
     u = user_of(request)
     cur = view_prefs(request, u)
     if board in PREF_CHOICES["board"]:
@@ -301,11 +321,36 @@ def job_full(request: Request, ref: str, back: str = ""):
     u = user_of(request)
     j = jobs.get(u, ref)
     if not j:
-        return render(request, "denied.html", "denied", status=404, what="ce job")
-    # Venu des Archives avec une recherche en cours : on la garde pour y revenir (seulement ses paramètres connus).
+        return render(request, "denied.html", "denied", status=404, what=M("this job"))
+    # Came from Archives with a search in progress: it is kept to return to it (only its known parameters).
     q = parse_qs(back[:600])
     back_qs = urlencode({k: q[k][0][:200] for k in ("q", "repo", "state", "regex", "page") if q.get(k)})
     return render(request, "job_full.html", "jobs", j=j, back_qs=back_qs)
+
+
+@app.post("/jobs/{ref}/translate")
+async def job_translate(request: Request, ref: str):
+    """Translates what the job's agents wrote into the reader's language, with the model chosen in the settings.
+    Never automatic: only when the reader asks. Anyone who can see the job can ask."""
+    u = user_of(request)
+    here = _safe_back(request, f"/jobs/{ref}")
+
+    def run():
+        j = jobs.get(u, ref)
+        if not j:
+            return None
+        with db.tx() as c:
+            return translate.translate(c, u, j, i18n.current())
+    try:
+        res = await run_in_threadpool(run)
+    except translate.Unavailable as e:
+        return back(here, err=str(e))
+    if res is None:
+        return forbidden(request, M("this job"))
+    if not res["total"]:
+        return back(here, ok=M("Everything is already translated."))
+    note = M("{done} text(s) translated in {seconds} s", done=res['done'], seconds=res['seconds']) + (f" · {i18n.money(res['cost'])}" if res["cost"] else "")
+    return back(here, ok=note + (M(" · incomplete translation: run it again for the rest.") if res["partial"] else "."))
 
 
 @app.get("/jobs/{ref}/panel", response_class=HTMLResponse)
@@ -322,7 +367,7 @@ def inbox_page(request: Request, item: str = ""):
     u = user_of(request)
     items = jobs.inbox(u)
     cur = next((i for i in items if i["job"]["ref"] == item), None)
-    auto = not cur and bool(items)   # rien de choisi : le premier élément est ouvert d'office (sauf sur petit écran)
+    auto = not cur and bool(items)   # nothing selected: the first element is open by default (except on small screens)
     if auto:
         cur = items[0]
     detail = jobs.get(u, cur["job"]["ref"]) if cur else None
@@ -341,9 +386,9 @@ def inbox_panel(request: Request, ref: str):
     return templates.TemplateResponse(request, "_inbox_panel.html", {"cur": cur, "j": jobs.get(u, ref), "user": u})
 
 
-def _new_form(request, u, pre, status=200, error=""):
-    """Formulaire de demande. Chaque repo vient avec ce qui s'appliquera (agent, modèle, budget, merge), pour décider en
-    connaissance de cause ; « pre » garde la saisie (étude à prolonger, ou demande refusée à corriger)."""
+def _new_form(request, u, pre, status=200, error="", ask=None):
+    """Request form. Each repo comes with what will apply (agent, model, budget, merge), to decide with
+    full knowledge; "pre" keeps the input (study to be extended, or refused request to be corrected)."""
     repos = jobs.repos_for_requests()
     with db.tx() as c:
         models, _ = db.get_setting(c, "models")
@@ -351,7 +396,7 @@ def _new_form(request, u, pre, status=200, error=""):
         limits, _ = db.get_setting(c, "limits")
         profs = profiles.listing(c)
         for r in repos:
-            r["resolved"] = profiles.resolve(c, r["settings"] or {}, "formulaire")
+            r["resolved"] = profiles.resolve(c, r["settings"] or {}, "form")
     names = {m["id"]: m["name"] for m in models}
     for r in repos:
         rs = r["settings"] or {}
@@ -360,7 +405,8 @@ def _new_form(request, u, pre, status=200, error=""):
                      "review": names.get(extra["review_model"], extra["review_model"]), "budget": float(rs.get("budget_job") or limits["budget_job"]),
                      "policy": jobs.POLICIES.get(rs.get("merge_policy", "off"), jobs.POLICIES["off"])[0]}
     sel = pre.get("repo_id") or next((r["id"] for r in repos if r["is_default"]), repos[0]["id"] if repos else 0)
-    return render(request, "new.html", "new", status=status, repos=repos, models=models, pre=pre, sel_repo=sel, error=error, profs=profs)
+    return render(request, "new.html", "new", status=status, repos=repos, models=models, pre=pre, sel_repo=sel, error=error, profs=profs,
+                  ask=ask or [], short=challenge.SHORT_CHARS, short_words=challenge.SHORT_WORDS)
 
 
 @app.get("/new", response_class=HTMLResponse)
@@ -368,27 +414,42 @@ def new_page(request: Request):
     u = user_of(request)
     pre = {"ref": "", "title": "", "need": "", "done_when": "", "repo_id": 0, "study": False, "harness": "", "model": "", "profile": ""}
     src = request.query_params.get("from", "")
-    if src:   # « En faire une demande » depuis une étude rendue : formulaire prérempli, relu par un humain avant envoi
+    if src:   # "Make a request" from a submitted study: pre-filled form, reviewed by a human before submission
         j = jobs.get(u, src)
-        if j and j["source"] == "étude" and j.get("report"):
-            need = f"{j['request']}\n\nConclusions de l'étude {j['ref']} :\n{j['report']}"
-            pre.update(ref=j["ref"], title=f"Suite de {j['ref']} : {j['title']}"[:200], need=need[:8000], repo_id=j["repo_id"])
+        if j and j["source"] == "study" and j.get("report"):
+            need = f"{j['request']}\n\n" + i18n.tr(M("Conclusions of study {ref}:", ref=j['ref'])) + f"\n{j['report']}"
+            pre.update(ref=j["ref"], title=i18n.tr(M("Follow-up to {ref}: {title}", ref=j["ref"], title=j["title"]))[:200], need=need[:8000], repo_id=j["repo_id"])
     return _new_form(request, u, pre)
 
 
 @app.post("/new")
 def new_post(request: Request, title: str = Form(""), need: str = Form(""), done_when: str = Form(""), repo_id: int = Form(0),
-             harness: str = Form(""), model: str = Form(""), study: str = Form(""), profile: str = Form(""), choice: str = Form("")):
+             harness: str = Form(""), model: str = Form(""), study: str = Form(""), profile: str = Form(""), choice: str = Form(""),
+             challenged: str = Form(""), cq: list[str] = Form([]), ca: list[str] = Form([])):
     u = user_of(request)
     if choice:
         model, profile = profiles.parse_choice(choice)
+    pre = {"ref": "", "title": title[:200], "need": need[:8000], "done_when": done_when[:2000], "repo_id": repo_id,
+           "study": bool(study), "harness": harness, "model": model, "profile": profile}
+    if challenged:
+        # Second pass: the requester answered the questions (their answers complete the need) or sends anyway.
+        need = challenge.merge_answers(need, cq, ca)
+    elif not study and title.strip() and need.strip():
+        # A change request is read once against a fixed grid by the model that would run it; unclear, the requester sees
+        # one to three questions, completes or sends anyway. Never a refusal; a model that does not answer is not waited for.
+        with db.tx() as c:
+            repo = db.one(c, select(db.repos).where(db.repos.c.id == repo_id))
+            ask = challenge.check(c, u, title, need, done_when, repo, harness, model, profile) if repo else []
+        if ask:
+            return _new_form(request, u, pre, ask=ask)
     try:
         ref = jobs.create(u, title, need, done_when, repo_id, harness, model, study=bool(study), profile=profile)
-    except jobs.Refused as e:   # la saisie est gardée : rien à retaper
-        pre = {"ref": "", "title": title[:200], "need": need[:8000], "done_when": done_when[:2000], "repo_id": repo_id,
-               "study": bool(study), "harness": harness, "model": model, "profile": profile}
-        return _new_form(request, u, pre, status=400, error=str(e))
-    return back(f"/jobs?job={ref}", ok=f"{'Étude' if study else 'Demande'} {ref} déposée. Elle attend un runner.")
+    except jobs.Refused as e:   # input is preserved: nothing to retype
+        return _new_form(request, u, dict(pre, need=need[:8000]), status=400, error=str(e))
+    ok = M("{p} {ref} filed. It is waiting for a runner.", p=M('Study') if study else M('Request'), ref=ref)
+    if not study and not done_when.strip():   # a warning, never a refusal: the default criterion applies
+        ok = ok + M(" No “Done when” criterion was given: the default one applies.")
+    return back(f"/jobs?job={ref}", ok=ok)
 
 
 @app.post("/jobs/{ref}/answer")
@@ -398,7 +459,7 @@ def answer_post(request: Request, ref: str, answer: str = Form("")):
         jobs.answer(u, ref, answer)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok="Réponse envoyée. Le job reprend.")
+    return back(_safe_back(request, "/inbox"), ok=M("Answer sent. The job resumes."))
 
 
 @app.post("/jobs/{ref}/decide")
@@ -408,7 +469,7 @@ def decide_post(request: Request, ref: str, verdict: str = Form(""), note: str =
         jobs.decide(u, ref, verdict, note)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok="Merge approuvée." if verdict == "approve" else "Merge refusée.")
+    return back(_safe_back(request, "/inbox"), ok=M("Merge approved.") if verdict == "approve" else M("Merge refused."))
 
 
 @app.post("/jobs/{ref}/reviews")
@@ -418,7 +479,7 @@ def rereview_post(request: Request, ref: str):
         jobs.rereview(u, ref)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok="Vérification relancée : le runner relit le même sha, sans relancer l'agent.")
+    return back(_safe_back(request, "/inbox"), ok=M("Review rerun: the runner reviews the same sha again, without restarting the agent."))
 
 
 @app.post("/jobs/{ref}/spec")
@@ -428,7 +489,7 @@ def spec_post(request: Request, ref: str, verdict: str = Form(""), note: str = F
         jobs.validate_spec(u, ref, verdict == "approve", note)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok="Spec validée." if verdict == "approve" else "Spec refusée.")
+    return back(_safe_back(request, "/inbox"), ok=M("Spec approved.") if verdict == "approve" else M("Spec refused."))
 
 
 @app.post("/jobs/{ref}/cancel")
@@ -449,17 +510,17 @@ def archive_post(request: Request, ref: str, restore: int = Form(0)):
     except jobs.Refused as e:
         return back(_safe_back(request, "/jobs"), err=str(e))
     origin = _safe_back(request, "/jobs")
-    if urlsplit(origin).path == "/archives":   # depuis la page des archives : on y reste, recherche comprise
-        return back(origin, ok=f"{ref} restauré." if restore else f"{ref} archivé.")
-    # Retour à la même vue (tableau ou liste, filtre de repo, archives), sans le job qui vient de quitter la liste.
+    if urlsplit(origin).path == "/archives":   # from the archives page: stay there, including search
+        return back(origin, ok=M("{ref} restored.", ref=ref) if restore else M("{ref} archived.", ref=ref))
+    # Return to the same view (table or list, repo filter, archives), without the job that just left the list.
     q = parse_qs(urlsplit(origin).query)
     keep = {k: q[k][0] for k in ("view", "repo", "archived") if q.get(k)}
-    return back("/jobs" + ("?" + urlencode(keep) if keep else ""), ok=f"{ref} restauré." if restore else f"{ref} archivé.")
+    return back("/jobs" + ("?" + urlencode(keep) if keep else ""), ok=M("{ref} restored.", ref=ref) if restore else M("{ref} archived.", ref=ref))
 
 
 @app.get("/archives", response_class=HTMLResponse)
 def archives_page(request: Request, q: str = "", repo: int = 0, state: str = "", regex: int = 0, page: int = 1, partial: int = 0, job: str = ""):
-    """Jobs archivés : recherche (texte ou expression régulière), filtres par repo et par issue, pagination."""
+    """Archived jobs: search (text or regular expression), filters by repo and by outcome, pagination."""
     u = user_of(request)
     rows, total, err, page = jobs.search_archives(u, q, repo, state, bool(regex), page)
     with db.tx() as c:
@@ -469,7 +530,7 @@ def archives_page(request: Request, q: str = "", repo: int = 0, state: str = "",
     ctx = dict(rows=rows, total=total, err=err, pg=page, pages=pages, q=q.strip(), repo=repo, state=state, regex=bool(regex),
                repos=repos, qs=qs, OUTCOMES=jobs.OUTCOMES, PHRASE=jobs.delete_phrase, all_n=jobs.archived_count(u),
                detail=jobs.get(u, job) if job and not partial else None, sel=job)
-    if partial:   # recherche pendant la frappe : seule la liste est renvoyée
+    if partial:   # search while typing: only the list is returned
         return templates.TemplateResponse(request, "_archives_list.html", {**ctx, "user": u, "can": auth.can})
     return render(request, "archives.html", "jobs", **ctx)
 
@@ -482,74 +543,74 @@ def job_delete(request: Request, ref: str, typed: str = Form("")):
         jobs.delete_job(u, ref, typed)
     except jobs.Refused as e:
         return back(origin if urlsplit(origin).path == "/archives" else "/archives", err=str(e))
-    return back(origin if urlsplit(origin).path == "/archives" else "/archives", ok=f"{ref} supprimé définitivement.")
+    return back(origin if urlsplit(origin).path == "/archives" else "/archives", ok=M("{ref} permanently deleted.", ref=ref))
 
 
 @app.post("/archives/bulk")
 async def archives_bulk(request: Request):
-    """Plusieurs jobs archivés d'un coup : restaurer (reviewers), ou supprimer (admins, confirmé par « supprimer N jobs »)."""
+    """Multiple archived jobs at once: restore (reviewers), or delete (admins, confirmed by "delete N jobs")."""
     u = user_of(request)
     f = await request.form()
     refs = [str(r) for r in f.getlist("ref")][:200]
     origin = _safe_back(request, "/archives")
     origin = origin if urlsplit(origin).path == "/archives" else "/archives"
     if not refs:
-        return back(origin, err="Aucun job sélectionné.")
+        return back(origin, err=M("No job selected."))
     action, done, errors = f.get("action"), 0, []
     if action == "delete":
         if not auth.can(u, "settings"):
-            return back(origin, err="Seuls les admins suppriment un job.")
+            return back(origin, err=M("Only admins delete a job."))
         if str(f.get("typed") or "").strip().lower() != f"supprimer {len(refs)} jobs":
-            return back(origin, err=f"Confirmation incorrecte : tape exactement « supprimer {len(refs)} jobs ».")
+            return back(origin, err=M("Wrong confirmation: type exactly “supprimer {count} jobs”.", count=len(refs)))
     for ref in refs:
         try:
             if action == "delete":
                 j = jobs.get(u, ref)
-                jobs.delete_job(u, ref, jobs.delete_phrase(j))   # la phrase groupée a été vérifiée ci-dessus
+                jobs.delete_job(u, ref, jobs.delete_phrase(j))   # the grouped phrase was verified above
             elif action == "restore":
                 jobs.archive(u, ref, restore=True)
             else:
-                return back(origin, err="Action inconnue.")
+                return back(origin, err=M("Unknown action."))
             done += 1
         except jobs.Refused as e:
-            errors.append(f"{ref} : {e}")
-    verb = "supprimé(s) définitivement" if action == "delete" else "restauré(s)"
-    return back(origin, ok=f"{done} job(s) {verb}." if done else None, err=" ".join(errors)[:400] or None)
+            errors.append(f"{ref}: {e}")
+    ok = M("{n} job(s) permanently deleted.", n=done) if action == "delete" else M("{n} job(s) restored.", n=done)
+    return back(origin, ok=ok if done else None, err=" ".join(errors)[:400] or None)
 
 
-@app.get("/jobs/{ref}/rapport.md")
+@app.get("/jobs/{ref}/report.md")
 def study_report(request: Request, ref: str):
-    """Rapport d'une étude, en Markdown, à télécharger (mêmes droits que la lecture du job)."""
+    """Study report, in Markdown, to download (same permissions as job reading)."""
     u = user_of(request)
     try:
         j = jobs.get(u, ref)
     except jobs.Refused:
-        return Response("Job introuvable.", status_code=404, media_type="text/plain; charset=utf-8")
+        return Response(i18n.tr(M("Job not found.")), status_code=404, media_type="text/plain; charset=utf-8")
     if not j or not j.get("report"):
-        return Response("Ce job n'a pas de rapport.", status_code=404, media_type="text/plain; charset=utf-8")
+        return Response(M("This job has no report."), status_code=404, media_type="text/plain; charset=utf-8")
     if not jobs.report_formats()["md"]:
-        return Response("Le téléchargement en Markdown est désactivé.", status_code=404, media_type="text/plain; charset=utf-8")
-    body = f"# {j['title']}\n\n_{j['ref']} · étude rendue par la Fabrique_\n\n{j['report']}\n"
+        return Response(M("Markdown download is disabled."), status_code=404, media_type="text/plain; charset=utf-8")
+    body = f"# {j['title']}\n\n_{j['ref']} · {i18n.tr(M('study delivered by Fabrique'))}_\n\n{j['report']}\n"
     name = re.sub(r"[^A-Za-z0-9-]", "", j["ref"]) + "-etude.md"
     return Response(body, media_type="text/markdown; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
-@app.get("/jobs/{ref}/rapport.pdf")
+@app.get("/jobs/{ref}/report.pdf")
 def study_report_pdf(request: Request, ref: str):
-    """Rapport d'une étude, en PDF, à télécharger (mêmes droits que la lecture du job)."""
+    """Study report, in PDF, to download (same permissions as job reading)."""
     u = user_of(request)
     try:
         j = jobs.get(u, ref)
     except jobs.Refused:
         j = None
     if not j or not j.get("report"):
-        return Response("Ce job n'a pas de rapport.", status_code=404, media_type="text/plain; charset=utf-8")
+        return Response(M("This job has no report."), status_code=404, media_type="text/plain; charset=utf-8")
     if not jobs.report_formats()["pdf"]:
-        return Response("Le téléchargement en PDF est désactivé.", status_code=404, media_type="text/plain; charset=utf-8")
+        return Response(M("PDF download is disabled."), status_code=404, media_type="text/plain; charset=utf-8")
     from . import pdf
     lt = time.localtime(j["updated_at"])
-    meta = " · ".join(x for x in ((j.get("repo") or {}).get("slug"), j["ref"], f"étude rendue le {lt.tm_mday} {MOIS[lt.tm_mon - 1]} {lt.tm_year}") if x)
+    meta = " · ".join(x for x in ((j.get("repo") or {}).get("slug"), j["ref"], i18n.tr(M("study delivered on {tm_mday} {p} {tm_year}", tm_mday=lt.tm_mday, p=i18n.catalogue(i18n.DEFAULT).meta['months'][lt.tm_mon - 1], tm_year=lt.tm_year))) if x)
     data = pdf.report(j["title"], meta, j["report"], footer=f"Fabrique · {j['ref']}")
     name = re.sub(r"[^A-Za-z0-9-]", "", j["ref"]) + "-etude.pdf"
     return Response(data, media_type="application/pdf",
@@ -558,11 +619,11 @@ def study_report_pdf(request: Request, ref: str):
 
 @app.get("/jobs/{ref}/diff", response_class=HTMLResponse)
 def job_diff(request: Request, ref: str, sha: str = ""):
-    """Diff du job au commit vérifié, découpé par fichier (fragment chargé par la fiche du job ; mêmes droits que le job)."""
+    """Diff of the job at the verified commit, split by file (fragment loaded by the job page; same permissions as the job)."""
     u = user_of(request)
     d = jobs.diff_view(u, ref, sha[:12])
     if not d:
-        return HTMLResponse('<p class="muted">Ce diff n\'est plus disponible : le commit vérifié a changé. Recharge la page.</p>', status_code=404)
+        return HTMLResponse(M("<p class=\"muted\">This diff is no longer available: the verified commit has changed. Reload the page.</p>"), status_code=404)
     return templates.TemplateResponse(request, "_diff.html", {"d": d, "ref": ref}, headers={"Cache-Control": "private, no-store"})
 
 
@@ -573,14 +634,14 @@ def seen_post(request: Request, ref: str):
         jobs.mark_seen(u, ref)
     except jobs.Refused as e:
         return back("/inbox", err=str(e))
-    return back("/inbox", ok=f"Étude {ref} marquée comme lue.")
+    return back("/inbox", ok=M("Study {ref} marked as read.", ref=ref))
 
 
 @app.get("/runners", response_class=HTMLResponse)
 def runners_page(request: Request, new_token: str = "", new_name: str = ""):
     u = user_of(request)
     if not auth.can(u, "see_infra"):
-        return forbidden(request, "les runners")
+        return forbidden(request, M("the runners"))
     with db.tx() as c:
         work.reconcile(c)
         rs = db.rows(c, select(db.runners).where(db.runners.c.revoked.is_(False)).order_by(db.runners.c.online.desc(), db.runners.c.name))
@@ -591,11 +652,11 @@ def runners_page(request: Request, new_token: str = "", new_name: str = ""):
 
 
 @app.post("/runners", response_class=HTMLResponse)
-def runner_add(request: Request, name: str = Form(""), kind: str = Form("conteneur")):
-    """Le token est affiché une seule fois, dans cette réponse (jamais stocké en clair, jamais dans une URL)."""
+def runner_add(request: Request, name: str = Form(""), kind: str = Form(M("container"))):
+    """The token is displayed only once, in this response (never stored in plain text, never in a URL)."""
     u = user_of(request)
     if not auth.can(u, "runners_edit"):
-        return back("/runners", err="Seuls les admins ajoutent un runner.")
+        return back("/runners", err=M("Only admins add a runner."))
     try:
         token = work.create_runner(name, kind, u["user"])
     except jobs.Refused as e:
@@ -607,10 +668,10 @@ def runner_add(request: Request, name: str = Form(""), kind: str = Form("contene
 
 @app.post("/runners/{rid}/rotate", response_class=HTMLResponse)
 def runner_rotate(request: Request, rid: int):
-    """Renouvelle le token d'un runner ; comme à la création, il n'est affiché qu'une fois, dans cette réponse."""
+    """Renews a runner token; as during creation, it is only displayed once, in this response."""
     u = user_of(request)
     if not auth.can(u, "runners_edit"):
-        return back("/runners", err="Seuls les admins renouvellent un token.")
+        return back("/runners", err=M("Only admins renew a token."))
     try:
         name, token = work.rotate_runner(rid, u["user"])
     except jobs.Refused as e:
@@ -624,23 +685,23 @@ def runner_rotate(request: Request, rid: int):
 def runner_revoke(request: Request, rid: int):
     u = user_of(request)
     if not auth.can(u, "runners_edit"):
-        return back("/runners", err="Seuls les admins révoquent un runner.")
+        return back("/runners", err=M("Only admins revoke a runner."))
     try:
         work.revoke_runner(rid, u["user"])
     except jobs.Refused as e:
         return back("/runners", err=str(e))
-    return back("/runners", ok="Runner révoqué : son token ne fonctionne plus.")
+    return back("/runners", ok=M("Runner revoked: its token no longer works."))
 
 
-# ---------- API des runners (jeton Bearer, pas de session) ----------
+# ---------- Runners API (Bearer token, no session) ----------
 
 def _runner(request):
     if config.RUNNER_API_INTERNAL and (request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")):
-        raise work.Denied("API des runners réservée au réseau interne")
+        raise work.Denied("runner API restricted to the internal network")
     h = request.headers.get("authorization", "")
     r = work.runner_for(h[7:].strip() if h.lower().startswith("bearer ") else "")
     if not r:
-        raise work.Denied("token de runner invalide ou révoqué")
+        raise work.Denied("invalid or revoked runner token")
     return r
 
 
@@ -652,7 +713,7 @@ async def _denied(request, exc):
 @app.post("/api/runner/heartbeat")
 async def api_heartbeat(request: Request):
     r = _runner(request)
-    res = await run_in_threadpool(work.heartbeat, r, await request.json())
+    res = await run_in_threadpool(work.heartbeat, r, i18n.revive_tree(await request.json()))
     return {"ok": True, "name": r["name"], **res}
 
 
@@ -666,9 +727,9 @@ async def api_claim(request: Request):
 @app.post("/api/runner/jobs/{ref}/event")
 async def api_event(request: Request, ref: str):
     r = _runner(request)
-    body = await request.json()
+    body = i18n.revive_tree(await request.json())
     if not isinstance(body, dict):
-        raise work.Denied("événement invalide")
+        raise work.Denied("invalid event")
     res = await run_in_threadpool(work.report, r, ref, body)
     return {"ok": True, **({"decision": res} if res else {})}
 
@@ -677,7 +738,7 @@ async def api_event(request: Request, ref: str):
 def repos_page(request: Request, repo: int = 0):
     u = user_of(request)
     if not auth.can(u, "see_infra"):
-        return forbidden(request, "les repos")
+        return forbidden(request, M("the repos"))
     with db.tx() as c:
         rs = [r for r in db.rows(c, select(db.repos).order_by(db.repos.c.is_default.desc(), db.repos.c.name))
               if jobs.demo_visible() or not jobs.is_demo_repo(r)]
@@ -690,7 +751,7 @@ def repos_page(request: Request, repo: int = 0):
         models, _ = db.get_setting(c, "models")
         git = forges.listing(c)
         profs = profiles.listing(c)
-        onb = {}   # dernier job d'onboarding de chaque dépôt (état, ce qu'il attend)
+        onb = {}   # last onboarding job for each repo (status, what it is waiting for)
         for j in db.rows(c, select(db.jobs.c.repo_id, db.jobs.c.ref, db.jobs.c.stage, db.jobs.c.status_text)
                          .where(db.jobs.c.source == "onboarding", db.jobs.c.archived.is_(False)).order_by(db.jobs.c.id)):
             onb[j["repo_id"]] = j
@@ -703,35 +764,35 @@ def repos_page(request: Request, repo: int = 0):
 def repo_add(request: Request, provider: str = Form(""), slug: str = Form(""), name: str = Form("")):
     u = user_of(request)
     if not auth.can(u, "repos_edit"):
-        return back("/repos", err="Seuls les admins ajoutent un repo.")
+        return back("/repos", err=M("Only admins add a repo."))
     slug = slug.strip().strip("/")
     with db.tx() as c:
-        gp = forges.resolve(c, provider)                         # provider précis ; un type seul désigne le premier de ce type
+        gp = forges.resolve(c, provider)                         # specific provider; a single type designates the first of that type
     typ, gid = (gp["type"], gp["id"]) if gp else (provider, "")
     if typ not in forges.TYPES or not slug or "/" not in slug or len(slug) > 200 or any(ch in slug for ch in " \"'<>\\"):
-        return back("/repos", err="Provider ou chemin du repo invalide (forme attendue : groupe/projet).")
+        return back("/repos", err=M("Invalid provider or repo path (expected form: group/project)."))
     with db.tx() as c:
         if db.one(c, select(db.repos.c.id).where(db.repos.c.slug == slug, db.repos.c.git_id == gid)):
-            return back("/repos", err="Ce repo est déjà connu pour ce provider.")
+            return back("/repos", err=M("This repo is already known for this provider."))
         g = gp if gp and gp.get("token") else None
-    if g:   # token connu du dashboard : on vérifie le chemin tout de suite, plutôt que de laisser l'onboarding échouer
+    if g:   # known token from the dashboard: the path is checked immediately, rather than letting the onboarding fail
         try:
             why = providers.git_repo_check(typ, g["base_url"], providers.unseal(g["token"]), slug)
         except providers.Invalid:
             why = None
         if why:
-            return back("/repos", err="Repo non ajouté : " + why)
+            return back("/repos", err=M("Repo not added: ") + why)
     with db.tx() as c:
         first = not db.one(c, select(db.repos.c.id))
         rid = c.execute(insert(db.repos).values(provider=typ, git_id=gid, slug=slug, name=(name.strip() or slug.split("/")[-1])[:120],
                                                 is_default=first, onboarding="pending", settings={"merge_policy": "off"},
                                                 created_at=time.time())).inserted_primary_key[0]
-        db.log_audit(c, u["user"], "Repo ajouté", target=slug, detail="onboarding demandé")
+        db.log_audit(c, u["user"], M("Repo added"), target=slug, detail=M("onboarding requested"))
     try:
         ref = jobs.onboard(u, rid)
     except jobs.Refused as e:
         return back(f"/repos?repo={rid}", err=str(e))
-    return back(f"/repos?repo={rid}", ok=f"Repo ajouté. Onboarding lancé ({ref}) : la recipe arrivera en PR, à relire et merger.")
+    return back(f"/repos?repo={rid}", ok=M("Repo added. Onboarding started ({ref}): the recipe will arrive as a PR, to review and merge.", ref=ref))
 
 
 @app.post("/repos/request")
@@ -741,7 +802,7 @@ def repo_request(request: Request, provider: str = Form(""), name: str = Form(""
         rid = jobs.request_repo(u, provider, name, description)
     except jobs.Refused as e:
         return back("/repos", err=str(e))
-    return back(f"/repos?repo={rid}", ok="Demande enregistrée : un admin doit la valider (inbox) avant toute création.")
+    return back(f"/repos?repo={rid}", ok=M("Request recorded: an admin must approve it (inbox) before anything is created."))
 
 
 @app.post("/repos/{rid}/decide")
@@ -751,7 +812,7 @@ def repo_decide(request: Request, rid: int, verdict: str = Form(""), note: str =
         ref = jobs.decide_repo(u, rid, verdict == "approve", note)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok=f"Création validée ({ref}) : le runner crée et initialise le repo." if ref else "Demande refusée.")
+    return back(_safe_back(request, "/inbox"), ok=M("Creation approved ({ref}): the runner creates and initializes the repo.", ref=ref) if ref else M("Request refused."))
 
 
 @app.post("/repos/{rid}/init")
@@ -761,7 +822,7 @@ def repo_init(request: Request, rid: int):
         ref = jobs.init_repo(u, rid)
     except jobs.Refused as e:
         return back(f"/repos?repo={rid}", err=str(e))
-    return back(f"/repos?repo={rid}", ok=f"Initialisation validée ({ref}) : le runner pousse le premier commit.")
+    return back(f"/repos?repo={rid}", ok=M("Initialization approved ({ref}): the runner pushes the first commit.", ref=ref))
 
 
 @app.post("/repos/{rid}/onboard")
@@ -771,7 +832,7 @@ def repo_onboard(request: Request, rid: int):
         ref = jobs.onboard(u, rid)
     except jobs.Refused as e:
         return back(f"/repos?repo={rid}", err=str(e))
-    return back(f"/repos?repo={rid}", ok=f"Onboarding lancé ({ref}).")
+    return back(f"/repos?repo={rid}", ok=M("Onboarding started ({ref}).", ref=ref))
 
 
 @app.post("/repos/{rid}/remove")
@@ -781,72 +842,75 @@ def repo_remove(request: Request, rid: int):
         name = jobs.remove_repo(u, rid)
     except jobs.Refused as e:
         return back(f"/repos?repo={rid}", err=str(e))
-    return back("/repos", ok=f"{name} est retiré de la Fabrique. Rien n'a été supprimé sur la forge.")
+    return back("/repos", ok=M("{name} is removed from Fabrique. Nothing was deleted on the Git host.", name=name))
 
 
 @app.post("/repos/{rid}")
 async def repo_save(request: Request, rid: int):
     u = user_of(request)
     if not auth.can(u, "repos_edit"):
-        return back(f"/repos?repo={rid}", err="Seuls les admins modifient un repo.")
+        return back(f"/repos?repo={rid}", err=M("Only admins change a repo."))
     f = await request.form()
     with db.tx() as c:
         r = db.one(c, select(db.repos).where(db.repos.c.id == rid))
         if not r:
-            return back("/repos", err="Repo introuvable.")
+            return back("/repos", err=M("Repo not found."))
         if f.get("action") == "default":
             c.execute(update(db.repos).values(is_default=False))
             c.execute(update(db.repos).where(db.repos.c.id == rid).values(is_default=True))
-            db.log_audit(c, u["user"], "Repo par défaut", target=r["slug"])
-            return back(f"/repos?repo={rid}", ok=f"{r['name']} est le repo par défaut.")
+            db.log_audit(c, u["user"], M("Default repo"), target=r["slug"])
+            return back(f"/repos?repo={rid}", ok=M("{name} is the default repo.", name=r['name']))
         models, _ = db.get_setting(c, "models")
         s = dict(r["settings"] or {})
         harness, policy = f.get("harness", ""), f.get("merge_policy", "off")
         model, prof = profiles.parse_choice(f.get("choice")) if "choice" in f else (f.get("model", ""), str(f.get("profile") or ""))
         if harness and harness not in jobs.READY or model and model not in {m["id"] for m in models} or policy not in jobs.POLICIES \
                 or prof and not profiles.get(c, prof):
-            return back(f"/repos?repo={rid}", err="Réglage invalide.")
+            return back(f"/repos?repo={rid}", err=M("Invalid setting."))
         try:
             size = int(f.get("size_limit") or 0)
             budget = float(str(f.get("budget_job") or "0").replace(",", "."))
         except ValueError:
-            return back(f"/repos?repo={rid}", err="La taille et le budget doivent être des nombres.")
+            return back(f"/repos?repo={rid}", err=M("Size and budget must be numbers."))
         if not (0 <= size <= 100000 and 0 <= budget <= 1000):
-            return back(f"/repos?repo={rid}", err="Taille ou budget hors limites.")
+            return back(f"/repos?repo={rid}", err=M("Size or budget out of range."))
         paths = [p.strip() for p in str(f.get("protected_paths") or "").splitlines() if p.strip()][:100]
         s.update(harness=harness, model=model, profile=prof, merge_policy=policy, size_limit=size or None, budget_job=budget or None, protected_paths=paths,
                  tags=work.clean_tags(f.get("tags")))
         dropped = 0
-        if f.get("diff_field") == "1":   # la case est dans ce formulaire : décochée, elle n'est pas envoyée
+        if f.get("diff_field") == "1":   # the checkbox is in this form: if unchecked, it is not sent
             keep = f.get("diff") == "1"
             if not keep and jobs.repo_keeps_diff(s):
-                # Repo déclaré confidentiel : ce qui a déjà été copié dans la base est supprimé tout de suite.
+                # Repo declared confidential: what has already been copied to the database is deleted immediately.
                 ids = select(db.jobs.c.id).where(db.jobs.c.repo_id == rid)
                 dropped = c.execute(db.diffs.delete().where(db.diffs.c.job_id.in_(ids))).rowcount or 0
-                db.log_audit(c, u["user"], "Diff désactivé pour le repo", target=r["slug"], detail=f"{dropped} diff(s) supprimé(s) de la base")
+                db.log_audit(c, u["user"], M("Diff turned off for the repo"), target=r["slug"], detail=M("{dropped} diff(s) deleted from the database", dropped=dropped))
             elif keep and not jobs.repo_keeps_diff(s):
-                db.log_audit(c, u["user"], "Diff activé pour le repo", target=r["slug"])
+                db.log_audit(c, u["user"], M("Diff turned on for the repo"), target=r["slug"])
             s["diff"] = keep
+        if "lang" in f:                  # job language of this repo; empty: the application's
+            wl = str(f.get("lang") or "")
+            s["lang"] = wl if wl in i18n.LANGS else ""
         name = str(f.get("name") or r["name"]).strip()[:120] or r["name"]
         c.execute(update(db.repos).where(db.repos.c.id == rid).values(settings=s, name=name, accepts_jobs=f.get("accepts_jobs") == "1"))
-        db.log_audit(c, u["user"], "Settings du repo", target=r["slug"], detail=f"merge : {jobs.POLICIES[policy][0]}")
-    return back(f"/repos?repo={rid}", ok="Settings du repo enregistrés.")
+        db.log_audit(c, u["user"], M("Repo settings"), target=r["slug"], detail=M("merge: {p}", p=jobs.POLICIES[policy][0]))
+    return back(f"/repos?repo={rid}", ok=M("Repo settings saved."))
 
 
-SECTIONS = [("agents", "Agents et modèles"), ("git", "Providers Git"), ("oidc", "Connexion (OIDC)"), ("limits", "Budgets et barrières"),
-            ("notifications", "Notifications"), ("users", "Utilisateurs et rôles"), ("demo", "Démonstration")]
+SECTIONS = [("agents", M("Agents and models")), ("git", M("Git providers")), ("oidc", M("Sign-in (OIDC)")), ("limits", M("Budgets and gates")),
+            ("lang", M("Job language")), ("notifications", "Notifications"), ("users", M("Users and roles")), ("demo", M("Demo"))]
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, tab: str = "agents"):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return forbidden(request, "les settings")
-    sections = [s for s in SECTIONS if s[0] != "demo" or config.DEMO]   # sans FABRIQUE_DEMO=1, pas d'onglet Démonstration
+        return forbidden(request, M("the settings"))
+    sections = [s for s in SECTIONS if s[0] != "demo" or config.DEMO]   # without FABRIQUE_DEMO=1, no Demo tab
     tab = tab if tab in dict(sections) else "agents"
     data = {}
     with db.tx() as c:
-        for k in ("agents", "models", "git", "limits", "oidc", "access", "demo", "creation"):
+        for k in ("agents", "models", "git", "limits", "oidc", "access", "demo", "creation", "languages", "translation"):
             data[k] = db.get_setting(c, k)
         data["models"] = (providers.models_with_provider(c), data["models"][1])
         data["git"] = (forges.listing(c), data["git"][1])
@@ -888,19 +952,19 @@ def _lines(v):
 def channel_test(request: Request, cid: str):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins testent un channel.")
+        return back("/jobs", err=M("Only admins test a channel."))
     try:
         notify.send_test(cid)
     except notify.Invalid as e:
         return back("/settings?tab=notifications", err=str(e))
-    return back("/settings?tab=notifications", ok="Message d'essai envoyé.")
+    return back("/settings?tab=notifications", ok=M("Test message sent."))
 
 
 @app.post("/settings/{section}")
 async def settings_save(request: Request, section: str):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins modifient les settings.")
+        return back("/jobs", err=M("Only admins change the settings."))
     f = await request.form()
     url = f"/settings?tab={section}"
     with db.tx() as c:
@@ -909,30 +973,30 @@ async def settings_save(request: Request, section: str):
             m, prof = profiles.parse_choice(f.get("choice")) if "choice" in f else (f.get("model", ""), str(f.get("profile") or ""))
             p = profiles.get(c, prof) if prof else None
             if prof and not p:
-                return back(url, err="Profil de modèles inconnu.")
+                return back(url, err=M("Unknown model profile."))
             if p:
-                m = p["roles"]["agent"]["model"]     # le profil complet : le modèle de son agent sert aussi de modèle par défaut
+                m = p["roles"]["agent"]["model"]     # the full profile: its agent model also serves as the default model
             h = f.get("harness", "")
             if h not in jobs.HARNESSES or m not in models:
-                return back(url, err="Agent ou modèle inconnu.")
+                return back(url, err=M("Unknown agent or model."))
             if h not in jobs.READY:
-                return back(url, err=f"{jobs.HARNESSES[h]} n'est pas encore disponible.")
+                return back(url, err=M("{p} is not available yet.", p=jobs.HARNESSES[h]))
             if not providers.compatible(models[m], h):
-                return back(url, err=f"{jobs.HARNESSES[h]} ne sait pas utiliser {models[m]['name']} : choisis un modèle compatible.")
+                return back(url, err=M("{p} cannot use {name}: choose a compatible model.", p=jobs.HARNESSES[h], name=models[m]['name']))
             db.set_setting(c, "agents", {"harness": h, "model": m, "profile": prof}, u["user"])
-            db.log_audit(c, u["user"], "Settings : agents", detail=f"{jobs.HARNESSES[h]} · {m}" + (f" · profil {prof}" if prof else ""))
+            db.log_audit(c, u["user"], M("Settings: agents"), detail=f"{jobs.HARNESSES[h]} · {m}" + (f" · profile {prof}" if prof else ""))
         elif section == "profiles":
             url = "/settings?tab=agents"
             pid = str(f.get("pid") or "").strip()
             try:
                 if f.get("action") == "remove":
                     profiles.remove(c, u["user"], pid)
-                    return back(url + "#profils", ok="Profil retiré.")
+                    return back(url + "#profiles", ok=M("Profile removed."))
                 profiles.save(c, u["user"], pid if f.get("edit") == "1" else "", f.get("name", ""),
                               {k: {"model": f.get(f"model:{k}", "")} for k in profiles.ROLES}, new=f.get("edit") != "1")
             except profiles.Invalid as e:
-                return back(url + "#profil", err=str(e))
-            return back(url + "#profils", ok="Profil enregistré.")
+                return back(url + "#profile", err=str(e))
+            return back(url + "#profiles", ok=M("Profile saved."))
         elif section == "providers":
             act, pid = ("probe" if f.get("probe") else f.get("action", "")), str(f.get("pid") or "").strip()
             url = "/settings?tab=agents"
@@ -942,20 +1006,20 @@ async def settings_save(request: Request, section: str):
                     providers.save(c, u["user"], pid, f.get("type", ""), f.get("name", ""), f.get("base_url", ""), f.get("key", ""),
                                    clear_key=f.get("clear_key") == "1", effort=f.get("effort", ""))
                     if existed:
-                        return back(url, ok="Provider modifié.")
-                    return back(f"/settings?tab=agents&load={pid}", ok="Provider enregistré : coche les modèles à proposer.")
+                        return back(url, ok=M("Provider changed."))
+                    return back(f"/settings?tab=agents&load={pid}", ok=M("Provider saved: tick the models to offer."))
                 if act == "remove":
                     providers.remove(c, u["user"], pid)
-                    return back(url, ok="Provider retiré.")
+                    return back(url, ok=M("Provider removed."))
                 if act == "enable":
                     probes, _ = db.get_setting(c, "probes")
                     chosen = []
                     for mid in f.getlist("model")[:40]:
                         pr = ((probes or {}).get(pid) or {}).get(mid) or {}
                         apis = [a for a in ("anthropic", "openai") if pr.get(a)] if pr else []
-                        chosen.append({"id": mid, "name": f.get(f"name:{mid}") or mid, "apis": apis})
+                        chosen.append({"id": mid, "name": f.get(f"name:{mid}") or mid, "apis": apis, "max_jobs": f.get(f"max:{mid}")})
                     providers.enable(c, u["user"], pid, chosen)
-                    return back(url, ok=f"{len(chosen)} modèle(s) proposé(s) pour ce provider.")
+                    return back(url, ok=M("{count} model(s) offered for this provider.", count=len(chosen)))
                 if act == "probe":
                     mid = str(f.get("probe") or "")[:120]
                     res = providers.probe(c, pid, mid)
@@ -964,29 +1028,29 @@ async def settings_save(request: Request, section: str):
                     probes.setdefault(pid, {})[mid] = dict(res, at=time.time())
                     db.set_setting(c, "probes", probes, u["user"])
                     ok = [lbl for api, lbl in (("anthropic", "Claude Code"), ("openai", "Codex")) if res[api]]
-                    return back(f"/settings?tab=agents&load={pid}", ok=f"{mid} : " + (", ".join(ok) + " ✓" if ok else "aucun appel d'outil réussi"))
+                    return back(f"/settings?tab=agents&load={pid}", ok=f"{mid} : " + (", ".join(ok) + " ✓" if ok else M("no tool call succeeded")))
             except providers.Invalid as e:
                 return back(url, err=str(e))
-            return back(url, err="Action inconnue.")
+            return back(url, err=M("Unknown action."))
         elif section == "channels":
             url = "/settings?tab=notifications"
             try:
                 if f.get("action") == "remove":
                     notify.remove(c, u["user"], str(f.get("cid") or ""))
-                    return back(url, ok="Channel retiré.")
+                    return back(url, ok=M("Channel removed."))
                 notify.save(c, u["user"], f)
             except notify.Invalid as e:
                 return back(url + (f"&chan={f.get('cid')}" if f.get("cid") else ""), err=str(e))
-            return back(url, ok="Channel enregistré. Utilise « Envoyer un test » pour vérifier.")
+            return back(url, ok=M("Channel saved. Use “Send a test” to check."))
         elif section == "creation":
             ns = {p: re.sub(r"[^A-Za-z0-9._/-]", "", str(f.get(p) or "").strip().strip("/"))[:100] for p in forges.TYPES}
             db.set_setting(c, "creation", ns, u["user"])
-            db.log_audit(c, u["user"], "Settings : groupes de création", detail=", ".join(f"{k}={v or '—'}" for k, v in ns.items()))
+            db.log_audit(c, u["user"], M("Settings: creation groups"), detail=", ".join(f"{k}={v or '—'}" for k, v in ns.items()))
             url = "/settings?tab=git"
         elif section == "git":
-            # Plusieurs providers par type, chacun désigné par son nom (app/forges.py). Le jeton du compte robot est chiffré
-            # en base, en écriture seule ; il est remis au runner pour chaque job de SES repos. Sans jeton ici, le runner
-            # utilise ses variables d'environnement.
+            # Several providers per type, each designated by its name (app/forges.py). The robot account token is encrypted
+            # in the database, write-only; it is handed to the runner for each job of its repos. Without a token here, the runner
+            # uses its environment variables.
             try:
                 if f.get("remove") is not None:
                     forges.remove(c, u["user"], str(f.get("remove")))
@@ -1003,28 +1067,41 @@ async def settings_save(request: Request, section: str):
                        "watchdog_min": int(f.get("watchdog_min") or 10), "auto_archive_days": int(f.get("auto_archive_days") or 0),
                        "protected_paths": [p.strip() for p in str(f.get("protected_paths") or "").splitlines() if p.strip()][:100]}
                 old = db.get_setting(c, "limits")[0] or {}
-                if f.get("report_fields") == "1":   # les deux cases sont dans ce formulaire : décochée, une case n'est pas envoyée
+                if f.get("report_fields") == "1":   # both checkboxes are in this form: if unchecked, a checkbox is not sent
                     lim["report_md"], lim["report_pdf"] = f.get("report_md") == "1", f.get("report_pdf") == "1"
                 else:
                     lim["report_md"], lim["report_pdf"] = old.get("report_md") is not False, old.get("report_pdf") is not False
             except (TypeError, ValueError):
-                return back(url, err="Les budgets et limites doivent être des nombres.")
+                return back(url, err=M("Budgets and limits must be numbers."))
             if not (0 < lim["budget_job"] <= lim["budget_day"] <= 10000 and 1 <= lim["max_parallel"] <= 64 and 1 <= lim["size_limit"] <= 100000
                     and 2 <= lim["watchdog_min"] <= 240 and 0 <= lim["auto_archive_days"] <= 3650):
-                return back(url, err="Valeurs hors limites (le budget d'un job ne peut pas dépasser celui du jour).")
+                return back(url, err=M("Values out of range (a job's budget cannot exceed the day's)."))
             db.set_setting(c, "limits", lim, u["user"])
-            db.log_audit(c, u["user"], "Settings : budgets et barrières", detail=f"{lim['budget_job']} $/job · {lim['budget_day']} $/jour")
+            db.log_audit(c, u["user"], M("Settings: budgets and gates"), detail=M("${budget_job}/job · ${budget_day}/day", budget_job=lim['budget_job'], budget_day=lim['budget_day']))
         elif section == "access":
             d = f.get("default_role")
             if d not in ("requester", "none"):
-                return back("/settings?tab=users", err="Choix invalide.")
+                return back("/settings?tab=users", err=M("Invalid choice."))
             db.set_setting(c, "access", {"default_role": d}, u["user"])
-            db.log_audit(c, u["user"], "Settings : nouveaux comptes", detail=auth.ROLE_LABEL[d])
+            db.log_audit(c, u["user"], M("Settings: new accounts"), detail=auth.ROLE_LABEL[d])
             url = "/settings?tab=users"
+        elif section == "translation":
+            mid = str(f.get("model") or "")
+            if mid and not any(m["id"] == mid for m in providers.models_with_provider(c)):
+                return back("/settings?tab=agents", err=M("Unknown model."))
+            db.set_setting(c, "translation", {"model": mid}, u["user"])
+            db.log_audit(c, u["user"], M("Settings: translation model"), detail=mid or M("none", _ctx="model"))
+            url = "/settings?tab=agents#translation"
+        elif section == "lang":
+            jl = str(f.get("jobs") or "")
+            if jl not in i18n.LANGS:
+                return back("/settings?tab=lang", err=M("Invalid choice."))
+            db.set_setting(c, "languages", {"jobs": jl}, u["user"])
+            db.log_audit(c, u["user"], M("Settings: job language"), detail=i18n.LANGS[jl])
         elif section == "demo":
             vis = f.get("visible") == "1"
             db.set_setting(c, "demo", {"visible": vis}, u["user"])
-            db.log_audit(c, u["user"], "Settings : démonstration", detail="affichée" if vis else "masquée")
+            db.log_audit(c, u["user"], M("Settings: demo"), detail=M("shown") if vis else M("hidden"))
             jobs.forget_demo()
             url = "/settings?tab=demo"
         elif section == "oidc":
@@ -1034,48 +1111,48 @@ async def settings_save(request: Request, section: str):
             for k in ("issuer", "client_id", "scopes", "groups_claim"):
                 if k not in locked and k in f:
                     new[k] = str(f.get(k) or "").strip()[:300]
-            for k in ("admin_groups", "verifier_groups", "requester_groups"):
+            for k in ("admin_groups", "reviewer_groups", "requester_groups"):
                 if k not in locked and k in f:
                     new[k] = _lines(f.get(k))
             if new["issuer"] and urlsplit(new["issuer"]).scheme not in ("http", "https"):
-                return back(url, err="L'émetteur doit être une adresse http(s).")
+                return back(url, err=M("The issuer must be an http(s) address."))
             if "openid" not in (new["scopes"] or "").split():
-                return back(url, err="Les scopes doivent contenir « openid ».")
+                return back(url, err=M("Scopes must contain “openid”."))
             sec = str(f.get("client_secret") or "").strip()
-            if sec and not config.OIDC_CLIENT_SECRET:   # écriture seule ; vide = on garde la valeur enregistrée
+            if sec and not config.OIDC_CLIENT_SECRET:   # write-only; empty = keep the recorded value
                 try:
                     db.set_setting(c, "oidc_secret", {"v": providers.seal(sec[:500])}, u["user"])
                 except providers.Invalid as e:
                     return back(url, err=str(e))
             if new["issuer"] and not auth.has_local_admin(fresh=True) and not config.FABRIQUE_ADMINS and not config.OPEN:
-                return back(url, err="Crée d'abord un compte admin local (Utilisateurs et rôles) : c'est le secours si la connexion unique est mal réglée.")
+                return back(url, err=M("First create a local admin account (Users and roles): it is the fallback if single sign-on is misconfigured."))
             db.set_setting(c, "oidc", new, u["user"])
             db.log_audit(c, u["user"], "Settings : connexion OIDC", detail=new["issuer"] or "mode local")
             auth.invalidate()
         else:
-            return back("/settings", err="Section inconnue.")
-    return back(url, ok="Settings enregistrés.")
+            return back("/settings", err=M("Unknown section."))
+    return back(url, ok=M("Settings saved."))
 
 
 @app.post("/settings-test/git")
 async def git_test(request: Request):
-    """Essai d'un provider Git avant de l'enregistrer : rien n'est écrit. Le token saisi sert à l'essai ; champ vide, c'est
-    le token déjà enregistré pour ce type qui sert, et seulement vers l'adresse pour laquelle il a été enregistré."""
+    """Testing a Git provider before saving it: nothing is written. The entered token is used for the test; an empty field means
+    the token already recorded for this type is used, and only for the address for which it was recorded."""
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return JSONResponse({"ok": False, "msg": "Seuls les admins testent un provider."}, status_code=403)
+        return JSONResponse({"ok": False, "msg": M("Only admins test a provider.")}, status_code=403)
     f = await request.form()
     typ, base, tok, gid = (str(f.get(k) or "").strip() for k in ("type", "base_url", "token", "gid"))
     base = base.rstrip("/")[:200]
     if typ not in forges.TYPES or urlsplit(base).scheme != "https":
-        return JSONResponse({"ok": False, "msg": "Choisis un type et saisis une adresse en https."})
+        return JSONResponse({"ok": False, "msg": M("Choose a type and enter an https address.")})
     if not tok:
         with db.tx() as c:
             old = forges.resolve(c, gid or typ) or {}
         if not old.get("token"):
-            return JSONResponse({"ok": False, "msg": "Saisis le token du compte robot pour le tester."})
+            return JSONResponse({"ok": False, "msg": M("Enter the bot account's token to test it.")})
         if old.get("base_url") != base:
-            return JSONResponse({"ok": False, "msg": "L'adresse a changé : saisis à nouveau le token (un token enregistré n'est jamais envoyé à une nouvelle adresse)."})
+            return JSONResponse({"ok": False, "msg": M("The address has changed: enter the token again (a stored token is never sent to a new address).")})
         try:
             tok = providers.unseal(old["token"])
         except providers.Invalid as e:
@@ -1089,10 +1166,10 @@ async def git_test(request: Request):
 async def oidc_test(request: Request, issuer: str = Form("")):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins testent la connexion.")
+        return back("/jobs", err=M("Only admins test sign-in."))
     ok, msg = await auth.discover(issuer or auth.conf()["issuer"])
-    if "application/json" in request.headers.get("accept", ""):   # essai depuis la page : la saisie n'est pas perdue
-        return JSONResponse({"ok": ok, "msg": msg + ("" if not ok else " Pense à cliquer sur « Enregistrer ».")})
+    if "application/json" in request.headers.get("accept", ""):   # test from the page: the input is not lost
+        return JSONResponse({"ok": ok, "msg": msg + ("" if not ok else M(" Remember to click “Save”."))})
     return back("/settings?tab=oidc", ok=msg if ok else None, err=None if ok else msg)
 
 
@@ -1100,15 +1177,15 @@ async def oidc_test(request: Request, issuer: str = Form("")):
 def activity_page(request: Request):
     u = user_of(request)
     if not auth.can(u, "see_infra"):
-        return forbidden(request, "le journal d'activité")
+        return forbidden(request, M("the activity log"))
     return render(request, "activity.html", "activity", rows=jobs.activity())
 
 
 @app.post("/dev/as")
 def dev_as(request: Request, role: str = Form("")):
-    """Mode local uniquement : voir l'interface avec un autre rôle (démonstration). Sans effet si la connexion OIDC est active."""
+    """Local mode only: see the interface with another role (demo). No effect if the OIDC connection is active."""
     if auth.mode() != "off":
-        return back("/jobs", err="Indisponible quand la connexion OIDC est active.")
+        return back("/jobs", err=M("Unavailable while OIDC sign-in is active."))
     r = back(_safe_back(request, "/jobs"))
     if role in auth.ROLES:
         r.set_cookie("fabrique_as", role, httponly=True, samesite="lax", max_age=86400)
@@ -1119,7 +1196,7 @@ def dev_as(request: Request, role: str = Form("")):
 
 @app.get("/events/stream")
 async def stream(request: Request):
-    """Temps réel : un message « change » dès qu'un événement est écrit en base (sondage léger toutes les secondes)."""
+    """Real time: a "change" message as soon as an event is written to the database (light polling every second)."""
     user_of(request)
     last = await run_in_threadpool(jobs.last_event_id)
 
@@ -1134,9 +1211,9 @@ async def stream(request: Request):
                 yield f"event: change\ndata: {cur}\n\n"
             else:
                 idle += 1
-                if idle >= 15:
+                if idle >= 12:
                     idle = 0
-                    yield ": ping\n\n"
+                    yield "event: ping\ndata: 1\n\n"   # heard by the page: a silent leader tab is detected by the others
             await asyncio.sleep(1)
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
@@ -1145,7 +1222,7 @@ async def stream(request: Request):
 async def _pending(request, exc):
     if request.method == "GET" and not request.url.path.startswith(("/events/", "/api/")):
         return RedirectResponse("/access", status_code=303)
-    return JSONResponse({"error": "compte en attente de validation"}, status_code=403)
+    return JSONResponse({"error": M("account waiting for approval")}, status_code=403)
 
 
 @app.get("/access", response_class=HTMLResponse)
@@ -1163,23 +1240,23 @@ def access_page(request: Request):
 def access_post(request: Request, role: str = Form(""), note: str = Form("")):
     u = user_of(request, pending_ok=True)
     if auth.mode() != "on":
-        return back("/access", err="En mode local, il n'y a pas de compte à faire évoluer.")
+        return back("/access", err=M("In local mode there is no account to upgrade."))
     if role not in auth.ROLES or (u["role"] in auth.ROLES and auth.ROLES.index(role) <= auth.ROLES.index(u["role"])):
-        return back("/access" if u["role"] not in auth.ROLES else _safe_back(request, "/jobs"), err="Choisis un rôle supérieur à ton rôle actuel.")
+        return back("/access" if u["role"] not in auth.ROLES else _safe_back(request, "/jobs"), err=M("Choose a role higher than your current one."))
     with db.tx() as c:
         c.execute(update(db.users).where(db.users.c.username == u["user"]).values(
             requested_role=role, request_note=note.strip()[:500], requested_at=time.time()))
-        db.log_audit(c, u["user"], "Demande d'accès", target=auth.ROLE_LABEL[role], detail=note.strip()[:200])
-    # Depuis la fenêtre du menu : retour à la page d'où vient la demande ; compte sans rôle : sa page « Mon accès ».
+        db.log_audit(c, u["user"], M("Access request"), target=auth.ROLE_LABEL[role], detail=note.strip()[:200])
+    # From the menu window: return to the page from which the request came; account without a role: its "My access" page.
     to = "/access" if u["role"] not in auth.ROLES else _safe_back(request, "/jobs")
-    return back(to, ok="Demande envoyée. Un admin la verra dans son inbox.")
+    return back(to, ok=M("Request sent. An admin will see it in their inbox."))
 
 
 @app.get("/start", response_class=HTMLResponse)
 def start_page(request: Request):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return forbidden(request, "la mise en route")
+        return forbidden(request, M("the setup page"))
     return render(request, "start.html", "start", steps=start_steps())
 
 
@@ -1187,14 +1264,14 @@ def start_page(request: Request):
 async def user_local(request: Request):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins créent des comptes.")
+        return back("/jobs", err=M("Only admins create accounts."))
     f = await request.form()
     try:
         login = auth.create_local(f.get("login"), f.get("name"), str(f.get("password") or ""), str(f.get("role") or ""), u["user"])
-    except ValueError as e:   # on garde la saisie (sauf le mot de passe) : rien à retaper
+    except ValueError as e:   # we keep the input (except the password): nothing to retype
         keep = urlencode({"lu_login": str(f.get("login") or "")[:40], "lu_name": str(f.get("name") or "")[:120], "lu_role": str(f.get("role") or "")[:20]})
         return back("/settings?tab=users&" + keep, err=str(e))
-    return back("/settings?tab=users", ok=f"Compte local « {login} » créé.")
+    return back("/settings?tab=users", ok=M("Local account “{login}” created.", login=login))
 
 
 def _local_row(u):
@@ -1205,9 +1282,33 @@ def _local_row(u):
 
 @app.get("/account", response_class=HTMLResponse)
 def account_page(request: Request):
-    """Mon compte : accessible à tous les rôles (le mot de passe d'un compte local ne dépend pas des Settings, réservés aux admins)."""
+    """My account: accessible to all roles (the password of a local account does not depend on the Settings, which are reserved for admins)."""
     u = user_of(request)
-    return render(request, "account.html", "account", local_account=bool(_local_row(u)))
+    view_prefs(request, u)
+    chosen = getattr(request.state, "account_lang", None) or request.cookies.get(i18n.COOKIE, "")
+    return render(request, "account.html", "account", local_account=bool(_local_row(u)), chosen_lang=chosen if chosen in i18n.LANGS else "")
+
+
+@app.post("/account/lang")
+def account_lang(request: Request, lang: str = Form("")):
+    """Interface language, chosen by each user. Kept on the account (it follows the person) and in a cookie."""
+    u = user_of(request)
+    lang = lang if lang in i18n.LANGS else ""
+    if not u.get("local") and u.get("user"):
+        with db.tx() as c:
+            row = db.one(c, select(db.users.c.id, db.users.c.prefs).where(db.users.c.username == u["user"]))
+            if row:
+                prefs = dict(row["prefs"] or {})
+                prefs.pop("lang", None)
+                if lang:
+                    prefs["lang"] = lang
+                c.execute(update(db.users).where(db.users.c.id == row["id"]).values(prefs=prefs))
+    r = back(_safe_back(request, "/jobs"), ok=M("Language saved."))
+    if lang:
+        _lang_cookie(r, lang)
+    else:
+        r.delete_cookie(i18n.COOKIE)
+    return r
 
 
 @app.post("/account/password")
@@ -1216,57 +1317,57 @@ async def account_password(request: Request):
     f = await request.form()
     row = _local_row(u)
     if not row:
-        return back("/account", err="Ce compte n'a pas de mot de passe local.")
+        return back("/account", err=M("This account has no local password."))
     if not auth.check_password(str(f.get("old") or ""), row["password_hash"]):
-        return back("/account", err="Mot de passe actuel incorrect.")
+        return back("/account", err=M("Wrong current password."))
     try:
         auth.set_password(row["username"], str(f.get("new") or ""), u["user"])
     except ValueError as e:
         return back("/account", err=str(e))
-    # Les autres sessions du compte tombent ; celle-ci est rouverte pour ne pas déconnecter la personne qui vient de changer.
-    auth.revoke_sessions(row["username"], u["user"], "mot de passe changé")
+    # Other sessions for the account are closed; this one is reopened so as not to disconnect the person who just changed it.
+    auth.revoke_sessions(row["username"], u["user"], M("password changed"))
     if request.scope.get("session"):
         request.session["iat"] = time.time()
-    return back("/account", ok="Mot de passe changé. Les autres sessions de ce compte sont fermées.")
+    return back("/account", ok=M("Password changed. This account's other sessions are closed."))
 
 
 @app.post("/users/{uid}/logout")
 def user_logout(request: Request, uid: int):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins ferment les sessions d'un compte.")
+        return back("/jobs", err=M("Only admins close an account's sessions."))
     with db.tx() as c:
         target = db.one(c, select(db.users).where(db.users.c.id == uid))
     if not target:
-        return back("/settings?tab=users", err="Compte introuvable.")
-    auth.revoke_sessions(target["username"], u["user"], "fermées par un admin")
-    return back("/settings?tab=users", ok=f"Sessions de {target['name'] or target['username']} fermées : il faudra se reconnecter.")
+        return back("/settings?tab=users", err=M("Account not found."))
+    auth.revoke_sessions(target["username"], u["user"], M("closed by an admin"))
+    return back("/settings?tab=users", ok=M("Sessions of {p} closed: they will have to sign in again.", p=target['name'] or target['username']))
 
 
 @app.post("/users/{uid}/role")
 def user_role(request: Request, uid: int, role: str = Form(""), refuse: int = Form(0)):
     u = user_of(request)
     if not auth.can(u, "settings"):
-        return back("/jobs", err="Seuls les admins changent les rôles.")
+        return back("/jobs", err=M("Only admins change roles."))
     with db.tx() as c:
         target = db.one(c, select(db.users).where(db.users.c.id == uid))
         if not target:
-            return back("/settings?tab=users", err="Compte introuvable.")
+            return back("/settings?tab=users", err=M("Account not found."))
         if refuse:
             c.execute(update(db.users).where(db.users.c.id == uid).values(requested_role=None, request_note=None, requested_at=None))
-            db.log_audit(c, u["user"], "Demande d'accès refusée", target=target["username"])
-            return back(_safe_back(request, "/settings?tab=users"), ok=f"Demande de {target['name']} refusée.")
+            db.log_audit(c, u["user"], M("Access request refused"), target=target["username"])
+            return back(_safe_back(request, "/settings?tab=users"), ok=M("Request from {name} refused.", name=target['name']))
         if role not in ("none",) + auth.ROLES:
-            return back("/settings?tab=users", err="Rôle inconnu.")
+            return back("/settings?tab=users", err=M("Unknown role."))
         if target["username"] == u["user"]:
-            return back("/settings?tab=users", err="Tu ne peux pas changer ton propre rôle : demande à un autre admin.")
-        c.execute(update(db.users).where(db.users.c.id == uid).values(role=role, role_source="panneau", requested_role=None,
+            return back("/settings?tab=users", err=M("You cannot change your own role: ask another admin."))
+        c.execute(update(db.users).where(db.users.c.id == uid).values(role=role, role_source="dashboard", requested_role=None,
                                                                       request_note=None, requested_at=None))
-        db.log_audit(c, u["user"], "Rôle changé", target=target["username"], detail=f"{auth.ROLE_LABEL[target['role']]} → {auth.ROLE_LABEL[role]}")
+        db.log_audit(c, u["user"], M("Role changed"), target=target["username"], detail=f"{auth.ROLE_LABEL[target['role']]} → {auth.ROLE_LABEL[role]}")
     auth.forget_role(target["username"])
     return back(_safe_back(request, "/settings?tab=users"), ok=f"{target['name']} : {auth.ROLE_LABEL[role]}.")
 
 
 @app.exception_handler(PermissionError)
 async def _no_user(request, exc):
-    return JSONResponse({"error": "connexion requise"}, status_code=401)
+    return JSONResponse({"error": "sign-in required"}, status_code=401)

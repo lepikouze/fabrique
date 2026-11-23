@@ -11,8 +11,8 @@ applies gates; a human answers questions and decides on merges.
 Fabrique is not tied to any provider: Forgejo, GitLab or GitHub for the code; any OIDC provider (Authentik,
 Keycloak…) for sign-in; Claude Code or Codex as the agent; an Anthropic, OpenAI or local model (llama.cpp, vLLM).
 
-> The interface is in French for now. English is on its way (see the [roadmap](ROADMAP.md)); until then, this
-> documentation quotes interface labels as they appear on screen.
+> The interface exists in English and in French: it follows the browser, and anyone can switch from the menu at the bottom left.
+> This documentation still quotes some interface labels in French; the English interface shows their translation.
 
 ![Jobs board](docs/img/jobs.png)
 
@@ -38,7 +38,7 @@ hands. Fabrique treats these as architecture and infrastructure questions, not a
 |---|---|---|
 | **Dashboard** (`app/`) | Control plane: requests, inbox, gates, settings, audit. Never touches the code. | The database, the decisions |
 | **Runner** (`runner/`) | A program with no AI: takes orders from the dashboard, prepares the workspace, starts the agent, replays the checks, pushes, opens the PR, merges. | Git tokens, model keys (for the duration of a job) |
-| **Launcher** (`lanceur/`) | Creates one disposable container per job, with a fixed policy. | The only access to Docker |
+| **Launcher** (`launcher/`) | Creates one disposable container per job, with a fixed policy. | The only access to Docker |
 | **Job container** | Where the agent and the repo's code run. | Nothing |
 | **Proxy** (`proxy/`) | The jobs' only network exit, allowlisted. | — |
 
@@ -50,7 +50,7 @@ The path of a request, from its repo to the merge:
 
 - **Requests and tracking**: request form, board or list of jobs, timeline, live events, cost and tokens per job, inbox
   (questions from the agent, PRs to review, failures, repos to create).
-- **Studies**: a request of type « Étude » (study) has the agent read the repo and return a report (analysis,
+- **Studies**: a request of type “Study” has the agent read the repo and return a report (analysis,
   estimate, options) without changing anything — no branch, no PR; the report downloads as PDF or Markdown and can
   then become a code request.
 - **Repo onboarding**: an agent reads the repo and writes its *recipe* (`.fabrique/setup.json`: image, install,
@@ -79,11 +79,10 @@ Download the compose file, then start it: images are pulled from `ghcr.io/lepiko
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/lepikouze/fabrique/main/deploy/compose.prod.yaml
 docker compose -f compose.prod.yaml up -d
-docker compose -f compose.prod.yaml logs dashboard | grep "code d'installation"
+docker compose -f compose.prod.yaml logs dashboard | grep "setup code"
 ```
 
-Open `http://<host-address>:8080`, enter the **setup code** printed in the logs (the log line reads « code
-d'installation »), then create the administrator account. The **Setup** page walks you through the rest, entirely in
+Open `http://<host-address>:8080`, enter the **setup code** printed in the logs (the log line reads “Setup code”), then create the administrator account. The **Setup** page walks you through the rest, entirely in
 the interface: a model, a Git provider, a first repo. The built-in runner registers itself.
 
 No variable is required. In production, put port 8080 behind a TLS reverse proxy and create a `.env` file next to the
@@ -97,7 +96,7 @@ FABRIQUE_SECRET_KEY=$(openssl rand -hex 32)
 EOF
 ```
 
-Job workspaces live in a folder on the host, `/opt/fabrique/travail` by default: Docker creates it on first start,
+Job workspaces live in a folder on the host, `/opt/fabrique/work` by default: Docker creates it on first start,
 there is nothing to prepare. To put it elsewhere (a larger disk, for instance), add
 `FABRIQUE_WORK_DIR=/path/of/your/choice` to the `.env` file.
 
@@ -119,7 +118,7 @@ SESSION_SECRET=$(openssl rand -hex 32)
 FABRIQUE_SECRET_KEY=$(openssl rand -hex 32)
 EOF
 docker compose -f compose.traefik.yaml up -d
-docker compose -f compose.traefik.yaml logs dashboard | grep "code d'installation"
+docker compose -f compose.traefik.yaml logs dashboard | grep "setup code"
 ```
 
 `FABRIQUE_HOST` is the dashboard's domain name, `TRAEFIK_NETWORK` the Docker network of your Traefik and
@@ -138,7 +137,7 @@ To change the code or build your own images:
 git clone https://github.com/lepikouze/fabrique.git && cd fabrique
 docker compose --profile images build
 docker compose up -d
-docker compose logs dashboard | grep "code d'installation"
+docker compose logs dashboard | grep "setup code"
 ```
 
 [`.env.example`](.env.example) lists the useful variables. To split the dashboard and the runners across several

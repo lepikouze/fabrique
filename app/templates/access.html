@@ -1,26 +1,26 @@
 <!doctype html>
-<html lang="fr" data-theme="dark">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mon accès · Fabrique</title>
-<link rel="stylesheet" href="/static/app.css?v=29"><link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=3"><link rel="apple-touch-icon" href="/static/icon-180.png?v=1"><script src="/static/theme.js?v=1"></script></head>
+<html lang="{{ LANG() }}" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>My access · Fabrique</title>
+<link rel="stylesheet" href="/static/app.css?v=32"><link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=3"><link rel="apple-touch-icon" href="/static/icon-180.png?v=1"><script src="/static/theme.js?v=1"></script></head>
 <body class="auth-page">
 <main class="auth-box wide">
  <img class="logo-icon" src="/static/icon.svg?v=3" alt="" width="48" height="48">
- <h1>Mon accès</h1>
- <p><b>{{ user.name or user.user }}</b> · rôle actuel : <b>{{ ROLE_LABEL[user.role] }}</b></p>
+ <h1>My access</h1>
+ <p><b>{{ user.name or user.user }}</b> · current role: <b>{{ ROLE_LABEL[user.role] }}</b></p>
  {% if flash and flash.ok %}<p class="ok">{{ flash.ok }}</p>{% endif %}{% if flash and flash.err %}<p class="bad" role="alert">{{ flash.err }}</p>{% endif %}
- {% if user.role == 'none' %}<p class="muted">Ton compte est connu de la Fabrique mais attend qu'un admin lui donne un rôle.</p>{% endif %}
- {% if mode != 'on' %}<p class="muted">Mode local : pas de comptes, rien à demander.</p>
- {% elif me and me.requested_role %}<div class="callout c-amber"><b class="ct">Demande en attente</b><p>Rôle demandé : {{ ROLE_LABEL[me.requested_role] }}{% if me.request_note %} — « {{ me.request_note }} »{% endif %}. Un admin la voit dans sa inbox.</p></div>
+ {% if user.role == 'none' %}<p class="muted">Fabrique knows your account, but it is waiting for an admin to give it a role.</p>{% endif %}
+ {% if mode != 'on' %}<p class="muted">Local mode: no accounts, nothing to request.</p>
+ {% elif me and me.requested_role %}<div class="callout c-amber"><b class="ct">Request pending</b><p>Requested role: {{ ROLE_LABEL[me.requested_role] }}{% if me.request_note %} — “{{ me.request_note }}”{% endif %}. An admin sees it in their inbox.</p></div>
  {% elif user.role != 'admin' %}
  <form method="post" action="/access" class="frm left">
-  <label for="a-role">Rôle demandé</label>
-  <select id="a-role" name="role">{% for r in ('requester', 'verifier', 'admin') %}{% if user.role == 'none' or r != 'requester' and (user.role == 'requester' or r == 'admin') %}<option value="{{r}}">{{ ROLE_LABEL[r] }}</option>{% endif %}{% endfor %}</select>
-  <label for="a-note">Pourquoi <small>facultatif</small></label>
-  <textarea id="a-note" name="note" rows="3" maxlength="500" placeholder="Je relis les PR de l'équipe infra."></textarea>
-  <div class="row-end"><button class="btn primary">Envoyer la demande</button></div>
+  <label for="a-role">Requested role</label>
+  <select id="a-role" name="role">{% for r in ('requester', 'reviewer', 'admin') %}{% if user.role == 'none' or r != 'requester' and (user.role == 'requester' or r == 'admin') %}<option value="{{r}}">{{ ROLE_LABEL[r] }}</option>{% endif %}{% endfor %}</select>
+  <label for="a-note">Why <small>optional</small></label>
+  <textarea id="a-note" name="note" rows="3" maxlength="500" placeholder="I review the infrastructure team's PRs."></textarea>
+  <div class="row-end"><button class="btn primary">Send the request</button></div>
  </form>
  {% endif %}
- <p class="links">{% if user.role != 'none' %}<a class="link" href="/jobs">Retour aux jobs</a>{% endif %}{% if mode == 'on' %} <form method="post" action="/auth/logout" class="inline-block"><button class="btn sm">Se déconnecter</button></form>{% endif %}</p>
+ <p class="links">{% if user.role != 'none' %}<a class="link" href="/jobs">Back to the jobs</a>{% endif %}{% if mode == 'on' %} <form method="post" action="/auth/logout" class="inline-block"><button class="btn sm">Sign out</button></form>{% endif %}</p>
 </main>
 </body>
 </html>

@@ -1,12 +1,12 @@
-{# Fenêtre de suppression définitive d'un job archivé (admins) : le bouton ne s'active qu'après la saisie exacte. #}
+{# Permanent deletion window for an archived job (admins): the button only activates after exact typing. #}
 <dialog id="del-dlg" class="dlg" aria-labelledby="del-dlg-t">
  <form method="post" action="" class="frm" data-delete-form autocomplete="off">
-  <h2 id="del-dlg-t">Supprimer définitivement</h2>
+  <h2 id="del-dlg-t">Delete permanently</h2>
   <p data-delete-what></p>
-  <p class="muted small">Le job et tout son contenu disparaissent : chronologie, preuves, relectures, questions, coûts. C'est irréversible. L'audit garde la trace de la suppression, et rien n'est touché sur la forge (branche, PR, commits).</p>
+  <p class="muted small">The job and everything in it disappear: timeline, evidence, reviews, questions, costs. This cannot be undone. The audit log keeps a record of the deletion, and nothing is touched on the Git host (branch, PR, commits).</p>
   <div data-delete-refs></div>
-  <label for="del-typed">Pour confirmer, tape <b class="mono" data-delete-phrase></b></label>
+  <label for="del-typed">To confirm, type <b class="mono" data-delete-phrase></b></label>
   <input id="del-typed" name="typed" class="mono" required spellcheck="false" autocapitalize="off">
-  <div class="row-end"><button type="button" class="btn" data-close-dialog>Annuler</button><button class="btn danger" data-delete-go disabled>Supprimer définitivement</button></div>
+  <div class="row-end"><button type="button" class="btn" data-close-dialog>Cancel</button><button class="btn danger" data-delete-go disabled>Delete permanently</button></div>
  </form>
 </dialog>

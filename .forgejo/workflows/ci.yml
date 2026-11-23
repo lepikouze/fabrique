@@ -22,14 +22,14 @@ jobs:
         env:
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          REGISTRY: ${{ vars.REGISTRY }}                 # hôte du registre d'images, ex. registre.exemple.org
-          IMAGE_NAMESPACE: ${{ vars.IMAGE_NAMESPACE }}   # espace de nommage des images, ex. equipe
+          REGISTRY: ${{ vars.REGISTRY }}                 # image registry host, e.g., registry.example.org
+          IMAGE_NAMESPACE: ${{ vars.IMAGE_NAMESPACE }}   # image namespace, e.g. team
         run: |
-          [ -n "$REGISTRY" ] && [ -n "$IMAGE_NAMESPACE" ] || { echo "variables REGISTRY et IMAGE_NAMESPACE à définir dans le dépôt"; exit 1; }
+          [ -n "$REGISTRY" ] && [ -n "$IMAGE_NAMESPACE" ] || { echo "set the REGISTRY and IMAGE_NAMESPACE variables on the repository"; exit 1; }
           R=$REGISTRY/$IMAGE_NAMESPACE
           echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
           TAG=${GITHUB_REF_NAME}; [ "$TAG" = "main" ] && TAG=latest
-          # Images d'une branche de travail : étiquettes à son nom (k8s, k8s-<sha>), jamais « latest » ni « sha-… » de la prod.
+          # Images from a working branch: tagged with its name (k8s, k8s-<sha>), never "latest" or prod "sha-..."
           SHA=sha-${GITHUB_SHA::8}; [ "$TAG" = "latest" ] || case "$TAG" in v*) ;; *) SHA=$TAG-${GITHUB_SHA::8};; esac
           docker build --build-arg GIT_SHA=${GITHUB_SHA::8} -t $R/fabrique:$TAG -t $R/fabrique:$SHA .
           docker push $R/fabrique:$TAG
@@ -37,19 +37,19 @@ jobs:
           docker build --build-arg GIT_SHA=${GITHUB_SHA::8} -f Dockerfile.runner -t $R/fabrique-runner:$TAG -t $R/fabrique-runner:$SHA .
           docker push $R/fabrique-runner:$TAG
           docker push $R/fabrique-runner:$SHA
-          # Images des jobs : étiquetées par l'empreinte de ce qui les compose ; reconstruites seulement si elle change.
-          JOBTAG=job-$(cat Dockerfile.job runner/fab.py runner/garde.py runner/managed-settings.json | sha256sum | cut -c1-10)
+          # Job images: tagged by the fingerprint of what composes them; rebuilt only if it changes.
+          JOBTAG=job-$(cat Dockerfile.job runner/fab.py runner/guard.py runner/security_check.py runner/managed-settings.json | sha256sum | cut -c1-10)
           for spec in "python python:3.12-slim-bookworm" "node node:22-bookworm-slim" "go golang:bookworm" "java eclipse-temurin:21-jdk-noble maven"; do
             set -- $spec; IMG=$R/fabrique-job-$1:$JOBTAG
-            if docker manifest inspect "$IMG" >/dev/null 2>&1; then echo "$IMG déjà construite"; docker pull -q "$IMG"; else
+            if docker manifest inspect "$IMG" >/dev/null 2>&1; then echo "$IMG already built"; docker pull -q "$IMG"; else
               docker build -f Dockerfile.job --build-arg BASE=$2 --build-arg FLAVOR=$1 --build-arg EXTRA="${3:-}" -t "$IMG" .
               docker push "$IMG"
             fi
-            # Même étiquette que les autres images (une seule variable dans compose.yaml) : simple alias, rien n'est reconstruit.
+            # Same tag as the other images (a single variable in compose.yaml): simple alias, nothing is rebuilt.
             for T in $TAG $SHA; do docker tag "$IMG" $R/fabrique-job-$1:$T; docker push -q $R/fabrique-job-$1:$T; done
           done
-          echo "Images de jobs : $JOBTAG"
-          # Trace des options de Codex dans le journal de CI (vérification de l'adaptateur, sans rien exécuter ailleurs)
+          echo "Job images: $JOBTAG"
+          # Trace of Codex options in the CI log (check of the adapter, nothing else is executed)
           docker run --rm $R/fabrique-job-python:$JOBTAG sh -c 'codex --version; codex exec --help; codex exec resume --help' 2>&1 | head -150 || true
           docker build -f Dockerfile.proxy -t $R/fabrique-proxy:$TAG -t $R/fabrique-proxy:$SHA .
           docker push $R/fabrique-proxy:$TAG

@@ -1,0 +1,66 @@
+{
+ "meta": {
+  "name": "English",
+  "english_name": "English",
+  "months": [
+   "Jan",
+   "Feb",
+   "Mar",
+   "Apr",
+   "May",
+   "Jun",
+   "Jul",
+   "Aug",
+   "Sep",
+   "Oct",
+   "Nov",
+   "Dec"
+  ],
+  "date_short": "{month} {d}",
+  "date_long": "{month} {d}, {y} at {hm}",
+  "colon": ": ",
+  "decimal": ".",
+  "money": "${n}",
+  "millions": "{n}M",
+  "thousands": "{n}k",
+  "since": {
+   "now": "just now",
+   "min": "for {n} min",
+   "h": "for {n} h",
+   "d": "for {n} d"
+  },
+  "ago": {
+   "now": "just now",
+   "min": "{n} min ago",
+   "h": "{n} h ago",
+   "d": "{n} d ago"
+  },
+  "js": [
+   "Testing…",
+   "The test did not complete: reload the page and try again.",
+   "Testing…",
+   "The test did not complete: reload the page and try again.",
+   "Diff unavailable for now.",
+   "Copied",
+   "Cannot copy",
+   "Copy the log (chronological order)",
+   "CI webhook",
+   "Dev team (Teams)",
+   "Project Jira",
+   "Team e-mail",
+   "Notification channel name",
+   "Delete {ref}: “{title}”?",
+   "this tab holds the connection",
+   "through another tab",
+   "own connection",
+   "connected",
+   "connection lost, retrying",
+   "connecting",
+   "last change {n} s ago",
+   "no change received yet",
+   "Live updates",
+   "{n} update(s) on this page"
+  ]
+ },
+ "messages": {}
+}

@@ -6,7 +6,7 @@ metadata:
   name: {{ $name }}-launcher
   labels: {{- include "fabrique.labels" . | nindent 4 }}
 ---
-# Tout ce que la Fabrique peut faire dans le cluster : gérer des Pods et y exécuter des commandes, dans CE namespace.
+# Everything Fabrique can do in the cluster: manage Pods and execute commands in them, in THIS namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -20,7 +20,7 @@ rules:
     resources: [pods/exec]
     verbs: [create, get]
   - apiGroups: [""]
-    resources: [pods/log]            # lecture du journal du proxy : sorties réseau de chaque job
+    resources: [pods/log]            # proxy log reading: network egress of each job
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -50,7 +50,7 @@ spec:
       annotations:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | trunc 16 }}
     spec:
-      serviceAccountName: {{ $name }}-launcher      # le SEUL Pod de la Fabrique qui a un accès à l'API du cluster
+      serviceAccountName: {{ $name }}-launcher      # The ONLY Fabrique Pod that has access to the cluster API
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -63,7 +63,7 @@ spec:
         - name: launcher
           image: {{ include "fabrique.image" (dict "root" . "name" "fabrique-runner") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: [python, -m, lanceur.kube]
+          command: [python, -m, launcher.kube]
           ports:
             - {name: http, containerPort: 7080}
           env:
@@ -73,8 +73,8 @@ spec:
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             - {name: JOBS_PREFIX, value: "{{ $name }}-job"}
             - {name: PROXY_SELECTOR, value: "app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=proxy"}
-            - {name: WORK_PVC, value: {{ .Values.runner.persistence.existingClaim | default (printf "%s-travail" $name) | quote }}}
-            - name: ATELIER_IMAGES
+            - {name: WORK_PVC, value: {{ .Values.runner.persistence.existingClaim | default (printf "%s-work" $name) | quote }}}
+            - name: JOB_IMAGES
               value: {{ $imgs := list }}{{ range $k, $v := .Values.jobs.images }}{{ $imgs = append $imgs (printf "%s=%s/%s:%s" $k $.Values.image.registry $v ($.Values.image.tag | toString)) }}{{ end }}{{ join "," $imgs | quote }}
             - {name: JOB_MEMORY, value: {{ .Values.jobs.memory | quote }}}
             - {name: JOB_CPUS, value: {{ .Values.jobs.cpu | quote }}}
@@ -122,8 +122,8 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
-      # Le proxy ne résout que des noms publics complets : sans cela, le résolveur essaie d'abord les domaines de recherche
-      # du cluster et du nœud (pypi.org.<domaine>…), et une réponse vide sur l'un d'eux fait échouer la résolution.
+      # The proxy only resolves fully qualified public names: without this, the resolver first tries search domains
+      # of the cluster and the node (pypi.org.<domaine>...), and an empty response on one of them causes resolution to fail.
       dnsConfig:
         options:
           - {name: ndots, value: "1"}
@@ -168,8 +168,8 @@ spec:
     - {name: proxy, port: 3128, targetPort: proxy}
 {{- if .Values.networkPolicy.enabled }}
 ---
-# Un Pod de job ne reçoit rien et ne joint que trois choses : le proxy de sortie (liste blanche), le relay et la gateway
-# du runner, et le DNS du cluster. Pas l'API Kubernetes, pas le dashboard, pas Internet en direct.
+# A job Pod receives nothing and only joins three things: the egress proxy (allowlist), the relay and the gateway
+# of the runner, and the cluster DNS. Not the Kubernetes API, not the dashboard, not direct Internet.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -203,7 +203,7 @@ spec:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
 ---
-# Le launcher n'est joint que par le runner.
+# The launcher can only be reached by the runner.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

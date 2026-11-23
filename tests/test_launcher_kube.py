@@ -1,7 +1,7 @@
-"""Lanceur Kubernetes : un Pod par job, politique figée, même contrat que le lanceur Docker. Cluster simulé."""
+"""Kubernetes launcher: one Pod per job, fixed policy, same contract as the Docker launcher. Simulated cluster."""
 from types import SimpleNamespace as NS
 import pytest
-from lanceur import kube, main as base
+from launcher import kube, main as base
 
 
 class NotFound(Exception):
@@ -9,7 +9,7 @@ class NotFound(Exception):
 
 
 class FakeCore:
-    """Juste ce que le lanceur utilise de CoreV1Api."""
+    """Just what the launcher uses from CoreV1Api."""
     def __init__(self):
         self.pods, self.created, self.deleted = {}, [], []
 
@@ -36,7 +36,7 @@ class FakeCore:
 @pytest.fixture
 def L(monkeypatch):
     monkeypatch.setattr(base, "IMAGES", {"python": "reg/job-python:1", "node": "reg/job-node:1"})
-    monkeypatch.setattr(kube, "WORK_PVC", "fabrique-travail")
+    monkeypatch.setattr(kube, "WORK_PVC", "fabrique-work")
     core, calls = FakeCore(), []
 
     def execer(c, name, ns, command, write):
@@ -59,15 +59,15 @@ def test_pod_policy_is_fixed_and_restrictive(L):
     sc = c["securityContext"]
     assert sc == {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "privileged": False, "capabilities": {"drop": ["ALL"]}}
     assert c["resources"]["limits"]["memory"].endswith("i") and c["resources"]["limits"]["cpu"]
-    # un seul montage de données : le sous-dossier de CE job dans le volume de travail
-    assert c["volumeMounts"][0] == {"name": "travail", "mountPath": "/work/FAB-12", "subPath": "FAB-12"}
-    assert spec["volumes"][0] == {"name": "travail", "persistentVolumeClaim": {"claimName": "fabrique-travail"}}
+    # a single data mount: the sub-folder of THIS job in the workspace volume
+    assert c["volumeMounts"][0] == {"name": "work", "mountPath": "/work/FAB-12", "subPath": "FAB-12"}
+    assert spec["volumes"][0] == {"name": "work", "persistentVolumeClaim": {"claimName": "fabrique-work"}}
     assert "hostPath" not in str(pod) and "hostNetwork" not in str(pod) and "serviceAccountName" not in spec
 
 
 def test_only_whitelisted_images_and_valid_references(L):
     with pytest.raises(base.Refused):
-        L.start("FAB-1", "ubuntu:latest")                                  # jamais une image arbitraire
+        L.start("FAB-1", "ubuntu:latest")                                  # never an arbitrary image
     with pytest.raises(base.Refused):
         L.start("../kube-system", "python")
     assert L.core.created == []
@@ -110,7 +110,7 @@ def test_stop_and_kill(L):
     L.start("FAB-5")
     assert L.kill("FAB-5") == {"killed": True} and L.calls[-1][2] == ["kill", "-9", "-1"]
     assert L.stop("FAB-5") == {"stopped": True} and "fabrique-job-fab-5" not in L.core.pods
-    assert L.stop("FAB-5") == {"stopped": True} and L.kill("FAB-5") == {"killed": True}    # déjà parti : sans erreur
+    assert L.stop("FAB-5") == {"stopped": True} and L.kill("FAB-5") == {"killed": True}    # already sent: without error
 
 
 def test_a_pod_that_cannot_pull_its_image_fails_with_the_reason(L):
@@ -135,22 +135,22 @@ def test_orphan_pods_are_reaped_but_only_job_pods(L):
         return NS(metadata=NS(name=name, labels=labels, creation_timestamp=dt.datetime.fromtimestamp(now - age, dt.timezone.utc)),
                   spec=NS(containers=[NS(image="x")]), status=NS(phase=phase, container_statuses=[]))
     job = lambda ref: {"fabrique.io/job": ref, "fabrique.io/role": "job"}
-    L.core.pods = {"fabrique-job-fab-1": pod("fabrique-job-fab-1", job("FAB-1"), "Running", 600),          # job en cours : gardé
-                   "fabrique-job-fab-2": pod("fabrique-job-fab-2", job("FAB-2"), "Running", 25 * 3600),    # oublié depuis un jour
-                   "fabrique-job-fab-3": pod("fabrique-job-fab-3", job("FAB-3"), "Failed", 60),            # terminé
-                   "autre": pod("autre", {"app": "autre"}, "Failed", 99 * 3600)}                           # pas à nous
+    L.core.pods = {"fabrique-job-fab-1": pod("fabrique-job-fab-1", job("FAB-1"), "Running", 600),          # job in progress: kept
+                   "fabrique-job-fab-2": pod("fabrique-job-fab-2", job("FAB-2"), "Running", 25 * 3600),    # forgotten for a day
+                   "fabrique-job-fab-3": pod("fabrique-job-fab-3", job("FAB-3"), "Failed", 60),            # finished
+                   "autre": pod("autre", {"app": "autre"}, "Failed", 99 * 3600)}                           # not ours
     assert sorted(L.reap(now=now)) == ["fabrique-job-fab-2", "fabrique-job-fab-3"]
     assert sorted(L.core.pods) == ["autre", "fabrique-job-fab-1"]
 
 
 def test_net_reads_the_proxy_pod_log_for_the_job_ip(L, monkeypatch):
-    """Sur Kubernetes : IP et heure de démarrage du Pod du job, journal du Pod du proxy (droit pods/log)."""
+    """On Kubernetes: Pod IP and start time of the job Pod, proxy Pod log (pods/log permission)."""
     import datetime as dt
-    from lanceur import kube, main as base
+    from launcher import kube, main as base
     L.start("FAB-7")
     pod = L.core.pods[base.name_of("FAB-7")]
     pod.status.pod_ip, pod.status.start_time = "10.42.0.9", dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=30)
-    assert L.net("FAB-7") == {"known": False}                                     # pas de Pod de proxy trouvé
+    assert L.net("FAB-7") == {"known": False}                                     # no proxy Pod found
     L.core.pods["fabrique-proxy-x"] = NS(metadata=NS(name="fabrique-proxy-x", labels={kube.PROXY_SELECTOR: "1"}), status=NS(phase="Running"))
     asked = {}
 

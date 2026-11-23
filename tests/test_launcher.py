@@ -1,7 +1,7 @@
-"""Launcher : la politique des conteneurs de jobs est figée et non négociable ; il n'agit que sur ses propres conteneurs."""
+"""Launcher: the job container policy is fixed and non-negotiable; it only acts on its own containers."""
 import json, threading, urllib.request
 import pytest
-from lanceur import main as L
+from launcher import main as L
 
 
 class FakeImage:
@@ -76,7 +76,7 @@ def test_policy_is_fixed(lz):
     assert kw["user"] == "10002:10002" and kw["cap_drop"] == ["ALL"] and kw["read_only"] is True and kw["privileged"] is False
     assert "no-new-privileges:true" in kw["security_opt"] and kw["pids_limit"] > 0 and kw["mem_limit"] and kw["nano_cpus"] > 0
     assert kw["network"] == "fabrique-jobs" and kw["labels"] == {"fabrique.job": "FAB-12"}
-    assert list(kw["volumes"]) == ["/opt/volumes/fabrique-runner/FAB-12"]           # un seul montage : l'espace de ce job
+    assert list(kw["volumes"]) == ["/opt/volumes/fabrique-runner/FAB-12"]           # a single mount: the space of this job
     assert kw["volumes"]["/opt/volumes/fabrique-runner/FAB-12"]["bind"] == "/work/FAB-12"
     assert "/var/run/docker.sock" not in json.dumps(kw)
 
@@ -97,9 +97,9 @@ def test_never_touches_containers_it_did_not_create(lz):
         l.exec_stream("FAB-7", {"argv": ["id"]}, lambda o: None)
 
 
-@pytest.mark.parametrize("body,msg", [({"argv": "id"}, "commande"), ({"argv": []}, "commande"), ({"argv": ["id"], "env": {"LD_PRELOAD": "x"}}, "LD_PRELOAD"),
-                                      ({"argv": ["id"], "env": {"bad-key": "x"}}, "variable"), ({"argv": ["id"], "workdir": "/work/FAB-1/../FAB-2"}, "dossier"),
-                                      ({"argv": ["id"], "workdir": "/etc"}, "dossier")])
+@pytest.mark.parametrize("body,msg", [({"argv": "id"}, "invalid command"), ({"argv": []}, "invalid command"), ({"argv": ["id"], "env": {"LD_PRELOAD": "x"}}, "LD_PRELOAD"),
+                                      ({"argv": ["id"], "env": {"bad-key": "x"}}, "variable"), ({"argv": ["id"], "workdir": "/work/FAB-1/../FAB-2"}, "working directory"),
+                                      ({"argv": ["id"], "workdir": "/etc"}, "working directory")])
 def test_exec_requests_are_validated(lz, body, msg):
     l, d = lz
     l.start("FAB-1")
@@ -147,11 +147,11 @@ def test_http_requires_token(monkeypatch, lz):
 def test_image_is_chosen_from_whitelist_only(lz):
     l, d = lz
     with pytest.raises(L.Refused):
-        l.start("FAB-3", "registre/malveillant:latest")                     # jamais une image arbitraire
+        l.start("FAB-3", "registre/malveillant:latest")                     # never an arbitrary image
     assert l.start("FAB-3", "node")["image"] == "node" and d.runs[-1][0] == "registre/fabrique-job-node:abc"
     old = d.store[L.name_of("FAB-3")]
-    assert l.start("FAB-3", "node")["reused"]                                 # même image : conteneur réutilisé
-    r = l.start("FAB-3", "python")                                            # autre langage : conteneur neuf
+    assert l.start("FAB-3", "node")["reused"]                                 # same image: reused container
+    r = l.start("FAB-3", "python")                                            # other language: new container
     assert old.removed and not r["reused"] and d.runs[-1][0] == "registre/fabrique-runner:sha-test"
 
 
@@ -175,7 +175,7 @@ CONNECT   Nov 18 22:46:15.200 [1]: Request (file descriptor 4): CONNECT pypi.org
 
 
 def test_egress_reads_the_real_tinyproxy_log_per_client():
-    """Format relevé sur un vrai proxy : chaque job ne voit que SES sorties ; refusé = suivi d'un « Proxying refused »."""
+    """Format observed on a real proxy: each job only sees ITS outputs; refused = followed by a "Proxying refused"."""
     r = L.egress(JOURNAL, "10.0.0.7")
     assert r == {"known": True, "allowed": [["pypi.org", 2], ["files.pythonhosted.org", 1]],
                  "denied": [["example.com", 1], ["exfil.example.org", 1]]}
@@ -198,6 +198,6 @@ def test_net_reads_only_the_proxy_log_for_its_own_job(lz, monkeypatch):
     r = l.net("FAB-12")
     assert r["denied"] == [["example.com", 1], ["exfil.example.org", 1]] and asked["since"].year == 2026
     monkeypatch.setattr(l, "_proxy", lambda: None)
-    assert l.net("FAB-12") == {"known": False}                                    # proxy introuvable : pas de ligne Réseau
+    assert l.net("FAB-12") == {"known": False}                                    # proxy not found: no Network line
     with pytest.raises(L.Refused):
         l.net("FAB-99")

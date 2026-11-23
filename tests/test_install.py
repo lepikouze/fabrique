@@ -1,4 +1,4 @@
-"""Première installation : modèle par défaut, providers Git (tester, modifier), ajout et retrait de repo."""
+"""First installation: default model, Git providers (test, modify), adding and removing repos."""
 import httpx
 from sqlalchemy import select
 from app import db, jobs, main, providers
@@ -6,7 +6,7 @@ from .conftest import ADMIN, REQ, web
 
 
 def _bare():
-    """Une installation neuve : aucun provider de modèles, aucun modèle, aucun modèle par défaut."""
+    """A new installation: no model providers, no model, no default model."""
     with db.tx() as c:
         db.set_setting(c, "models", db.DEFAULTS["models"], "test")
         db.set_setting(c, "agents", db.DEFAULTS["agents"], "test")
@@ -15,11 +15,11 @@ def _bare():
 def test_a_fresh_install_has_no_model_and_says_what_to_do():
     _bare()
     with db.tx() as c:
-        assert providers.listing(c) == [] and "Aucun modèle par défaut" in providers.default_problem(c)
-    step = next(s for s in main.start_steps() if s[0] == "Un modèle par défaut")
+        assert providers.listing(c) == [] and "No default model" in providers.default_problem(c)
+    step = next(s for s in main.start_steps() if s[0] == "A default model")
     assert step[1] is False
     page = web("admin").get("/settings?tab=agents").text
-    assert "Aucun job ne peut démarrer" in page and "Anthropic" not in page.split("Providers de modèles")[1].split("<table")[1].split("</table>")[0]
+    assert "No job can start" in page and "Anthropic" not in page.split("Model providers")[1].split("<table")[1].split("</table>")[0]
 
 
 def test_the_first_enabled_model_becomes_the_default():
@@ -31,13 +31,13 @@ def test_the_first_enabled_model_becomes_the_default():
         assert providers.default_problem(c) == ""
         providers.enable(c, "alice", "local", [{"id": "gemma-test", "name": "Gemma", "apis": ["anthropic"]},
                                                  {"id": "autre", "name": "Autre", "apis": ["anthropic"]}])
-        assert db.get_setting(c, "agents")[0]["model"] == "gemma-test"          # un défaut déjà choisi ne bouge pas
-    assert next(s for s in main.start_steps() if s[0] == "Un modèle par défaut")[1] is True
+        assert db.get_setting(c, "agents")[0]["model"] == "gemma-test"          # a previously chosen default does not change
+    assert next(s for s in main.start_steps() if s[0] == "A default model")[1] is True
 
 
 def test_a_default_model_without_key_is_explained():
-    with db.tx() as c:                                                           # banc : modèle Anthropic par défaut, sans clé
-        assert "n'a pas de clé" in providers.default_problem(c)
+    with db.tx() as c:                                                           # bench: default Anthropic model, without key
+        assert "has no key" in providers.default_problem(c)
 
 
 def test_no_job_starts_without_a_model(repo):
@@ -47,7 +47,7 @@ def test_no_job_starts_without_a_model(repo):
         jobs.create(REQ, "T", "B", "", repo)
         assert False, "aurait dû refuser"
     except jobs.Refused as e:
-        assert "Aucun modèle par défaut" in str(e)
+        assert "No default model" in str(e)
 
 
 def test_relaunching_an_onboarding_takes_the_current_model():
@@ -57,7 +57,7 @@ def test_relaunching_an_onboarding_takes_the_current_model():
         r = db.one(c, select(db.repos).where(db.repos.c.slug == "equipe/neuf"))
         j = db.one(c, select(db.jobs).where(db.jobs.c.repo_id == r["id"]))
         assert j["model"] == "claude-opus-5-5"
-        c.execute(db.intents.delete().where(db.intents.c.job_id == j["id"]))     # l'essai a échoué : plus rien en file
+        c.execute(db.intents.delete().where(db.intents.c.job_id == j["id"]))     # the test failed: nothing left in the queue
         c.execute(db.jobs.update().where(db.jobs.c.id == j["id"]).values(stage="failed"))
         c.execute(db.repos.update().where(db.repos.c.id == r["id"]).values(onboarding="failed"))
         db.set_setting(c, "agents", {"harness": "claude-code", "model": "gemma-4-26b-a4b"}, "test")
@@ -79,11 +79,11 @@ def test_git_check_names_the_account_and_the_organisation():
             return httpx.Response(200, json={"login": "fabrique-bot"}) if req.headers["authorization"] == "token bon" else httpx.Response(401)
         return httpx.Response(200 if req.url.path == "/api/v1/orgs/fabrique" else 404, json={})
     ok, msg = providers.git_check("forgejo", "https://git.test", "bon", "fabrique", transport=_forge(h))
-    assert ok and "fabrique-bot" in msg and "« fabrique » est visible" in msg
+    assert ok and "fabrique-bot" in msg and "“fabrique” is visible" in msg
     ok, msg = providers.git_check("forgejo", "https://git.test", "bon", "ailleurs", transport=_forge(h))
-    assert not ok and "introuvable" in msg
+    assert not ok and "cannot be found" in msg
     ok, msg = providers.git_check("forgejo", "https://git.test", "faux", transport=_forge(h))
-    assert not ok and "refuse ce token" in msg
+    assert not ok and "refuses this token" in msg
     assert all(u.startswith("https://git.test/") for u, _ in seen)
 
 
@@ -108,7 +108,7 @@ def test_git_test_endpoint_writes_nothing_and_never_sends_a_stored_token_elsewhe
     assert cl.post("/settings-test/git", data={"type": "forgejo", "base_url": "https://git.test", "token": "", "creation": "org"}).json()["ok"]
     assert calls[-1] == ("forgejo", "https://git.test", "secret-enregistré", "org")
     r = cl.post("/settings-test/git", data={"type": "forgejo", "base_url": "https://ailleurs.test", "token": ""}).json()
-    assert not r["ok"] and "saisis à nouveau le token" in r["msg"] and len(calls) == 1
+    assert not r["ok"] and "enter the token again" in r["msg"] and len(calls) == 1
     assert not cl.post("/settings-test/git", data={"type": "forgejo", "base_url": "http://git.test", "token": "x"}).json()["ok"]
     assert web("requester").post("/settings-test/git", data={"type": "forgejo", "base_url": "https://git.test", "token": "x"}).status_code == 403
     with db.tx() as c:
@@ -135,29 +135,29 @@ def test_a_repo_is_removed_only_while_it_has_no_requests(repo):
     with db.tx() as c:
         rid = db.one(c, select(db.repos).where(db.repos.c.slug == "equipe/neuf"))["id"]
         jid = db.one(c, select(db.jobs).where(db.jobs.c.repo_id == rid))["id"]
-    assert "Retirer le repo" in cl.get(f"/repos?repo={rid}").text
+    assert "Remove the repo" in cl.get(f"/repos?repo={rid}").text
     assert web("requester").post(f"/repos/{rid}/remove").status_code in (303, 403)
     with db.tx() as c:
-        assert db.one(c, select(db.repos).where(db.repos.c.id == rid))            # un requester ne retire rien
+        assert db.one(c, select(db.repos).where(db.repos.c.id == rid))            # a requester does not remove anything
         c.execute(db.intents.update().where(db.intents.c.job_id == jid).values(state="leased"))
     cl.post(f"/repos/{rid}/remove")
     with db.tx() as c:
-        assert db.one(c, select(db.repos).where(db.repos.c.id == rid))            # onboarding en cours sur un runner : refusé
+        assert db.one(c, select(db.repos).where(db.repos.c.id == rid))            # onboarding in progress on a runner: refused
         c.execute(db.intents.update().where(db.intents.c.job_id == jid).values(state="pending"))
     assert cl.post(f"/repos/{rid}/remove").headers["location"] == "/repos"
     with db.tx() as c:
         assert not db.one(c, select(db.repos).where(db.repos.c.id == rid))
         assert not db.one(c, select(db.jobs).where(db.jobs.c.id == jid)) and not db.one(c, select(db.intents).where(db.intents.c.job_id == jid))
-    jobs.create(REQ, "T", "B", "", repo)                                           # un repo qui a reçu une demande garde son historique
+    jobs.create(REQ, "T", "B", "", repo)                                           # a repo that received a request keeps its history
     cl.post(f"/repos/{repo}/remove")
     with db.tx() as c:
         assert db.one(c, select(db.repos).where(db.repos.c.id == repo))
 
 
 def test_setup_keeps_the_repo_step_once_a_repo_has_a_recipe(repo):
-    step = lambda: next(s for s in main.start_steps() if s[0] == "Un premier repo")[1]
+    step = lambda: next(s for s in main.start_steps() if s[0] == "A first repo")[1]
     assert step() is True
-    with db.tx() as c:                       # repo vierge repassé en onboarding après sa première merge
+    with db.tx() as c:                       # empty repo put back into onboarding after its first merge
         c.execute(db.repos.update().where(db.repos.c.id == repo).values(onboarding="analyzing", recipe={"setup": [], "checks": {}}))
     assert step() is True
     with db.tx() as c:
@@ -178,7 +178,7 @@ def test_assumptions_stay_a_list_of_sentences_from_the_agent_to_the_page():
     assert sent[-1]["assumptions"] == ["Le dépôt est vide.", "Python 3.12 suffit."]
     relay.handle(tok, {"cmd": "decision", "confident": True, "verdict": "ok", "interpretation": "i", "assumptions": "Une seule phrase."})
     assert sent[-1]["assumptions"] == ["Une seule phrase."]
-    # côté dashboard : une chaîne reçue d'un ancien runner reste une hypothèse entière, jamais des lettres
+    # dashboard side: a string received from an old runner remains a full hypothesis, never letters
     assert work._assumptions("['Le dépôt est vide.']") == ["['Le dépôt est vide.']"]
     assert work._assumptions(["a b", "", "c d"]) == ["a b", "c d"] and work._assumptions(None) == []
 
@@ -188,7 +188,7 @@ def test_a_failed_onboarding_can_be_relaunched_even_when_the_repo_has_a_recipe(r
     with db.tx() as c:
         c.execute(db.repos.update().where(db.repos.c.id == repo).values(onboarding="failed", recipe={"setup": [], "checks": {}}))
     page = cl.get(f"/repos?repo={repo}").text
-    assert f'action="/repos/{repo}/onboard"' in page and "Relancer l’onboarding" in page and "n'a pas abouti" in page.replace("&#39;", "'")
+    assert f'action="/repos/{repo}/onboard"' in page and "Restart onboarding" in page and "did not complete" in page.replace("&#39;", "'")
     with db.tx() as c:
         c.execute(db.repos.update().where(db.repos.c.id == repo).values(onboarding="ready"))
     assert f'action="/repos/{repo}/onboard"' not in cl.get(f"/repos?repo={repo}").text
@@ -202,29 +202,29 @@ def test_demo_data_can_be_seeded_on_a_fresh_install_without_any_model(monkeypatc
     monkeypatch.setattr("app.config.DEMO", True)
     demo.seed()
     with db.tx() as c:
-        assert db.rows(c, select(db.jobs).where(db.jobs.c.source == "démo"))
+        assert db.rows(c, select(db.jobs).where(db.jobs.c.source == "demo"))
 
 
 def test_integrated_runner_can_be_registered_from_a_provided_token(monkeypatch):
-    """Kubernetes : le token du runner intégré vient d'un Secret partagé, pas d'un fichier partagé."""
+    """Kubernetes: the integrated runner token comes from a shared Secret, not a shared file."""
     from app import config, work
     tok = "fab_" + "k" * 43
     monkeypatch.setattr(config, "BOOTSTRAP_RUNNER_TOKEN", tok)
     monkeypatch.setattr(config, "BOOTSTRAP_RUNNER_FILE", "")
     work.bootstrap_runner()
     r = work.runner_for(tok)
-    assert r and r["name"] == "runner-integre" and r["kind"] == "kubernetes"
-    _, new = work.rotate_runner(r["id"], "alice")                # token renouvelé dans l'interface…
-    work.bootstrap_runner()                                       # …un redémarrage ne remet pas l'ancien en service
-    assert work.runner_for(tok) is None and work.runner_for(new)["name"] == "runner-integre"
+    assert r and r["name"] == "built-in-runner" and r["kind"] == "kubernetes"
+    _, new = work.rotate_runner(r["id"], "alice")                # token renewed in the dashboard...
+    work.bootstrap_runner()                                       # ...a restart does not put the old one back into service
+    assert work.runner_for(tok) is None and work.runner_for(new)["name"] == "built-in-runner"
     with db.tx() as c:
         assert len(db.rows(c, select(db.runners))) == 1
     monkeypatch.setattr(config, "BOOTSTRAP_RUNNER_TOKEN", "trop-court")
-    work.bootstrap_runner()                                       # token invalide : ignoré, sans erreur
+    work.bootstrap_runner()                                       # invalid token: ignored, without error
 
 
 def test_outbound_proxy_reaches_the_mirror_git_but_never_a_job(monkeypatch):
-    """Proxy d'entreprise : le git du miroir (runner) le suit ; l'environnement d'un job ne le reçoit jamais."""
+    """Enterprise proxy: the mirror (runner) git follows it; a job environment never receives it."""
     from runner import main as rm, agent as ragent, config as rconf
     for k in rm.PROXY_VARS:
         monkeypatch.delenv(k, raising=False)
@@ -247,14 +247,14 @@ def test_egress_proxy_chains_to_an_upstream_proxy(tmp_path):
     assert "Upstream" not in run().stdout
     out = run(PROXY_UPSTREAM="http://proxy.test:3128/", PROXY_NO_UPSTREAM=".interne.test, 10.0.0.0/8,depot").stdout
     assert "Upstream http proxy.test:3128" in out and 'Upstream none ".interne.test"' in out and 'Upstream none "depot"' in out
-    assert "10.0.0.0" not in out.split("Upstream http")[1]                    # une plage d'adresses n'est pas un domaine
-    assert "FilterDefaultDeny Yes" in out                                      # la liste blanche reste en vigueur
+    assert "10.0.0.0" not in out.split("Upstream http")[1]                    # an address range is not a domain
+    assert "FilterDefaultDeny Yes" in out                                      # the allowlist remains in effect
     bad = run(PROXY_UPSTREAM="http://user:secret@proxy.test:3128")
     assert bad.returncode != 0 and "secret" not in bad.stdout
 
 
 def test_sqlite_avoids_wal_on_a_network_filesystem(tmp_path, monkeypatch):
-    """WAL repose sur une mémoire partagée que NFS ne fournit pas : la base s'y bloque. Mode rollback sur NFS."""
+    """WAL relies on shared memory that NFS does not provide: the database hangs. Rollback mode on NFS."""
     mounts = tmp_path / "mounts"
     mounts.write_text("overlay / overlay rw 0 0\n10.0.0.5:/export/pvc-1 /data nfs4 rw,relatime 0 0\ntmpfs /data/tmp tmpfs rw 0 0\n")
     assert db.fs_type("/data", str(mounts)) == "nfs4" and db.fs_type("/data/sous/dossier", str(mounts)) == "nfs4"
@@ -281,7 +281,7 @@ def test_the_database_works_in_rollback_journal_mode(tmp_path, monkeypatch):
 
 
 def test_a_file_written_on_another_node_is_waited_for(tmp_path):
-    """NFS : le fichier écrit par le Pod du job peut apparaître au runner avec un délai ; on l'attend au lieu d'échouer."""
+    """NFS: the file written by the job Pod may appear to the runner with a delay; we wait for it instead of failing."""
     from runner import main as rm
     target = tmp_path / "FAB-1" / ".tete.bundle"
     target.parent.mkdir()
@@ -290,9 +290,9 @@ def test_a_file_written_on_another_node_is_waited_for(tmp_path):
     def nap(s):
         naps.append(s)
         if len(naps) == 3:
-            target.write_bytes(b"x")          # visible au troisième essai
+            target.write_bytes(b"x")          # visible on the third attempt
     assert rm.appeared(str(target), wait=30, sleep=nap) and len(naps) == 3
-    assert rm.appeared(str(target), wait=30, sleep=nap) and len(naps) == 3         # déjà visible : aucune attente
+    assert rm.appeared(str(target), wait=30, sleep=nap) and len(naps) == 3         # already visible: no waiting
     assert not rm.appeared(str(tmp_path / "jamais"), wait=0, sleep=nap)
 
 
@@ -302,10 +302,10 @@ def test_local_model_effort_is_set_on_compatible_providers_only():
         providers.save(c, "alice", "local", "compatible", "local", "http://vllm.test:9090/v1", "", effort="medium")
         providers.enable(c, "alice", "local", [{"id": "qwen3", "name": "Qwen3", "apis": ["anthropic"]}])
         assert providers.runtime(c, "qwen3")["effort"] == "medium"
-        providers.save(c, "alice", "local", "compatible", "local", "http://vllm.test:9090/v1", "")       # sans le champ : gardé
+        providers.save(c, "alice", "local", "compatible", "local", "http://vllm.test:9090/v1", "")       # without the field: kept
         assert providers.runtime(c, "qwen3")["effort"] == "medium"
         providers.save(c, "alice", "local", "compatible", "local", "http://vllm.test:9090/v1", "", effort="")
-        assert providers.runtime(c, "qwen3")["effort"] == ""                                               # vide = défaut du serveur
+        assert providers.runtime(c, "qwen3")["effort"] == ""                                               # empty = server default
         providers.save(c, "alice", "local", "compatible", "local", "http://vllm.test:9090/v1", "", effort="n'importe")
         assert providers.runtime(c, "qwen3")["effort"] == ""
         providers.save(c, "alice", "anthropic", "anthropic", "Anthropic", "https://api.anthropic.com", "sk-x", effort="low")
@@ -346,7 +346,7 @@ def test_git_repo_check_reasons():
     t = httpx.MockTransport(h)
     assert providers.git_repo_check("gitlab", "https://gl.test", "x", "g/ok", transport=t) is None
     assert "refuse" in providers.git_repo_check("gitlab", "https://gl.test", "x", "g/prive", transport=t)
-    assert "introuvable" in providers.git_repo_check("gitlab", "https://gl.test", "x", "-g/faux", transport=t)
+    assert "cannot be found" in providers.git_repo_check("gitlab", "https://gl.test", "x", "-g/faux", transport=t)
     def down(req):
         raise httpx.ConnectError("panne")
     assert providers.git_repo_check("gitlab", "https://gl.test", "x", "g/ok", transport=httpx.MockTransport(down)) is None
@@ -358,12 +358,12 @@ def test_study_report_downloads_as_markdown(repo):
     ref = jobs.create(REQ, "Étudier X", "B", "", repo)
     with db.tx() as c:
         c.execute(db.jobs.update().where(db.jobs.c.ref == ref).values(report="## Réponse courte\nOui.", stage="done"))
-    r = web("admin").get(f"/jobs/{ref}/rapport.md")
+    r = web("admin").get(f"/jobs/{ref}/report.md")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/markdown")
     assert "attachment" in r.headers["content-disposition"] and r.text.startswith("# Étudier X") and "Oui." in r.text
-    assert web("admin").get("/jobs/FAB-999/rapport.md").status_code == 404
+    assert web("admin").get("/jobs/FAB-999/report.md").status_code == 404
     panel = web("admin").get(f"/inbox/{ref}/panel")
-    assert panel.status_code == 200 and f'href="/jobs/{ref}/rapport.md" download' in panel.text
+    assert panel.status_code == 200 and f'href="/jobs/{ref}/report.md" download' in panel.text
 
 
 def test_demo_tab_only_in_demo_mode(monkeypatch):
@@ -380,7 +380,7 @@ def test_oidc_discovery_test_answers_json_without_saving(monkeypatch):
         return True, "Découverte réussie."
     monkeypatch.setattr(auth, "discover", disco)
     r = web("admin").post("/settings-test/oidc", data={"issuer": "https://sso.test/realms/x"}, headers={"Accept": "application/json"})
-    assert r.status_code == 200 and r.json()["ok"] and "Enregistrer" in r.json()["msg"]
+    assert r.status_code == 200 and r.json()["ok"] and "Save" in r.json()["msg"]
     with db.tx() as c:
         assert (db.get_setting(c, "oidc")[0] or {}).get("issuer", "") == ""
 
@@ -390,8 +390,8 @@ def test_public_url_without_scheme_gets_https():
     from app import config
     old = os.environ.get("PUBLIC_URL")
     try:
-        os.environ["PUBLIC_URL"] = "fabrique.exemple.org"
-        assert importlib.reload(config).PUBLIC_URL == "https://fabrique.exemple.org"
+        os.environ["PUBLIC_URL"] = "fabrique.example.org"
+        assert importlib.reload(config).PUBLIC_URL == "https://fabrique.example.org"
         os.environ["PUBLIC_URL"] = "http://interne:8080"
         assert importlib.reload(config).PUBLIC_URL == "http://interne:8080"
     finally:
@@ -406,8 +406,8 @@ def test_login_page_puts_sso_first_and_folds_the_local_form():
     from app import auth
     tpl = auth.templates.get_template("auth.html")
     html = tpl.render(kind="login", sso=True, detail="", next="/", keep={}, PW_RULE="")
-    assert html.index("Se connecter en SSO") < html.index("Connexion locale") < html.index('name="password"')
+    assert html.index("Sign in with SSO") < html.index("Local sign-in") < html.index('name="password"')
     assert '<details class="auth-local"' in html and "auth-local\" open" not in html.replace(" >", ">")
     assert "<details class=\"auth-local\" open" in tpl.render(kind="login", sso=True, detail="Mot de passe incorrect.", next="/", keep={}, PW_RULE="")
     html = tpl.render(kind="login", sso=False, detail="", next="/", keep={}, PW_RULE="")
-    assert "Se connecter en SSO" not in html and 'name="password"' in html and "auth-local" not in html
+    assert "Sign in with SSO" not in html and 'name="password"' in html and "auth-local" not in html

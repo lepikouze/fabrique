@@ -1,4 +1,4 @@
-"""Lot 5 : channels de notification (webhook, Teams, Jira, SMTP), file d'envoi et nouvelles tentatives."""
+"""Stage 5: notification channels (webhook, Teams, Jira, SMTP), sending file and new retries."""
 import hashlib, hmac, json, time
 import httpx
 import pytest
@@ -37,15 +37,15 @@ def queue():
 def test_webhook_secrets_are_write_only_and_signed(sent):
     cl = web()
     r = add(cl, url="http://pas-https.test/h")
-    assert "https obligatoire" in cl.get(r.headers["location"]).text
+    assert "https required" in cl.get(r.headers["location"]).text
     add(cl, url="https://hook.test/h", hmac="s3cret-signature")
     page = cl.get("/settings?tab=notifications").text
     assert "hook.test" not in page and "s3cret" not in page and "Channel" in page
     with db.tx() as c:
-        assert "hook.test" not in json.dumps(db.get_setting(c, "channels")[0])            # chiffré en base
-    add(cl, name="Renommé")                                                                # secrets vides : gardés
+        assert "hook.test" not in json.dumps(db.get_setting(c, "channels")[0])            # encoded in base
+    add(cl, name="Renommé")                                                                # empty secrets: kept
     r = cl.post("/settings/channels/c1/test")
-    assert "envoyé" in cl.get(r.headers["location"]).text
+    assert "sent" in cl.get(r.headers["location"]).text
     req = sent[-1]
     assert str(req.url) == "https://hook.test/h" and json.loads(req.content)["event"] == "test"
     want = "sha256=" + hmac.new(b"s3cret-signature", req.content, hashlib.sha256).hexdigest()
@@ -53,7 +53,7 @@ def test_webhook_secrets_are_write_only_and_signed(sent):
 
 
 def test_only_admins_manage_channels(sent):
-    r = web("verifier").post("/settings/channels", data={"cid": "x", "type": "webhook", "name": "x", "url": "https://h.test"})
+    r = web("reviewer").post("/settings/channels", data={"cid": "x", "type": "webhook", "name": "x", "url": "https://h.test"})
     assert r.status_code in (302, 303)
     with db.tx() as c:
         assert not db.get_setting(c, "channels")[0]
@@ -87,12 +87,12 @@ def test_failed_delivery_retries_with_backoff_then_gives_up(sent):
     notify.flush(t)
     n = queue()[0]
     assert n["state"] == "pending" and n["attempts"] == 1 and "503" in n["last_error"] and n["next_try"] == t + 30
-    assert notify.flush(t + 10) == 0 and queue()[0]["attempts"] == 1                       # pas encore dû
+    assert notify.flush(t + 10) == 0 and queue()[0]["attempts"] == 1                       # not yet due
     for d in notify.DELAYS:
         t += d
         notify.flush(t)
     assert queue()[0]["state"] == "failed" and queue()[0]["attempts"] == len(notify.DELAYS) + 1
-    assert "échec" in cl.get("/settings?tab=notifications").text
+    assert "failed" in cl.get("/settings?tab=notifications").text
 
 
 def test_jira_comments_on_cited_issue_or_creates_one(sent):
@@ -105,13 +105,13 @@ def test_jira_comments_on_cited_issue_or_creates_one(sent):
     assert sent[-1].url.path == "/rest/api/2/issue/FAB-42/comment" and sent[-1].headers["authorization"].startswith("Basic ")
     n = len(sent)
     notify.deliver(ch, notify.message("ready", job={"ref": "X", "title": "Sans ticket"}))
-    assert len(sent) == n                                                                  # création désactivée : rien
+    assert len(sent) == n                                                                  # creation disabled: nothing
     add(cl, cid="jira", type="jira", name="Jira", base_url="https://j.test", project="FAB", auth="datacenter", user="", create="1")
     ch = chan("jira")
     notify.deliver(ch, notify.message("failed", job={"ref": "X", "title": "Sans ticket"}))
     body = json.loads(sent[-1].content)
     assert sent[-1].url.path == "/rest/api/2/issue" and body["fields"]["project"]["key"] == "FAB"
-    assert sent[-1].headers["authorization"] == "Bearer t0k"                                # jeton gardé (écriture seule)
+    assert sent[-1].headers["authorization"] == "Bearer t0k"                                # token kept (write-only)
 
 
 def chan(cid):
@@ -145,7 +145,7 @@ def test_smtp_starttls_login_and_recipients(monkeypatch):
     add(cl, cid="mail", type="smtp", name="Mail", host="smtp.ex.fr", security="starttls", user="bot", password="pw",
         sender="fab@ex.fr", to="a@ex.fr; b@ex.fr", events=["failed"])
     r = cl.post("/settings/channels/mail/test")
-    assert "envoyé" in cl.get(r.headers["location"]).text
+    assert "sent" in cl.get(r.headers["location"]).text
     assert FakeSMTP.log[0] == ("connect", "smtp.ex.fr", 587, "plain") and ("starttls",) in FakeSMTP.log
     assert ("login", "bot", "pw") in FakeSMTP.log
     send = FakeSMTP.log[-1]
@@ -157,20 +157,20 @@ def test_stored_secrets_do_not_follow_a_new_destination(sent, monkeypatch):
     monkeypatch.setattr(notify, "SMTP", type("M", (), {"SMTP": FakeSMTP, "SMTP_SSL": FakeSMTP}))
     cl = web()
     add(cl, cid="jira", type="jira", name="Jira", base_url="https://j.test", project="FAB", auth="datacenter", token="t0k")
-    add(cl, cid="jira", type="jira", name="Jira bis", base_url="https://j.test", project="FAB", auth="datacenter")   # même adresse : token gardé
+    add(cl, cid="jira", type="jira", name="Jira bis", base_url="https://j.test", project="FAB", auth="datacenter")   # same address: token kept
     assert chan("jira")["name"] == "Jira bis"
     r = add(cl, cid="jira", type="jira", name="Jira ter", base_url="https://ailleurs.test", project="FAB", auth="datacenter")
-    assert "token obligatoires" in cl.get(r.headers["location"]).text and chan("jira")["cfg"]["base_url"] == "https://j.test"
+    assert "token are required" in cl.get(r.headers["location"]).text and chan("jira")["cfg"]["base_url"] == "https://j.test"
     smtp = dict(cid="mail", type="smtp", name="Mail", security="starttls", user="bot", sender="fab@ex.fr", to="a@ex.fr")
     add(cl, host="smtp.ex.fr", password="pw", **smtp)
-    add(cl, host="smtp.ex.fr", **dict(smtp, name="Mail bis"))                             # même serveur : mot de passe gardé
+    add(cl, host="smtp.ex.fr", **dict(smtp, name="Mail bis"))                             # same server: password kept
     assert chan("mail")["name"] == "Mail bis"
     r = add(cl, host="smtp.ailleurs.fr", **smtp)
-    assert "saisis à nouveau le mot de passe" in cl.get(r.headers["location"]).text and chan("mail")["cfg"]["host"] == "smtp.ex.fr"
+    assert "enter the password again" in cl.get(r.headers["location"]).text and chan("mail")["cfg"]["host"] == "smtp.ex.fr"
 
 
 def test_settings_page_renders_edit_form(sent):
     cl = web()
-    add(cl, cid="t", type="teams", name="Équipe", url="https://teams.test/wf")
+    add(cl, cid="t", type="teams", name="team", url="https://teams.test/wf")
     page = cl.get("/settings?tab=notifications&chan=t").text
-    assert "Modifier « Équipe »" in page and "défini : laisse vide pour garder" in page and "teams.test" not in page
+    assert "Edit “team”" in page and "set: leave empty to keep" in page and "teams.test" not in page

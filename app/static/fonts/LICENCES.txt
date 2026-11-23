@@ -1,7 +1,7 @@
-Inter (variable, sous-ensemble latin) — Copyright 2016 The Inter Project Authors — SIL Open Font License 1.1 (LICENCE-inter.txt)
-JetBrains Mono (variable, sous-ensemble latin) — Copyright 2020 The JetBrains Mono Project Authors — SIL Open Font License 1.1 (LICENCE-jetbrains-mono.txt)
-Fichiers obtenus depuis les paquets @fontsource-variable/inter et @fontsource-variable/jetbrains-mono 5.2.8.
-Jost (graisse 600, sous-ensemble latin) — Copyright 2020 The Jost Project Authors — SIL Open Font License 1.1 (LICENCE-jost.txt)
-Fichier obtenu depuis Google Fonts (fonts.gstatic.com), version 20.
-DejaVu Sans, Sans Bold, Sans Oblique et Sans Mono 2.37 (sous-ensembles : latin, grec, ponctuation, flèches, symboles) — Copyright 2003 Bitstream, Inc. (Bitstream Vera) ; modifications DejaVu dans le domaine public — licence Bitstream Vera, permissive (LICENCE-dejavu.txt)
-Fichiers .ttf tirés de dejavu-fonts-ttf-2.37 (github.com/dejavu-fonts/dejavu-fonts), réduits avec pyftsubset. Ils servent au rapport d'étude en PDF, pas à l'interface.
+Inter (variable, Latin subset) — Copyright 2016 The Inter Project Authors — SIL Open Font License 1.1 (LICENCE-inter.txt)
+JetBrains Mono (variable, Latin subset) — Copyright 2020 The JetBrains Mono Project Authors — SIL Open Font License 1.1 (LICENCE-jetbrains-mono.txt)
+Files taken from the @fontsource-variable/inter and @fontsource-variable/jetbrains-mono packages, 5.2.8.
+Jost (weight 600, Latin subset) — Copyright 2020 The Jost Project Authors — SIL Open Font License 1.1 (LICENCE-jost.txt)
+File taken from Google Fonts (fonts.gstatic.com), version 20.
+DejaVu Sans, Sans Bold, Sans Oblique and Sans Mono 2.37 (subsets: Latin, Greek, punctuation, arrows, symbols) — Copyright 2003 Bitstream, Inc. (Bitstream Vera); DejaVu changes in the public domain — Bitstream Vera licence, permissive (LICENCE-dejavu.txt)
+.ttf files taken from dejavu-fonts-ttf-2.37 (github.com/dejavu-fonts/dejavu-fonts), reduced with pyftsubset. They are used for the study report as PDF, not for the interface.

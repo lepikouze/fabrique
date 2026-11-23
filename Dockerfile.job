@@ -1,11 +1,11 @@
-# Images des conteneurs de jobs, une par langage (liste blanche du lanceur : python, node, go, java). Même outillage
-# partout : git, Python 3 (pour fab et les hooks), Node.js 22, Claude Code, Codex CLI et Betterleaks. Le code du runner
-# n'y est pas : seulement la commande fab, les hooks garde.py et controle.py, et les réglages gérés de Claude Code.
-# Aucun secret.
+# Job container images, one per language (launcher allowlist: python, node, go, java). Same tooling
+# everywhere: git, Python 3 (for fab and hooks), Node.js 22, Claude Code, Codex CLI and Betterleaks. The runner code
+# is not there: only the fab command, the guard.py and security_check.py hooks, and the managed settings of Claude Code.
+# No secret.
 ARG BASE=python:3.12-slim-bookworm
 FROM node:22-bookworm-slim AS node
 
-# Betterleaks (détection de secrets, MIT) : archive officielle, empreinte SHA-256 figée ici pour chaque architecture.
+# Betterleaks (secret detection, MIT): official archive, fixed SHA-256 fingerprint here for each architecture.
 FROM debian:bookworm-slim AS betterleaks
 ARG TARGETARCH=amd64
 ARG BETTERLEAKS_VERSION=1.10.1
@@ -32,7 +32,7 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && (id -u agent >/dev/null 2>&1 || useradd -u 10002 -m -d /home/agent agent) && mkdir -p /work /etc/claude-code
 COPY runner/managed-settings.json /etc/claude-code/managed-settings.json
 COPY --from=betterleaks /usr/local/bin/betterleaks /usr/local/bin/betterleaks
-COPY runner/fab.py runner/garde.py runner/controle.py /opt/fabrique/runner/
+COPY runner/fab.py runner/guard.py runner/security_check.py /opt/fabrique/runner/
 RUN install -m 0755 /opt/fabrique/runner/fab.py /usr/local/bin/fab \
  && chmod -R a+rX /opt/fabrique && chmod 0644 /etc/claude-code/managed-settings.json
 ARG FLAVOR=python

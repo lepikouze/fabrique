@@ -14,7 +14,7 @@ settings.
 | `FABRIQUE_PREFIX` | `FAB` | Prefix of job references (`FAB-12`) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID` | — | OIDC provider; otherwise configurable in the dashboard |
 | `OIDC_SCOPES`, `OIDC_GROUPS_CLAIM` | `openid profile email`, `groups` | Scopes and name of the groups claim |
-| `OIDC_ADMIN_GROUPS`, `OIDC_VERIFIER_GROUPS`, `OIDC_REQUESTER_GROUPS` | — | Groups granting each role (comma-separated lists) |
+| `OIDC_ADMIN_GROUPS`, `OIDC_REVIEWER_GROUPS`, `OIDC_REQUESTER_GROUPS` | — | Groups granting each role (comma-separated lists) |
 | `OIDC_SESSION_HOURS` | `12` | Length of a session |
 | `FABRIQUE_ADMINS` | — | Accounts that are always admin (fallback) |
 | `FABRIQUE_BOOTSTRAP_RUNNER_FILE` | — | All-in-one: file where the dashboard drops the built-in runner's token, which it creates at start-up |
@@ -22,8 +22,9 @@ settings.
 | `FABRIQUE_OPEN` | `0` | `1`: open mode, no sign-in, every visitor is admin. Development only |
 | `FABRIQUE_RUNNER_API_INTERNAL` | `1` | Refuses the runners' API when the request came through a reverse proxy; `0` for a remote runner |
 | `FABRIQUE_DEMO`, `FABRIQUE_DEMO_TICK` | `0`, `6` | Demonstration mode and pace of the simulator (seconds) |
+| `FABRIQUE_LANG` | `en` | Interface language of last resort (`en` or `fr`), when neither the person nor the browser decides |
 | `FABRIQUE_NOTIFY` | `1` | `0` turns off notification delivery |
-| **`OIDC_CLIENT_SECRET`** | — | OIDC client secret; otherwise entered in Settings → Connexion (encrypted) |
+| **`OIDC_CLIENT_SECRET`** | — | OIDC client secret; otherwise entered in Settings → Sign-in (encrypted) |
 | **`SESSION_SECRET`** | generated | Signs sessions, at least 32 characters |
 | **`FABRIQUE_SECRET_KEY`** | generated | Encrypts model keys and channel secrets |
 
@@ -38,20 +39,22 @@ rather than opening up.
 |---|---|---|
 | `FABRIQUE_URL` | `http://fabrique:8080` | Dashboard address |
 | **`FABRIQUE_RUNNER_TOKEN`** | — | Runner token, given once by the dashboard; or `FABRIQUE_RUNNER_TOKEN_FILE` (file) |
-| `GIT_BASE_URL`, **`GIT_TOKEN`** | — | Forgejo — optional if set in Settings → Providers Git |
+| `GIT_BASE_URL`, **`GIT_TOKEN`** | — | Forgejo — optional if set in Settings → Git providers |
 | `GITLAB_BASE_URL`, **`GITLAB_TOKEN`** | — | GitLab — same |
 | `GITHUB_BASE_URL`, `GITHUB_API_URL`, **`GITHUB_TOKEN`** | github.com | GitHub — same |
 | `GIT_AUTHOR` | — | Author of the runner's commits, `Name <address>` |
 | `RUNNER_HOST`, `RUNNER_TAGS` | machine name, — | Display name and tags (a repo can require some) |
 | `CAPACITY` | `1` | Jobs in parallel |
 | `EXECUTOR` | `local` | `docker`: one container per job, through the launcher; `local`: shared workshop (development) |
-| `LAUNCHER_URL`, **`LAUNCHER_TOKEN`** | `http://fabrique-lanceur:7080`, — | Launcher and its token; or `LAUNCHER_TOKEN_FILE` (file) |
+| `LAUNCHER_URL`, **`LAUNCHER_TOKEN`** | `http://fabrique-launcher:7080`, — | Launcher and its token; or `LAUNCHER_TOKEN_FILE` (file) |
 | `WORK_DIR` | `/work` | The runner's workspaces and Git mirrors |
 | `RELAY_HOST`, `RELAY_PORT`, `RELAY_PUBLIC_URL` | `127.0.0.1`, `7071`, — | `fab` relay (agent to dashboard); `0.0.0.0` in docker mode |
 | `GATEWAY_PORT`, `GATEWAY_PUBLIC_URL` | `7072`, — | Key gateway (agent to model) |
 | `JOB_PROXY` | — | Egress proxy given to jobs |
 | `AGENT_UID` | `10002` in the image | User the agent and the operations in the workspace run as |
 | `JOB_TIMEOUT`, `CHECK_TIMEOUT`, `REVIEW_TIMEOUT` | `3600`, `900`, `600` | Maximum durations, in seconds |
+| `MODEL_WAITS` | `30,60,120,240,480` | Seconds waited before each new attempt when the model server is saturated, loading or unreachable; the job fails after the last one |
+| `MERGE_RETRY_WAITS` | `5,15,30` | Seconds waited before each new attempt when the Git host refuses a merge for a moment |
 | `MAX_TURNS`, `FIX_ATTEMPTS` | `60`, `2` | Agent turns; new attempts if the checks fail |
 | `REVIEW_MODE` | `direct` | `direct`: one request to the model per reviewer; `agent`: read-only agent, on an export of the verified commit |
 | `CLAUDE_BIN`, `CODEX_BIN` | `/usr/local/bin/claude`, `/usr/local/bin/codex` | Agent programs, by absolute path (never looked up in a job's `PATH`) |
@@ -74,7 +77,7 @@ agent.
 |---|---|---|
 | **`LAUNCHER_TOKEN`** | — | Token required for every request, at least 32 characters; or `LAUNCHER_TOKEN_FILE`, created if missing |
 | `JOBS_PREFIX` | `fabrique-job` | Prefix of job container names |
-| `ATELIER_IMAGES` | — | Allowlist of job images: `python=image:tag,node=…,go=…,java=…` |
+| `JOB_IMAGES` | — | Allowlist of job images: `python=image:tag,node=…,go=…,java=…` |
 | `JOBS_NETWORK` | `fabrique-jobs` | (Internal) network of the job containers |
 | `WORK_HOST` | — | Workspaces folder **as seen from the host** |
 | `WORK_DIR` | `/work` | Same path as in the runner |

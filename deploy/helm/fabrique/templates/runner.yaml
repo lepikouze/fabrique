@@ -1,12 +1,12 @@
 {{- if .Values.runner.enabled }}
 {{- $name := include "fabrique.fullname" . }}
 {{- $k8s := eq .Values.runner.executor "kubernetes" }}
-{{- if not (has .Values.runner.executor (list "kubernetes" "local")) }}{{ fail "runner.executor : « kubernetes » ou « local »" }}{{ end }}
+{{- if not (has .Values.runner.executor (list "kubernetes" "local")) }}{{ fail "runner.executor: \"kubernetes\" or \"local\"" }}{{ end }}
 {{- if not .Values.runner.persistence.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ $name }}-travail
+  name: {{ $name }}-work
   labels: {{- include "fabrique.labels" . | nindent 4 }}
 spec:
   accessModes: [{{ .Values.runner.persistence.accessMode }}]
@@ -45,8 +45,8 @@ spec:
       securityContext:
         seccompProfile: {type: RuntimeDefault}
         {{- if $k8s }}
-        # Volume de travail neuf (NFS, CSI) : la racine appartient souvent à root. Le groupe du runner lui est donné au
-        # montage, pour qu'il puisse y écrire ; vérifié sur la racine seulement, pas fichier par fichier.
+        # New work volume (NFS, CSI): the root often belongs to root. The runner's group is given to it at
+        # mount, so that it can write to it; verified on the root only, not file by file.
         fsGroup: 10002
         fsGroupChangePolicy: OnRootMismatch
         {{- end }}
@@ -63,7 +63,7 @@ spec:
             - {name: RUNNER_TAGS, value: {{ .Values.runner.tags | quote }}}
             - {name: CAPACITY, value: {{ .Values.runner.capacity | quote }}}
             {{- if $k8s }}
-            # « docker » désigne ici l'exécution par un launcher, un conteneur par job : sur Kubernetes, un Pod par job.
+            # "docker" here refers to execution by a launcher, one container per job: on Kubernetes, one Pod per job.
             - {name: EXECUTOR, value: docker}
             - {name: LAUNCHER_URL, value: "http://{{ $name }}-launcher:7080"}
             - name: LAUNCHER_TOKEN
@@ -72,7 +72,7 @@ spec:
             - {name: RELAY_PUBLIC_URL, value: "http://{{ $name }}-runner:7071"}
             - {name: GATEWAY_PUBLIC_URL, value: "http://{{ $name }}-runner:7072"}
             - {name: JOB_PROXY, value: "http://{{ $name }}-proxy:3128"}
-            - {name: AGENT_UID, value: ""}       # pas de changement d'utilisateur : le runner EST déjà l'utilisateur sans droits
+            - {name: AGENT_UID, value: ""}       # no user change: the runner IS already the unprivileged user
             - {name: HOME, value: /tmp}
             {{- else }}
             - {name: EXECUTOR, value: local}
@@ -87,9 +87,9 @@ spec:
           {{- end }}
           securityContext:
             {{- if $k8s }}
-            # Un Pod par job : plus aucun code d'agent ne tourne ici. Le runner est un utilisateur sans droits, le même
-            # que celui des Pods de jobs (10002), ce qui lui suffit pour préparer leur espace de travail dans le volume
-            # partagé. Conforme au niveau Pod Security « restricted ».
+            # One Pod per job: no agent code runs here anymore. The runner is an unprivileged user, the same
+            # as the one for the job Pods (10002), which is enough for it to prepare their work workspace in the shared
+            # volume. Compliant with "restricted" Pod Security level.
             runAsNonRoot: true
             runAsUser: 10002
             runAsGroup: 10002
@@ -97,8 +97,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
             {{- else }}
-            # Jobs dans ce Pod : le runner démarre en root sans capacités, sauf celles qui lui servent à lancer l'agent
-            # sous un autre utilisateur (10002, sans droits ni secrets) et à l'arrêter. Niveau Pod Security « baseline ».
+            # Jobs in this Pod: the runner starts as root without capabilities, except those used to launch the agent
+            # under another user (10002, without rights or secrets) and stop it. Pod Security level "baseline".
             runAsUser: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -106,12 +106,12 @@ spec:
             {{- end }}
           resources: {{- toYaml .Values.runner.resources | nindent 12 }}
           volumeMounts:
-            - {name: travail, mountPath: /work}
+            - {name: work, mountPath: /work}
             - {name: tmp, mountPath: /tmp}
       volumes:
-        - name: travail
+        - name: work
           persistentVolumeClaim:
-            claimName: {{ .Values.runner.persistence.existingClaim | default (printf "%s-travail" $name) }}
+            claimName: {{ .Values.runner.persistence.existingClaim | default (printf "%s-work" $name) }}
         - name: tmp
           emptyDir: {}
       {{- with .Values.nodeSelector }}
@@ -134,7 +134,7 @@ metadata:
 spec:
   selector: {{- include "fabrique.selector" . | nindent 4 }}
     app.kubernetes.io/component: runner
-  ports:                                 # joints par les Pods de jobs seulement (NetworkPolicy)
+  ports:                                 # reachable by job Pods only (NetworkPolicy)
     - {name: relay, port: 7071, targetPort: relay}
     - {name: gateway, port: 7072, targetPort: gateway}
 {{- end }}

@@ -12,6 +12,8 @@ La Fabrique ne dépend d'aucun provider : Forgejo, GitLab ou GitHub pour le code
 (Authentik, Keycloak…) pour la connexion ; Claude Code ou Codex comme agent ; un modèle Anthropic, OpenAI ou local
 (llama.cpp, vLLM).
 
+> L'interface existe en français et en anglais : elle suit le navigateur, et chacun peut en changer depuis le menu en bas à gauche.
+
 ![Tableau des jobs](docs/img/jobs.png)
 
 ## Pourquoi
@@ -37,7 +39,7 @@ et d'infrastructure, pas comme des consignes données au modèle.
 |---|---|---|
 | **Dashboard** (`app/`) | Plan de contrôle : demandes, inbox, barrières, settings, audit. Ne touche jamais au code. | La base, les décisions |
 | **Runner** (`runner/`) | Programme sans IA : prend les commandes du dashboard, prépare le workspace, lance l'agent, rejoue les checks, pousse, ouvre la PR, merge. | Tokens Git, clés des modèles (le temps d'un job) |
-| **Launcher** (`lanceur/`) | Crée un conteneur jetable par job, avec une politique figée. | Le seul accès à Docker |
+| **Launcher** (`launcher/`) | Crée un conteneur jetable par job, avec une politique figée. | Le seul accès à Docker |
 | **Conteneur du job** | Là où tournent l'agent et le code du repo. | Rien |
 | **Proxy** (`proxy/`) | Seule sortie réseau des jobs, en liste blanche. | — |
 
@@ -55,7 +57,7 @@ Le chemin d'une demande, de son repo au merge :
 - **Onboarding d'un repo** : un agent lit le repo et écrit sa *recipe* (`.fabrique/setup.json` : image, installation,
   checks) ; le runner la rejoue dans un conteneur neuf ; un humain le merge.
 - **Vérification** : code et sécurité toujours, architecture et infrastructure selon les fichiers touchés. Un point
-  bloquant doit venir avec une preuve que le runner rejoue.
+  blocking doit venir avec une preuve que le runner rejoue.
 - **Diff sur place** : le reviewer lit le diff du commit vérifié dans le job lui-même, fichier par fichier, avec les
   chemins protégés signalés. C'est le runner qui l'envoie ; le dashboard ne touche toujours pas au code.
 - **Contrôle de sécurité à l'écriture** : à chaque fichier écrit par l'agent, recherche de secrets en dur (Betterleaks)
@@ -78,7 +80,7 @@ Télécharge le fichier compose, puis lance-le : les images sont tirées de `ghc
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/lepikouze/fabrique/main/deploy/compose.prod.yaml
 docker compose -f compose.prod.yaml up -d
-docker compose -f compose.prod.yaml logs dashboard | grep "code d'installation"
+docker compose -f compose.prod.yaml logs dashboard | grep "setup code"
 ```
 
 Ouvre `http://<adresse-de-l-hôte>:8080`, saisis le **code d'installation** affiché dans les journaux, puis crée le compte
@@ -96,7 +98,7 @@ FABRIQUE_SECRET_KEY=$(openssl rand -hex 32)
 EOF
 ```
 
-Les workspaces des jobs vivent dans un dossier de l'hôte, `/opt/fabrique/travail` par défaut : Docker le crée au
+Les workspaces des jobs vivent dans un dossier de l'hôte, `/opt/fabrique/work` par défaut : Docker le crée au
 premier démarrage, il n'y a rien à préparer. Pour le placer ailleurs (un disque plus grand, par exemple), ajoute
 `FABRIQUE_WORK_DIR=/chemin/de/ton/choix` dans le fichier `.env`.
 
@@ -118,7 +120,7 @@ SESSION_SECRET=$(openssl rand -hex 32)
 FABRIQUE_SECRET_KEY=$(openssl rand -hex 32)
 EOF
 docker compose -f compose.traefik.yaml up -d
-docker compose -f compose.traefik.yaml logs dashboard | grep "code d'installation"
+docker compose -f compose.traefik.yaml logs dashboard | grep "setup code"
 ```
 
 `FABRIQUE_HOST` est le nom de domaine du dashboard, `TRAEFIK_NETWORK` le réseau Docker de ton Traefik et
@@ -137,7 +139,7 @@ Pour modifier le code ou construire tes propres images :
 git clone https://github.com/lepikouze/fabrique.git && cd fabrique
 docker compose --profile images build
 docker compose up -d
-docker compose logs dashboard | grep "code d'installation"
+docker compose logs dashboard | grep "setup code"
 ```
 
 [`.env.example`](.env.example) liste les variables utiles. Pour séparer le dashboard et les runners sur plusieurs

@@ -1,39 +1,47 @@
-"""Lanceur Kubernetes de la Fabrique : même contrat que le lanceur Docker (start, stop, kill, exec), mais chaque job tourne
-dans un Pod créé par l'API du cluster. C'est le SEUL composant qui parle à l'API Kubernetes, avec un compte de service
-limité à son namespace (créer, lire, supprimer des Pods ; y exécuter une commande). La politique des Pods de jobs est
-figée ici, pas négociable par l'appelant :
+"""Fabrique Kubernetes launcher: same contract as the Docker launcher (start, stop, kill, exec), but each job runs
+in a Pod created by the cluster API. It is the ONLY component that talks to the Kubernetes API, with a service
+account limited to its namespace (create, read, delete Pods; execute a command in them). The job Pod policy is
+fixed here, not negotiable by the caller:
 
-  image imposée (liste blanche) · utilisateur 10002 · aucune capacité · pas d'élévation de privilèges · système de
-  fichiers en lecture seule · mémoire et processeur limités · un seul montage (le sous-dossier de CE job dans le volume
-  de travail) · aucun accès à l'API du cluster · étiquettes fabrique.io/job (réseau fermé par NetworkPolicy)
+  imposed image (allowlist) · user 10002 · no capabilities · no privilege escalation · read-only file
+  system · limited memory and CPU · a single mount (the sub-folder of THIS job in the working volume)
+  · no cluster API access · fabrique.io/job labels (network closed by NetworkPolicy)
 
-Il n'agit que sur les Pods qu'il a créés (étiquette)."""
+It only acts on the Pods it has created (label)."""
+try:
+    from .texts import M
+except ImportError:
+    try:
+        from texts import M
+    except ImportError:
+        def M(t, **p):
+            return t.format(**p) if p else t
 import logging, os, threading, time
 from . import main as base
 from .main import Refused, name_of
 
-log = logging.getLogger("lanceur")
+log = logging.getLogger("launcher")
 NAMESPACE = os.environ.get("JOBS_NAMESPACE", "").strip()
-WORK_PVC = os.environ.get("WORK_PVC", "").strip()                       # volume partagé avec le runner (/work)
+WORK_PVC = os.environ.get("WORK_PVC", "").strip()                       # shared volume with the runner (/work)
 PULL_SECRETS = [s.strip() for s in os.environ.get("JOB_IMAGE_PULL_SECRETS", "").split(",") if s.strip()]
 PULL_POLICY = os.environ.get("JOB_IMAGE_PULL_POLICY", "IfNotPresent").strip()
-START_TIMEOUT = int(os.environ.get("JOB_START_TIMEOUT", "300"))         # tirage de l'image compris
-MAX_AGE = int(os.environ.get("JOB_MAX_AGE", str(24 * 3600)))            # au-delà, un Pod de job est tenu pour orphelin
+START_TIMEOUT = int(os.environ.get("JOB_START_TIMEOUT", "300"))         # image pull included
+MAX_AGE = int(os.environ.get("JOB_MAX_AGE", str(24 * 3600)))            # beyond that, a job Pod is considered orphaned
 REAP_EVERY = 600
-PROXY_SELECTOR = os.environ.get("PROXY_SELECTOR", "app.kubernetes.io/component=proxy").strip()   # Pod du proxy de sortie
+PROXY_SELECTOR = os.environ.get("PROXY_SELECTOR", "app.kubernetes.io/component=proxy").strip()   # the egress proxy's Pod
 UID = 10002
 LABEL = "fabrique.io/job"
 ROLE = {"fabrique.io/role": "job"}
 
 
 def memory(v):
-    """« 4g » (notation Docker) -> « 4Gi » ; une quantité Kubernetes est gardée telle quelle."""
+    """"4g" (Docker notation) -> "4Gi"; a Kubernetes quantity is kept as is."""
     v = str(v).strip()
     return v[:-1] + {"g": "Gi", "m": "Mi", "k": "Ki"}[v[-1].lower()] if v and v[-1].lower() in "gmk" and v[:-1].isdigit() else v
 
 
 def pod_spec(ref, image):
-    """Manifeste du Pod d'un job. Rien ici ne vient de l'appelant, sauf la référence (validée) et le NOM de l'image."""
+    """Job Pod manifest. Nothing here comes from the caller, except the reference (validated) and the image NAME."""
     ws = f"{base.WORK_IN}/{ref}"
     return {
         "apiVersion": "v1", "kind": "Pod",
@@ -51,16 +59,16 @@ def pod_spec(ref, image):
                                     "capabilities": {"drop": ["ALL"]}},
                 "resources": {"limits": {"memory": memory(base.MEM), "cpu": str(base.CPUS)},
                               "requests": {"memory": "256Mi", "cpu": "100m"}},
-                "volumeMounts": [{"name": "travail", "mountPath": ws, "subPath": ref}, {"name": "tmp", "mountPath": "/tmp"}],
+                "volumeMounts": [{"name": "work", "mountPath": ws, "subPath": ref}, {"name": "tmp", "mountPath": "/tmp"}],
             }],
-            "volumes": [{"name": "travail", "persistentVolumeClaim": {"claimName": WORK_PVC}},
+            "volumes": [{"name": "work", "persistentVolumeClaim": {"claimName": WORK_PVC}},
                         {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}}],
         },
     }
 
 
 def wrap(argv, env, workdir):
-    """L'API d'exécution de Kubernetes ne prend ni environnement ni dossier : on les pose avec env(1) et sh(1)."""
+    """The Kubernetes execution API takes neither environment nor directory: they are set using env(1) and sh(1)."""
     return ["env", *[f"{k}={v}" for k, v in env.items()], "sh", "-c", 'cd "$0" && exec "$@"', workdir, *argv]
 
 
@@ -69,7 +77,7 @@ class KubeLauncher:
         self.core, self.execer, self.ns, self.sleep = core, execer, namespace or NAMESPACE, sleep
 
     def _mine(self, ref):
-        """Le Pod du job, seulement s'il porte notre étiquette (jamais un autre Pod du namespace)."""
+        """The job Pod, only if it carries our label (never another Pod in the namespace)."""
         try:
             p = self.core.read_namespaced_pod(name_of(ref), self.ns)
         except Exception as e:
@@ -77,7 +85,7 @@ class KubeLauncher:
                 return None
             raise
         if (p.metadata.labels or {}).get(LABEL) != ref:
-            raise Refused("ce Pod n'a pas été créé par le lanceur")
+            raise Refused(M("this Pod was not created by the launcher"))
         return p
 
     def _delete(self, ref, wait=True):
@@ -93,36 +101,36 @@ class KubeLauncher:
 
     def _wait_running(self, ref):
         t = time.time() + START_TIMEOUT
-        why = "inconnu"
+        why = "unknown"
         while time.time() < t:
             p = self._mine(ref)
             if p is None:
-                raise Refused("le Pod du job a disparu pendant son démarrage")
+                raise Refused(M("the job's Pod disappeared while starting"))
             if p.status.phase == "Running":
                 return p
             if p.status.phase in ("Failed", "Succeeded"):
-                raise Refused(f"le Pod du job s'est arrêté au démarrage ({p.status.phase})")
+                raise Refused(M("the job's Pod stopped at start-up ({phase})", phase=p.status.phase))
             for cs in (p.status.container_statuses or []):
                 w = getattr(cs.state, "waiting", None)
                 if w and w.reason:
                     why = f"{w.reason} : {(w.message or '')[:200]}"
                     if w.reason in ("ErrImagePull", "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError"):
-                        raise Refused(f"le Pod du job ne démarre pas ({why})")
+                        raise Refused(M("the job's Pod does not start ({why})", why=why))
             self.sleep(1)
-        raise Refused(f"le Pod du job n'a pas démarré en {START_TIMEOUT} s ({why})")
+        raise Refused(M("the job's Pod did not start within {start_timeout} s ({why})", start_timeout=START_TIMEOUT, why=why))
 
     def start(self, ref, image="python"):
         image = image or "python"
         if image not in base.IMAGES:
-            raise Refused(f"image de job inconnue : {image} (liste blanche : {', '.join(sorted(base.IMAGES)) or 'vide'})")
+            raise Refused(f"unknown job image: {image} (allowlist: {', '.join(sorted(base.IMAGES)) or 'empty'})")
         if not WORK_PVC:
-            raise Refused("WORK_PVC n'est pas défini : le lanceur ne sait pas quel volume monter")
+            raise Refused("WORK_PVC is not set: the launcher does not know which volume to mount")
         p = self._mine(ref)
         if p is not None:
             if p.spec.containers[0].image == base.IMAGES[image] and p.status.phase in ("Running", "Pending"):
                 self._wait_running(ref)
                 return {"container": p.metadata.name, "reused": True, "image": image}
-            self._delete(ref)             # autre langage (onboarding qui change d'image), ou Pod terminé : Pod neuf
+            self._delete(ref)             # other language (onboarding that changes image), or finished Pod: new Pod
         self.core.create_namespaced_pod(self.ns, pod_spec(ref, image))
         self._wait_running(ref)
         return {"container": name_of(ref), "reused": False, "image": image}
@@ -134,14 +142,14 @@ class KubeLauncher:
         except Refused:
             raise
         except Exception as e:
-            log.warning("%s : suppression : %s", ref, e)
+            log.warning("%s: removal: %s", ref, e)
         return {"stopped": True}
 
     def net(self, ref):
-        """Sorties réseau du job depuis son démarrage, lues dans le journal du Pod du proxy (droit pods/log, lecture seule)."""
+        """Job network egress from its startup, read from the proxy Pod log (pods/log permission, read-only)."""
         p = self._mine(ref)
         if p is None:
-            raise Refused("Pod du job absent")
+            raise Refused(M("job Pod missing"))
         ip, started = getattr(p.status, "pod_ip", "") or "", getattr(p.status, "start_time", None)
         proxies = self.core.list_namespaced_pod(self.ns, label_selector=PROXY_SELECTOR).items
         if not ip or not proxies:
@@ -150,23 +158,23 @@ class KubeLauncher:
             age = int(time.time() - started.timestamp()) + 60 if started else 24 * 3600
             text = self.core.read_namespaced_pod_log(proxies[0].metadata.name, self.ns, since_seconds=max(60, age))
         except Exception as e:
-            log.warning("%s : journal du proxy illisible (%s)", ref, type(e).__name__)
+            log.warning("%s: proxy log unreadable (%s)", ref, type(e).__name__)
             return {"known": False}
         return base.egress(text, ip)
 
     def kill(self, ref):
-        """Tue tous les processus de l'agent dans le Pod (sauf le processus 1 qui le maintient en vie)."""
+        """Kills all agent processes in the Pod (except process 1 which keeps it alive)."""
         p = self._mine(ref)
         if p is not None and p.status.phase == "Running":
             try:
                 self.execer(self.core, name_of(ref), self.ns, ["kill", "-9", "-1"], lambda o: None)
             except Exception as e:
-                log.warning("%s : arrêt des processus : %s", ref, e)
+                log.warning("%s: stopping the processes: %s", ref, e)
         return {"killed": True}
 
     def reap(self, now=None):
-        """Supprime les Pods de jobs oubliés : terminés, ou plus vieux que MAX_AGE (runner arrêté en plein job, par
-        exemple). Ne regarde que les Pods portant l'étiquette du lanceur. Renvoie les noms supprimés."""
+        """Deletes forgotten job Pods: finished, or older than MAX_AGE (runner stopped mid-job, for
+        example). Only looks at Pods carrying the launcher label. Returns the deleted names."""
         now, gone = now or time.time(), []
         for p in self.core.list_namespaced_pod(self.ns, label_selector=LABEL).items:
             if not (p.metadata.labels or {}).get(LABEL):
@@ -178,28 +186,28 @@ class KubeLauncher:
                     self.core.delete_namespaced_pod(p.metadata.name, self.ns, grace_period_seconds=0)
                     gone.append(p.metadata.name)
                 except Exception as e:
-                    log.warning("%s : nettoyage : %s", p.metadata.name, e)
+                    log.warning("%s: cleanup: %s", p.metadata.name, e)
         if gone:
-            log.info("Pods de jobs orphelins supprimés : %s", ", ".join(gone))
+            log.info("orphaned job Pods deleted: %s", ", ".join(gone))
         return gone
 
     def exec_stream(self, ref, body, write):
         argv, env = body.get("argv"), body.get("env") or {}
         if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv) or sum(map(len, argv)) > 400_000:
-            raise Refused("commande invalide")
+            raise Refused("invalid command")
         if not isinstance(env, dict) or len(env) > 64:
-            raise Refused("environnement invalide")
+            raise Refused("invalid environment")
         for k, v in env.items():
             if not base.ENV_KEY.match(k) or k in base.FORBIDDEN_ENV or not isinstance(v, str) or len(v) > 20_000:
-                raise Refused(f"variable refusée : {k}")
+                raise Refused(M("variable refused: {k}", k=k))
         root = f"{base.WORK_IN}/{ref}"
         workdir = str(body.get("workdir") or root)
         if not (workdir == root or workdir.startswith(root + "/")) or ".." in workdir:
-            raise Refused("dossier de travail hors de l'espace du job")
+            raise Refused(M("working directory outside the job's space"))
         timeout = min(int(body.get("timeout") or 600), base.MAX_TIMEOUT)
         p = self._mine(ref)
         if p is None or p.status.phase != "Running":
-            raise Refused("Pod du job absent : start d'abord")
+            raise Refused(M("job Pod missing: start first"))
         timer = threading.Timer(timeout, self.kill, args=(ref,))
         timer.start()
         try:
@@ -210,7 +218,7 @@ class KubeLauncher:
 
 
 def kube_exec(core, name, namespace, command, write):
-    """Exécute une commande dans le Pod et relaie sa sortie ; renvoie son code de sortie."""
+    """Executes a command in the Pod and relays its output; returns its exit code."""
     from kubernetes.stream import stream
     resp = stream(core.connect_get_namespaced_pod_exec, name, namespace, command=command, container="job",
                   stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False)
@@ -229,12 +237,12 @@ def kube_exec(core, name, namespace, command, write):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not base.TOKEN or len(base.TOKEN) < 32:
-        raise SystemExit("LAUNCHER_TOKEN manquant ou trop court")
+        raise SystemExit("LAUNCHER_TOKEN missing or too short")
     if not NAMESPACE or not WORK_PVC:
-        raise SystemExit("JOBS_NAMESPACE et WORK_PVC sont obligatoires")
+        raise SystemExit("JOBS_NAMESPACE and WORK_PVC are required")
     from kubernetes import client, config as kconfig
     kconfig.load_incluster_config()
-    log.info("lanceur Kubernetes : namespace %s, volume de travail %s", NAMESPACE, WORK_PVC)
+    log.info("Kubernetes launcher: namespace %s, work volume %s", NAMESPACE, WORK_PVC)
     launcher = KubeLauncher(client.CoreV1Api(), kube_exec)
 
     def reaper():
@@ -242,7 +250,7 @@ def main():
             try:
                 launcher.reap()
             except Exception as e:
-                log.warning("nettoyage des Pods orphelins : %s", e)
+                log.warning("cleanup of orphaned Pods: %s", e)
             time.sleep(REAP_EVERY)
     threading.Thread(target=reaper, daemon=True).start()
     base.serve(launcher)

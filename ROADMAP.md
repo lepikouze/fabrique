@@ -12,11 +12,12 @@ What ships leaves this page and moves to the [changelog](CHANGELOG.md).
 
 ## Planned
 
-### Multilingual
-The interface and its messages are in French today; the documentation is now in English. English and Spanish are
-coming for the interface, with a language choice per account; other languages later, as needed.
+### More languages
+The interface exists in English and in French, following the browser or chosen by each person; a job has its own
+language, in which the agents write. Spanish is next; other languages later, as needed. A new language is a catalogue
+to translate: the code and the instructions given to the agents are in English.
 
-`English` `Spanish` `Per-account choice` `Documentation`
+`Spanish` `Catalogue per language`
 
 ## Under study
 

@@ -1,15 +1,16 @@
-"""Côté dashboard du travail réel : file de commandes (intents) pour les runners, événements remontés par les runners,
-barrières de merge évaluées par le code (jamais par l'agent).
+"""Dashboard side of the real work: order queue (intents) for runners, events reported by runners,
+merge gates evaluated by code (never by the agent).
 
-Un runner s'authentifie par son token (empreinte en base), prend une commande avec un bail, et ne peut écrire que sur les
-jobs dont il détient une commande. Un bail expiré (runner muet) remet la commande en file ; après 3 essais, le job échoue."""
+A runner authenticates via its token (fingerprint in database), takes an order with a lease, and can only write to the
+jobs for which it holds an order. An expired lease (silent runner) puts the order back in the queue; after 3 attempts, the job fails."""
+from .i18n import M, Msg
 import os, hashlib, re, secrets, time
 from sqlalchemy import and_, insert, or_, select, update
-from . import config, db, diffview, jobs, notify
+from . import config, db, diffview, jobs, notify, i18n
 
-LEASE = 600            # secondes ; prolongé à chaque battement de cœur du runner
+LEASE = 600            # seconds; extended at each runner heartbeat
 MAX_ATTEMPTS = 3
-AGENT_STAGES = {"triage", "investigating", "implementing"}   # étapes que l'agent peut annoncer lui-même
+AGENT_STAGES = {"triage", "investigating", "implementing"}   # steps the agent can announce itself
 import logging
 log = logging.getLogger("fabrique.work")
 
@@ -18,44 +19,44 @@ class Denied(Exception):
     pass
 
 
-# ---------- Jetons des runners ----------
+# ---------- Runner tokens ----------
 
 def _hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 def create_runner(name, kind, by):
-    """Crée un runner et renvoie son token, affiché une seule fois."""
+    """Creates a runner and returns its token, displayed only once."""
     name = name.strip()[:60]
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,59}", name):
-        raise jobs.Refused("Nom de runner invalide (minuscules, chiffres, . _ -).")
+        raise jobs.Refused(M("Invalid runner name (lowercase letters, digits, . _ -)."))
     token = "fab_" + secrets.token_urlsafe(32)
     with db.tx() as c:
         if db.one(c, select(db.runners.c.id).where(db.runners.c.name == name)):
-            raise jobs.Refused("Ce nom de runner existe déjà.")
-        c.execute(insert(db.runners).values(name=name, host="", kind=kind if kind in ("vm", "conteneur", "kubernetes") else "conteneur",
+            raise jobs.Refused(M("This runner name already exists."))
+        c.execute(insert(db.runners).values(name=name, host="", kind=kind if kind in ("vm", M("container"), "kubernetes") else M("container"),
                                             online=False, capacity=1, harnesses=[], metrics={}, version="", token_hash=_hash(token)))
-        db.log_audit(c, by, "Runner ajouté", target=name)
+        db.log_audit(c, by, M("Runner added"), target=name)
     return token
 
 
 def rotate_runner(rid, by):
-    """Nouveau token pour un runner existant (même nom, mêmes réglages) ; l'ancien cesse de fonctionner tout de suite."""
+    """New token for an existing runner (same name, same settings); the old one stops working immediately."""
     token = "fab_" + secrets.token_urlsafe(32)
     with db.tx() as c:
         r = db.one(c, select(db.runners).where(db.runners.c.id == rid, db.runners.c.revoked.is_(False)))
         if not r or not r["token_hash"]:
-            raise jobs.Refused("Runner introuvable.")
+            raise jobs.Refused(M("Runner not found."))
         c.execute(update(db.runners).where(db.runners.c.id == rid).values(token_hash=_hash(token), online=False))
-        db.log_audit(c, by, "Token du runner renouvelé", target=r["name"])
-    # Runner intégré (tout-en-un) : si le fichier partagé contient bien l'ancien token de CE runner, il suit ; sinon il
-    # resterait avec un token mort jusqu'à une main humaine. Le runner le relit à son prochain démarrage.
+        db.log_audit(c, by, M("Runner token renewed"), target=r["name"])
+    # Built-in runner (all-in-one): if the shared file contains the old token of THIS runner, it follows; otherwise it
+    # would be left with a dead token until human intervention. The runner rereads it on its next startup.
     path = config.BOOTSTRAP_RUNNER_FILE
     try:
         if path and os.path.exists(path) and _hash(open(path).read().strip()) == r["token_hash"]:
             _write_bootstrap(path, token)
     except OSError as e:
-        log.error("runner intégré : impossible de mettre à jour %s (%s)", path, e)
+        log.error("built-in runner: cannot update %s (%s)", path, e)
     return r["name"], token
 
 
@@ -63,16 +64,17 @@ def revoke_runner(rid, by):
     with db.tx() as c:
         r = db.one(c, select(db.runners).where(db.runners.c.id == rid))
         if not r:
-            raise jobs.Refused("Runner introuvable.")
+            raise jobs.Refused(M("Runner not found."))
         c.execute(update(db.runners).where(db.runners.c.id == rid).values(revoked=True, online=False, token_hash=None))
         c.execute(update(db.intents).where(db.intents.c.runner_id == rid, db.intents.c.state == "leased")
                   .values(state="pending", runner_id=None, lease_until=None))
-        db.log_audit(c, by, "Runner révoqué", target=r["name"])
+        db.log_audit(c, by, M("Runner revoked"), target=r["name"])
 
 
 def _write_bootstrap(path, tok):
-    """Fichier du token du runner intégré : lisible par le propriétaire (le dashboard) et par son groupe, que le runner
-    reçoit en groupe supplémentaire (compose : group_add) et que l'utilisateur de l'agent n'a pas. Jamais lisible par tous."""
+    """Token file of the built-in runner: readable by the owner (the dashboard) and its group, which the runner
+    receives as an additional group (compose: group_add) and which the agent user does not have. Never
+    readable by everyone."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
     with os.fdopen(fd, "w") as f:
         f.write(tok + "\n")
@@ -80,7 +82,7 @@ def _write_bootstrap(path, tok):
 
 
 def _tighten(path):
-    """0640, groupe du dashboard : vaut aussi pour un fichier créé par une ancienne version (0644, autre groupe)."""
+    """0640, dashboard group: also applies to a file created by an old version (0644, other group)."""
     try:
         os.chown(path, -1, os.getgid())
     except OSError:
@@ -88,46 +90,46 @@ def _tighten(path):
     os.chmod(path, 0o640)
 
 
-INTEGRATED = "runner-integre"
+INTEGRATED = "built-in-runner"
 
 
 def bootstrap_runner_token():
-    """Kubernetes : enregistre le runner intégré avec le token fourni par l'environnement (un Secret donné aussi au runner).
-    Une seule fois : si un runner intégré existe déjà, rien ne change — un token renouvelé dans l'interface n'est donc
-    jamais remplacé par l'ancien au redémarrage (il faut alors reporter le nouveau token dans le Secret)."""
+    """Kubernetes: registers the built-in runner with the token provided by the environment (a Secret also given to the runner).
+    Once only: if a built-in runner already exists, nothing changes — a token renewed in the interface is therefore
+    never replaced by the old one upon restart (the new token must then be updated in the Secret)."""
     tok = config.BOOTSTRAP_RUNNER_TOKEN
     if not tok:
         return
     if not re.fullmatch(r"fab_[A-Za-z0-9_-]{32,200}", tok):
-        log.error("runner intégré : FABRIQUE_BOOTSTRAP_RUNNER_TOKEN invalide (attendu : fab_ suivi d'au moins 32 caractères)")
+        log.error("built-in runner: invalid FABRIQUE_BOOTSTRAP_RUNNER_TOKEN (expected: fab_ followed by at least 32 characters)")
         return
     with db.tx() as c:
         if db.one(c, select(db.runners.c.id).where(db.runners.c.name == INTEGRATED)):
             return
         c.execute(insert(db.runners).values(name=INTEGRATED, host="", kind="kubernetes", online=False, capacity=1, harnesses=[],
                                             metrics={}, version="", token_hash=_hash(tok)))
-        db.log_audit(c, "fabrique", "Runner ajouté", target=INTEGRATED, detail="token fourni par l'environnement")
-    log.info("runner intégré « %s » enregistré (token fourni par l'environnement)", INTEGRATED)
+        db.log_audit(c, "fabrique", M("Runner added"), target=INTEGRATED, detail=M("token supplied by the environment"))
+    log.info("built-in runner “%s” registered (token supplied by the environment)", INTEGRATED)
 
 
 def bootstrap_runner():
-    """Compose tout-en-un : crée le runner intégré une fois et dépose son token dans le fichier partagé."""
+    """All-in-one Compose: creates the built-in runner once and places its token in the shared file."""
     bootstrap_runner_token()
     path = config.BOOTSTRAP_RUNNER_FILE
     if not path:
         return
     try:
         if os.path.exists(path) and open(path).read().strip():
-            _tighten(path)   # fichier créé par une ancienne version (0644) : resserré au démarrage
+            _tighten(path)   # file created by an older version (0644): tightened at startup
             return
         with db.tx() as c:
             taken = {r["name"] for r in db.rows(c, select(db.runners.c.name))}
-        name = next(n for n in ["runner-integre"] + [f"runner-integre-{i}" for i in range(2, 50)] if n not in taken)
-        tok = create_runner(name, "conteneur", "fabrique")
+        name = next(n for n in ["built-in-runner"] + [f"built-in-runner-{i}" for i in range(2, 50)] if n not in taken)
+        tok = create_runner(name, M("container"), "fabrique")
         _write_bootstrap(path, tok)
-        log.info("runner intégré « %s » enregistré (token déposé pour le runner)", name)
+        log.info("built-in runner “%s” registered (token left for the runner)", name)
     except OSError as e:
-        log.error("runner intégré : impossible d'écrire %s (%s)", path, e)
+        log.error("built-in runner: cannot write %s (%s)", path, e)
 
 
 def runner_for(token):
@@ -137,29 +139,29 @@ def runner_for(token):
         return db.one(c, select(db.runners).where(db.runners.c.token_hash == _hash(token), db.runners.c.revoked.is_(False)))
 
 
-# ---------- File de commandes ----------
+# ---------- Order queue ----------
 
 def enqueue(c, job_id, kind, payload=None):
     c.execute(insert(db.intents).values(job_id=job_id, kind=kind, payload=payload or {}, state="pending", created_at=time.time()))
 
 
-PAUSED = "Budget du jour atteint : reprise demain, ou dès que le budget est relevé"
+PAUSED = M("Daily budget reached: resuming tomorrow, or as soon as the budget is raised")
 
 
 def spent_today(c):
-    """Dépense du jour (jobs touchés depuis minuit), pour le budget par jour."""
+    """Daily spend (jobs touched since midnight), for the daily budget."""
     start = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
-    return sum(r["cost"] or 0 for r in db.rows(c, select(db.jobs.c.cost).where(db.jobs.c.updated_at >= start, db.jobs.c.source != "démo")))
+    return sum(r["cost"] or 0 for r in db.rows(c, select(db.jobs.c.cost).where(db.jobs.c.updated_at >= start, db.jobs.c.source != "demo")))
 
 
 def clean_tags(v):
-    """Tags : minuscules, chiffres, tirets ; au plus 10."""
+    """Tags: lowercase letters, digits, hyphens; 10 at most."""
     raw = v if isinstance(v, list) else str(v or "").replace("\n", ",").split(",")
     return sorted({t for t in (str(x).strip().lower()[:30] for x in raw) if re.fullmatch(r"[a-z0-9][a-z0-9-]*", t)})[:10]
 
 
 def runner_fits(runner_tags, repo):
-    """Un repo qui exige des tags ne va qu'à un runner qui les porte toutes."""
+    """A repo that requires tags only goes to a runner that carries them all."""
     need = set((repo["settings"] or {}).get("tags") or [])
     return need <= set(runner_tags or [])
 
@@ -168,7 +170,7 @@ _last_auto_archive = 0.0
 
 
 def heartbeat(runner, info):
-    """Enregistre l'état du runner ; renvoie les jobs qu'il doit arrêter."""
+    """Records the runner state; returns the jobs it must stop."""
     t = time.time()
     with db.tx() as c:
         c.execute(update(db.runners).where(db.runners.c.id == runner["id"]).values(
@@ -181,32 +183,32 @@ def heartbeat(runner, info):
                   .values(lease_until=t + LEASE))
         held = select(db.intents.c.job_id).where(db.intents.c.runner_id == runner["id"], db.intents.c.state == "leased")
         stop = [r["ref"] for r in db.rows(c, select(db.jobs.c.ref).where(db.jobs.c.cancel_requested.is_not(None), db.jobs.c.id.in_(held)))]
-        # Budget du jour dépassé : les passages d'agent en cours s'arrêtent (les merges déjà décidés passent).
+        # Daily budget exceeded: ongoing agent runs stop (already decided merges proceed).
         limits, _ = db.get_setting(c, "limits")
         over = []
         if float(limits.get("budget_day") or 0) > 0 and spent_today(c) >= float(limits["budget_day"]):
             working = select(db.intents.c.job_id).where(db.intents.c.runner_id == runner["id"], db.intents.c.state == "leased",
                                                         db.intents.c.kind.in_(("start", "resume", "onboard")))
             over = [r["ref"] for r in db.rows(c, select(db.jobs.c.ref).where(db.jobs.c.id.in_(working)))]
-    # Ménage : le runner annonce de temps en temps ses dossiers de travail ; on lui dit lesquels ne servent plus (job
-    # supprimé, ou terminé depuis plus d'une heure). Et l'archivage automatique passe au plus une fois par heure.
+    # Cleanup: the runner occasionally announces its working directories; we tell it which ones are no longer needed (job
+    # deleted, or finished for more than an hour). And automatic archiving occurs at most once per hour.
     purge = jobs.workspaces_to_purge(info.get("workspaces")) if info.get("workspaces") else []
     global _last_auto_archive
     if t - _last_auto_archive > 3600:
         _last_auto_archive = t
         try:
             jobs.auto_archive(t)
-        except Exception as e:   # ne doit jamais empêcher un battement de cœur
-            log.warning("archivage automatique impossible (%s)", type(e).__name__)
+        except Exception as e:   # must never prevent a heartbeat
+            log.warning("automatic archiving failed (%s)", type(e).__name__)
     return {"cancel": stop, "over_budget": over, "purge": purge}
 
 
-ONBOARD_RETRY = (120, 900)       # nouvel essai d'un onboarding en attente : 2 min la première demi-heure, puis 15 min
-ONBOARD_GIVE_UP = 24 * 3600      # au-delà, l'onboarding échoue (on peut toujours le relancer)
+ONBOARD_RETRY = (120, 900)       # new attempt at a pending onboarding: 2 min for the first half hour, then 15 min
+ONBOARD_GIVE_UP = 24 * 3600      # beyond that, the onboarding fails (it can always be restarted)
 
 
 def _retry_onboarding(c, t):
-    """Onboardings en attente (accès, repo vide) : remis en file tout seuls, sur le même job."""
+    """Pending onboardings (access, empty repo): requeued automatically, on the same job."""
     q = (select(db.jobs).join(db.repos, db.repos.c.id == db.jobs.c.repo_id)
          .where(db.jobs.c.source == "onboarding", db.repos.c.onboarding.in_(["waiting", "empty"]), db.jobs.c.stage == "queued",
                 db.jobs.c.archived.is_(False)))
@@ -216,7 +218,7 @@ def _retry_onboarding(c, t):
         age = t - j["created_at"]
         if age > ONBOARD_GIVE_UP:
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="failed", activity="idle", updated_at=t,
-                                                                             status_text="Onboarding abandonné après 24 h d'attente : relance-le depuis le repo"))
+                                                                             status_text=M("Onboarding abandoned after waiting 24 h: restart it from the repo")))
             c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(onboarding="failed"))
             continue
         if t - j["updated_at"] >= ONBOARD_RETRY[0 if age < 1800 else 1]:
@@ -225,42 +227,74 @@ def _retry_onboarding(c, t):
 
 
 def reconcile(c):
-    """Runners muets depuis 2 minutes : hors ligne. Baux expirés : commande remise en file, ou job en échec après 3 essais."""
+    """Runners silent for 2 minutes: offline. Expired leases: order put back in the queue, or job failed after 3 attempts."""
     t = time.time()
     _retry_onboarding(c, t)
     c.execute(update(db.runners).where(db.runners.c.online.is_(True), db.runners.c.last_seen < t - 120).values(online=False))
     for it in db.rows(c, select(db.intents).where(db.intents.c.state == "leased", db.intents.c.lease_until < t)):
         if it["attempts"] >= MAX_ATTEMPTS:
-            c.execute(update(db.intents).where(db.intents.c.id == it["id"]).values(state="failed", done_at=t, note="bail expiré trop souvent"))
+            c.execute(update(db.intents).where(db.intents.c.id == it["id"]).values(state="failed", done_at=t, note=M("lease expired too often")))
             c.execute(update(db.jobs).where(db.jobs.c.id == it["job_id"]).values(stage="failed", activity="idle", updated_at=t,
-                                                                                  status_text="Runner perdu pendant le travail"))
-            db.log_audit(c, "fabrique", "Échec", it["job_id"], detail="le runner a cessé de répondre (3 essais)")
+                                                                                  status_text=M("Runner lost during the work")))
+            db.log_audit(c, "fabrique", M("Failed"), it["job_id"], detail=M("the runner stopped responding (3 attempts)"))
         else:
             c.execute(update(db.intents).where(db.intents.c.id == it["id"]).values(state="pending", runner_id=None, lease_until=None))
-            db.log_event(c, it["job_id"], "runner", "bail expiré : commande remise en file")
+            db.log_event(c, it["job_id"], "runner", M("lease expired: order put back in the queue"))
+
+
+MODEL_KINDS = ("start", "resume", "onboard", "review")   # orders that make a model work
+
+
+def model_caps(c):
+    """{model id: simultaneous jobs allowed} for the models that have a limit (Settings → Agents and models)."""
+    models, _ = db.get_setting(c, "models")
+    return {m["id"]: int(m["max_jobs"]) for m in models or [] if m.get("max_jobs")}
+
+
+def models_in_use(c):
+    """{model id: jobs at work right now}. What counts is the job's AGENT model, for the orders a runner is executing;
+    the reviewers of a profile, which may use another model for a short call, are not counted."""
+    out = {}
+    for r in db.rows(c, select(db.jobs.c.model).select_from(db.intents.join(db.jobs, db.jobs.c.id == db.intents.c.job_id))
+                     .where(db.intents.c.state == "leased", db.intents.c.kind.in_(MODEL_KINDS))):
+        out[r["model"]] = out.get(r["model"], 0) + 1
+    return out
 
 
 def claim(runner):
-    """La plus ancienne commande en attente, avec tout ce qu'il faut pour l'exécuter ; None s'il n'y a rien."""
+    """The oldest waiting order, with everything needed to execute it; None if there is nothing."""
     t = time.time()
     with db.tx() as c:
         reconcile(c)
         limits, _ = db.get_setting(c, "limits")
         q = select(db.intents).where(db.intents.c.state == "pending").order_by(db.intents.c.id)
         if spent_today(c) >= float(limits["budget_day"]):
-            # Budget du jour atteint : seules les fusions déjà décidées passent ; le reste attend demain.
+            # Daily budget reached: only already decided merges pass; the rest waits until tomorrow.
             for r in db.rows(c, select(db.intents.c.job_id).where(db.intents.c.state == "pending", db.intents.c.kind != "merge")):
                 c.execute(update(db.jobs).where(db.jobs.c.id == r["job_id"], db.jobs.c.status_text != PAUSED)
                           .values(status_text=PAUSED))
             q = q.where(db.intents.c.kind == "merge")
         me = db.one(c, select(db.runners).where(db.runners.c.id == runner["id"]))
         it = None
+        caps, busy = model_caps(c), None
         for cand in db.rows(c, q.limit(100)):
-            rj = db.one(c, select(db.jobs.c.repo_id).where(db.jobs.c.id == cand["job_id"]))
+            rj = db.one(c, select(db.jobs.c.repo_id, db.jobs.c.model, db.jobs.c.stage, db.jobs.c.status_text).where(db.jobs.c.id == cand["job_id"]))
             rp = db.one(c, select(db.repos).where(db.repos.c.id == rj["repo_id"])) if rj else None
-            if rp is None or runner_fits((me or {}).get("tags"), rp):
-                it = cand
-                break
+            if not (rp is None or runner_fits((me or {}).get("tags"), rp)):
+                continue
+            cap = caps.get(rj["model"]) if rj and cand["kind"] in MODEL_KINDS else None
+            if cap:
+                # "Simultaneous jobs" of the model: this job waits its turn, in order of arrival (a held order stays the
+                # oldest for its model), and the runner goes on to the orders of the other models.
+                if busy is None:
+                    busy = models_in_use(c)
+                if busy.get(rj["model"], 0) >= cap:
+                    wait = M("Waiting for a free slot on {model} ({n} job(s) at a time)", model=rj["model"], n=cap)
+                    if rj["status_text"] != wait and rj["stage"] in ("queued", "waiting", "triage"):
+                        c.execute(update(db.jobs).where(db.jobs.c.id == cand["job_id"]).values(status_text=wait))
+                    continue
+            it = cand
+            break
         if not it:
             return None
         n = c.execute(update(db.intents).where(db.intents.c.id == it["id"], db.intents.c.state == "pending").values(
@@ -270,31 +304,36 @@ def claim(runner):
         j = db.one(c, select(db.jobs).where(db.jobs.c.id == it["job_id"]))
         repo = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
         from . import providers, profiles
-        # Avec la clé déchiffrée : réseau privé panneau ↔ runner seulement. Effort et relecteurs : ceux du profil, figés
-        # à la création du job (jobs.models) ; un job d'avant les profils n'a qu'un modèle.
+        # With the decrypted key: private network dashboard ↔ runner only. Effort and reviewers: those from the profile, frozen
+        # at job creation (jobs.models); a job before profiles has only one model.
         mx = j.get("models") or {}
         model = profiles.apply_effort(providers.runtime(c, j["model"]), mx.get("effort"))
         review_model = (profiles.apply_effort(providers.runtime(c, mx["review_model"]), mx.get("review_effort")) if mx.get("review_model")
                         else profiles.apply_effort(model, mx.get("review_effort")) if mx.get("review_effort") not in (None, profiles.INHERIT, mx.get("effort"))
                         else None)
-        # Fournisseur Git du dépôt, si son jeton est réglé dans le panneau (sinon le runner utilise ses variables).
-        from . import forges   # le provider DE CE repo (jamais un autre provider du même type), s'il a un token
+        # Git provider of the repo, if its token is set in the dashboard (otherwise the runner uses its variables).
+        from . import forges   # the provider OF THIS repo (never another provider of the same type), if it has a token
         g = forges.for_repo(c, repo)
         g = g if g and g.get("token") else None
         forge = {"type": g["type"], "base_url": g["base_url"], "token": providers.unseal(g["token"])} if g else None
-        if it["kind"] == "onboard" and not jobs.is_blank(repo):   # un repo vierge reste vierge (et utilisable) pendant son onboarding
+        wlang = j["lang"] if j.get("lang") in i18n.LANGS else i18n.job_lang(c, repo)   # the job's language, fixed when it was filed
+        if it["kind"] == "onboard" and not jobs.is_blank(repo):   # a blank repo remains blank (and usable) during its onboarding
             c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(onboarding="analyzing"))
         if it["kind"] == "resume" and (it["payload"] or {}).get("pause"):
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(updated_at=t, activity="active",
-                                                                             status_text="Reprise après la pause par " + runner["name"]))
+                                                                             status_text=M("Resumed after the pause by ") + runner["name"]))
         if it["kind"] in ("start", "onboard", "init", "create"):
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(runner_id=runner["id"], updated_at=t, activity="active",
-                                                                             status_text="Pris en charge par " + runner["name"]))
-        db.log_event(c, j["id"], "runner", f"{runner['name']} prend la commande « {it['kind']} »")
+                                                                             status_text=M("Picked up by ") + runner["name"]))
+        db.log_event(c, j["id"], "runner", M("{name} takes the order “{kind}”", name=runner['name'], kind=it['kind']))
     rs = repo["settings"] or {}
+    # No criterion given with a change request: the default one, in the language of the job (what the agent, the reviewers
+    # and the pull request read).
+    done, default_done = jobs.done_when_of(j, j.get("lang") or i18n.written_lang(c, repo))
     return {"intent": {"id": it["id"], "kind": it["kind"], "payload": it["payload"], "attempt": it["attempts"] + 1},
-            "job": {k: j[k] for k in ("ref", "title", "request", "done_when", "requester", "source", "branch", "harness", "budget",
-                                      "session_id", "verified_sha", "pr_number", "pr_url", "attempts", "cost", "tokens")},
+            "job": dict({k: j[k] for k in ("ref", "title", "request", "done_when", "requester", "source", "branch", "harness", "budget",
+                                           "session_id", "verified_sha", "pr_number", "pr_url", "attempts", "cost", "tokens")},
+                        done_when=str(done), done_when_default=default_done),
             "model": model,
             "review_model": review_model,
             "forge": forge,
@@ -302,26 +341,27 @@ def claim(runner):
                      "description": str(rs.get("description") or "")[:300],
                      "protected_paths": rs.get("protected_paths") or limits["protected_paths"],
                      "size_limit": rs.get("size_limit") or limits["size_limit"],
-                     "diff": jobs.repo_keeps_diff(rs)},   # False : repo confidentiel, le runner n'envoie pas le diff
+                     "diff": jobs.repo_keeps_diff(rs),
+                     "lang": wlang},   # False: confidential repo, the runner does not send the diff
             "limits": {"watchdog_min": int(limits.get("watchdog_min") or 10)}}
 
 
 def _owned(c, runner, ref):
-    """Le job, si ce runner détient une commande en cours dessus ; sinon refus."""
+    """The job, if this runner holds an ongoing order on it; otherwise refusal."""
     j = db.one(c, select(db.jobs).where(db.jobs.c.ref == ref))
     if not j:
-        raise Denied("job inconnu")
+        raise Denied("unknown job")
     it = db.one(c, select(db.intents).where(db.intents.c.job_id == j["id"], db.intents.c.runner_id == runner["id"],
                                             db.intents.c.state == "leased"))
     if not it:
-        raise Denied("aucune commande en cours de ce runner sur ce job")
+        raise Denied(M("no order from this runner in progress on this job"))
     return j, it
 
 
-# ---------- Barrières de fusion (code, pas agent) ----------
+# ---------- Merge gates (code, not agent) ----------
 
-ROLES = {"code": "code", "securite": "sécurité", "archi": "architecture", "infra": "infra et exploitation"}
-VERDICTS = {"ok": "OK", "a_revoir": "à revoir", "bloquant": "bloquant", "indetermine": "indéterminé"}
+ROLES = {"code": "code", "security": M("security"), "architecture": "architecture", "infra": M("infrastructure and operations")}
+VERDICTS = {"ok": "OK", "needs_changes": M("to review again"), "blocking": M("blocking"), "undetermined": M("undetermined")}
 
 def _glob_re(pat):
     out, i = "", 0
@@ -336,16 +376,16 @@ def _glob_re(pat):
             out += "[^/]"; i += 1
         else:
             out += re.escape(pat[i]); i += 1
-    return re.compile(out + r"\Z", re.DOTALL)   # DOTALL : « ** » couvre aussi un nom de fichier contenant un retour à la ligne
+    return re.compile(out + r"\Z", re.DOTALL)   # DOTALL: "**" also covers a filename containing a newline
 
 
-MAX_FILES, MAX_PATH = 500, 300   # liste des fichiers d'une PR gardée par le dashboard : au-delà, la barrière ne se fie à rien
+MAX_FILES, MAX_PATH = 500, 300   # list of files in a PR kept by the dashboard: beyond that, the gate relies on nothing
 
 
 def protected_hits(files, patterns):
-    """Fichiers protégés touchés. Un chemin que la barrière ne peut pas comparer fidèlement compte comme touché, pour
-    qu'un humain décide : chemin qui n'est pas brut (guillemets de git, renommage « a => b », accolades, antislash),
-    chemin coupé à la longueur gardée, caractère de contrôle (retour à la ligne, tabulation…)."""
+    """Protected files touched. A path that the gate cannot compare faithfully counts as touched, so
+    a human can decide: path that is not raw (git quotes, renaming "a => b", braces, backslash),
+    path truncated to the kept length, control character (newline, tab...)."""
     res = [_glob_re(p.strip().lstrip("/")) for p in patterns if p.strip()]
     odd = lambda f: (f.startswith('"') or " => " in f or "{" in f or "\\" in f or len(f) >= MAX_PATH
                      or any(ord(ch) < 32 or ord(ch) == 127 for ch in f))
@@ -353,7 +393,7 @@ def protected_hits(files, patterns):
 
 
 def evaluate(c, j, repo):
-    """Barrières évaluées sur l'état réel : preuves au sha de la PR, essais, protected paths, taille, avis de l'agent."""
+    """Gates evaluated on the actual state: evidence at the PR sha, attempts, protected paths, size, agent's opinion."""
     limits, _ = db.get_setting(c, "limits")
     rs = repo["settings"] or {}
     diff = j["diff"] or {}
@@ -361,30 +401,30 @@ def evaluate(c, j, repo):
     size = int(diff.get("additions") or 0) + int(diff.get("deletions") or 0)
     size_limit = int(rs.get("size_limit") or limits["size_limit"])
     hits = protected_hits(files, (rs.get("protected_paths") or limits["protected_paths"]) + [".fabrique/**"])
-    if diff.get("truncated"):   # liste incomplète : un fichier protégé peut se trouver dans ce qui manque
-        hits = [f"plus de {MAX_FILES} fichiers : liste incomplète"] + hits
+    if diff.get("truncated"):   # incomplete list: a protected file may be found in what is missing
+        hits = [M("more than {max_files} files: incomplete list", max_files=MAX_FILES)] + hits
     ev = db.rows(c, select(db.evidence).where(db.evidence.c.job_id == j["id"], db.evidence.c.sha == (j["verified_sha"] or ""),
                                               db.evidence.c.ran_by == "runner"))
     ok_checks = bool(ev) and all(e["ok"] for e in ev)
     d = db.one(c, select(db.decisions).where(db.decisions.c.job_id == j["id"]))
     rv = db.rows(c, select(db.reviews).where(db.reviews.c.job_id == j["id"], db.reviews.c.sha == (j["verified_sha"] or "")))
     roles = {r["role"] for r in rv}
-    rv_ok = {"code", "securite"} <= roles and all(r["verdict"] == "ok" for r in rv)
-    rv_detail = ", ".join(f"{ROLES.get(r['role'], r['role'])} : {VERDICTS.get(r['verdict'], r['verdict'])}" for r in rv) or "aucune vérification"
-    reviews = [] if j["source"] == "onboarding" else [{"name": "Vérification", "ok": rv_ok, "detail": rv_detail}]
+    rv_ok = {"code", "security"} <= roles and all(r["verdict"] == "ok" for r in rv)
+    rv_detail = ", ".join(f"{ROLES.get(r['role'], r['role'])} : {VERDICTS.get(r['verdict'], r['verdict'])}" for r in rv) or M("no review")
+    reviews = [] if j["source"] == "onboarding" else [{"key": "review", "name": M("Review"), "ok": rv_ok, "detail": rv_detail}]
     return [
-        {"name": "Checks verts", "ok": ok_checks,
-         "detail": f"{sum(e['ok'] for e in ev)}/{len(ev)} au sha {j['verified_sha'] or '—'}, relancés par le runner" if ev
-                   else "aucun check dans la recipe (repo vierge ou sans tests) : vérification humaine"},
+        {"key": "checks", "name": M("Checks green"), "ok": ok_checks, "no_checks": not ev,
+         "detail": M("{sum}/{count} on sha {p}, rerun by the runner", sum=sum(e['ok'] for e in ev), count=len(ev), p=j['verified_sha'] or '—') if ev
+                   else M("no check in the recipe (blank repo or no tests): human review")},
         *reviews,
-        {"name": "Premier essai", "ok": (j["attempts"] or 0) <= 1, "detail": "aucune nouvelle tentative" if (j["attempts"] or 0) <= 1 else f"{j['attempts']} tentatives"},
-        {"name": "Protected paths", "ok": not hits, "detail": "aucun fichier protégé touché" if not hits else "touche " + ", ".join(hits[:4])},
-        {"name": "Taille", "ok": size <= size_limit, "detail": f"{size} lignes sur {size_limit}"},
-        {"name": "Avis de l'agent", "ok": bool(d and d["confident"]), "detail": "confiant" if d and d["confident"] else "pas confiant ou pas d'avis"},
+        {"key": "first_attempt", "name": M("First attempt"), "ok": (j["attempts"] or 0) <= 1, "detail": M("no new attempt") if (j["attempts"] or 0) <= 1 else M("{n} attempts", n=j['attempts'])},
+        {"key": "protected", "name": M("Protected paths"), "ok": not hits, "detail": M("no protected file touched") if not hits else M("touches {files}", files=", ".join(hits[:4]))},
+        {"key": "size", "name": M("Size"), "ok": size <= size_limit, "detail": M("{size} lines out of {size_limit}", size=size, size_limit=size_limit)},
+        {"key": "opinion", "name": M("Agent's opinion"), "ok": bool(d and d["confident"]), "detail": M("confident") if d and d["confident"] else M("not confident or no opinion")},
     ]
 
 
-# ---------- Événements envoyés par le runner ----------
+# ---------- Events sent by the runner ----------
 
 def _stage(c, j, stage, summary, status=""):
     t = time.time()
@@ -395,35 +435,42 @@ def _stage(c, j, stage, summary, status=""):
 
 
 def _txt(v, n=2000):
+    """A text received from a runner, bounded. A text the runner worded itself (a fact: template and values) is kept as it
+    is, so that it is worded again in each reader's language; cutting it would turn it back into a plain sentence."""
+    if isinstance(v, Msg) and len(v) <= max(n, 2000):
+        return v
     return str(v or "").strip()[:n]
 
 
+def _cut(v, n):
+    return v if isinstance(v, Msg) else v[:n]
+
+
 def _assumptions(v):
-    """Hypothèses de l'agent : toujours une liste de phrases. Une chaîne reçue telle quelle (ancien runner) reste une seule
-    hypothèse au lieu d'être découpée en lettres."""
+    """The agent's assumptions: always a list of sentences. A string received as is (old runner) stays a single
+    assumption instead of being split into letters."""
     if isinstance(v, str):
         v = [v]
     return [t for t in (_txt(a, 400) for a in (v if isinstance(v, list) else [])[:10]) if t]
 
 
 def onboard_wait_text(repo, reason):
-    """Ce que l'humain doit faire côté provider pour que l'onboarding reprenne (nouvel essai automatique)."""
+    """What the human must do on the provider side so that onboarding resumes (new automatic attempt)."""
     br = repo["default_branch"]
-    if reason == "vide":
-        return (f"Rien à analyser : le repo est vide, ou ne contient qu'un README ou une licence. Initialise-le depuis la page du "
-                f"repo (la Fabrique pousse une recipe vide sur {br}), ou pousse toi-même le code du projet ; la Fabrique réessaie toute seule.")
-    if reason == "branche":
-        return f"En attente : la branche {br} n'existe pas. Crée-la, ou corrige la branche principale du repo ; nouvel essai automatique."
-    who = reason.split(":", 1)[1] or "du runner"
-    how = {"forgejo": f"ajoute « {who} » en collaborateur avec le droit Écriture",
-           "gitea": f"ajoute « {who} » en collaborateur avec le droit Écriture",
-           "gitlab": f"donne à « {who} » le rôle Developer sur le projet (ou utilise un token de groupe)",
-           "github": "ajoute ce repo au token fin du runner (Contents, Pull requests, Issues : lecture et écriture)"}.get(repo["provider"], "donne-lui l'accès en écriture")
-    return f"En attente d'accès : le compte du runner ne voit pas ce repo. {how[0].upper() + how[1:]} ; la Fabrique réessaie toute seule."
+    if reason == "empty":
+        return (M("Nothing to analyse: the repo is empty, or contains only a README or a licence. Initialize it from the repo's page (Fabrique pushes an empty recipe to {br}), or push the project's code yourself; Fabrique tries again on its own.", br=br))
+    if reason == "branch":
+        return M("Waiting: branch {br} does not exist. Create it, or fix the repo's main branch; automatic retry.", br=br)
+    who = reason.split(":", 1)[1] or M("the runner's account")
+    how = {"forgejo": M("add “{who}” as a collaborator with Write access", who=who),
+           "gitea": M("add “{who}” as a collaborator with Write access", who=who),
+           "gitlab": M("give “{who}” the Developer role on the project (or use a group token)", who=who),
+           "github": M("add this repo to the runner's fine-grained token (Contents, Pull requests, Issues: read and write)")}.get(repo["provider"], M("give it write access"))
+    return M("Waiting for access: the runner's account cannot see this repo. {p}; Fabrique tries again on its own.", p=how[0].upper() + how[1:])
 
 
 def _recipe(r):
-    """Copie bornée de la recipe remontée par le runner (affichage seulement : le runner relit toujours la branche principale)."""
+    """Bounded copy of the recipe reported by the runner (display only: the runner always reads the main branch again)."""
     return {**({"image": _txt(r["image"], 20)} if r.get("image") else {}),
             "setup": [_txt(x, 500) for x in (r.get("setup") or [])[:20]],
             "checks": {_txt(k, 20): _txt(v, 500) for k, v in list((r.get("checks") or {}).items())[:8]},
@@ -432,7 +479,7 @@ def _recipe(r):
 
 
 def report(runner, ref, ev):
-    """Applique un événement du runner. Types : stage, question, paused, study, decision, evidence, pr, usage, log, intent_done, merged, failed."""
+    """Applies an event from the runner. Types: stage, question, paused, study, decision, evidence, pr, usage, log, intent_done, merged, failed."""
     kind = ev.get("type")
     t = time.time()
     result = None
@@ -442,41 +489,56 @@ def report(runner, ref, ev):
         if kind == "stage":
             st = ev.get("stage")
             if st not in AGENT_STAGES | {"verifying", "review"}:
-                raise Denied("étape refusée")
+                raise Denied(M("step refused"))
             _stage(c, j, st, _txt(ev.get("summary")), _txt(ev.get("status"), 240))
         elif kind == "question":
             q = _txt(ev.get("question"), 4000)
             if not q:
-                raise Denied("question vide")
+                raise Denied("empty question")
             c.execute(insert(db.questions).values(job_id=jid, question=q, asked_at=t))
-            _stage(c, j, "waiting", "Question posée au requester.", "Question posée")
+            _stage(c, j, "waiting", M("Question asked to the requester."), M("Question asked"))
             notify.emit(c, "question", job=j, detail=q)
             if ev.get("session_id"):
                 c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(session_id=_txt(ev["session_id"], 80)))
         elif kind == "paused":
-            # Budget du jour atteint en cours de passage : le job n'échoue pas, une reprise attend dans la file (claim la
-            # retient tant que le budget du jour est dépassé).
+            # Daily budget reached during agent run: the job does not fail, a resume waits in the queue (claim holds it
+            # back as long as the daily budget is exceeded).
             if ev.get("session_id"):
                 c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(session_id=_txt(ev["session_id"], 80)))
             if not db.one(c, select(db.intents.c.id).where(db.intents.c.job_id == jid, db.intents.c.state == "pending")):
                 enqueue(c, jid, "resume", {"pause": "budget"})
             c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(activity="idle", status_text=PAUSED))
-            db.log_event(c, jid, "runner", "budget du jour atteint : agent mis en pause, le job reprendra où il en était")
-            db.log_audit(c, "fabrique", "Job en pause", jid, detail="budget du jour atteint")
+            db.log_event(c, jid, "runner", M("daily budget reached: agent paused, the job will resume where it was"))
+            db.log_audit(c, "fabrique", M("Job paused"), jid, detail=M("daily budget reached"))
+        elif kind == "model_wait":
+            # Model server saturated, loading or unreachable: the runner keeps the workspace and the session, waits and
+            # resumes on its own. The job shows it instead of looking stuck.
+            n, total, secs = int(ev.get("attempt") or 1), int(ev.get("attempts") or 1), int(ev.get("seconds") or 0)
+            if ev.get("session_id"):
+                c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(session_id=_txt(ev["session_id"], 80)))
+            c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(
+                activity="idle", updated_at=t, status_text=M("Waiting for the model (attempt {n} of {total}, next try in {secs} s)", n=n, total=total, secs=secs)))
+            db.log_event(c, jid, "runner", M("the model server is saturated or unreachable: the job waits {secs} s then resumes where it was (attempt {n} of {total}): {why}",
+                                             secs=secs, n=n, total=total, why=_txt(ev.get("why"), 300)))
+        elif kind == "model_back":
+            c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(activity="active", updated_at=t, status_text=jobs.STAGE[j["stage"]]["label"]))
+            db.log_event(c, jid, "runner", M("the agent resumes after waiting for the model"))
         elif kind == "study":
-            if j["source"] != "étude":
-                raise Denied("ce job n'est pas une étude")
+            if j["source"] != "study":
+                raise Denied(M("this job is not a study"))
             text = _txt(ev.get("report"), 40000)
             if not text:
-                raise Denied("rapport vide")
+                raise Denied("empty report")
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(report=text))
             c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
-            _stage(c, j, "done", "Rapport d'étude rendu : rien n'a été poussé, aucune PR.", "Étude rendue")
-            db.log_audit(c, "fabrique", "Étude rendue", jid, detail=f"{len(text)} caractères")
-            notify.emit(c, "study", job=j, detail="Le rapport d'étude est disponible dans le job.")
+            _stage(c, j, "done", M("Study report delivered: nothing was pushed, no PR."), M("Study delivered"))
+            db.log_audit(c, "fabrique", M("Study delivered"), jid, detail=M("{count} characters", count=len(text)))
+            notify.emit(c, "study", job=j, detail=M("The study report is available in the job."))
         elif kind == "decision":
-            vals = dict(recommendation=_txt(ev.get("recommendation"), 240), interpretation=_txt(ev.get("interpretation"), 4000),
+            # Without agent recommendation, Fabrique defaults to "confident"; it is worded for each reader, in their language.
+            reco = _txt(ev.get("recommendation"), 240) or (M("The agent recommends merging.") if ev.get("confident") else M("The agent prefers a human review."))
+            vals = dict(recommendation=reco, interpretation=_txt(ev.get("interpretation"), 4000),
                         assumptions=_assumptions(ev.get("assumptions")), confident=bool(ev.get("confident")),
                         verdict=_txt(ev.get("verdict"), 1000), notes=_txt(ev.get("notes"), 2000), at=t)
             repo = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
@@ -485,28 +547,29 @@ def report(runner, ref, ev):
                 c.execute(update(db.decisions).where(db.decisions.c.job_id == jid).values(policy=policy, **vals))
             else:
                 c.execute(insert(db.decisions).values(job_id=jid, policy=policy, limits=[], **vals))
-            db.log_event(c, jid, "décision", "avis de l'agent : " + ("confiant" if vals["confident"] else "pas confiant"))
+            db.log_event(c, jid, M("decision"), M("agent's opinion: confident") if vals["confident"] else M("agent's opinion: not confident"))
         elif kind == "evidence":
             sha = _txt(ev.get("sha"), 40)
             checks = ev.get("checks") or []
             if not re.fullmatch(r"[0-9a-f]{7,40}", sha) or not isinstance(checks, list):
-                raise Denied("preuve invalide")
+                raise Denied("invalid evidence")
             c.execute(db.evidence.delete().where(db.evidence.c.job_id == jid, db.evidence.c.sha == sha[:12]))
             for ch in checks[:20]:
                 c.execute(insert(db.evidence).values(job_id=jid, sha=sha[:12], name=_txt(ch.get("name"), 60), command=_txt(ch.get("command"), 300),
-                                                     ok=bool(ch.get("ok")), duration_ms=int(ch.get("duration_ms") or 0),
+                                                     ok=bool(ch.get("ok")), duration_ms=int(ch.get("duration_ms") or 0), warn=bool(ch.get("warn")),
+                                                     kind=ch.get("kind") if ch.get("kind") in ("security", "network") else "check",
                                                      output=_txt(ch.get("output"), 20000), ran_by="runner", at=t))
             ok = sum(1 for ch in checks if ch.get("ok"))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(verified_sha=sha[:12], checks_ok=ok, checks_total=len(checks), updated_at=t))
-            db.log_event(c, jid, "preuve", f"{ok}/{len(checks)} checks au sha {sha[:12]}, relancés par le runner")
+            db.log_event(c, jid, M("evidence"), M("{ok}/{count} checks on sha {p}, rerun by the runner", ok=ok, count=len(checks), p=sha[:12]))
         elif kind == "pr":
             n, url = int(ev.get("number") or 0), _txt(ev.get("url"), 300)
             if n <= 0 or not url.startswith(("https://", "http://")):
-                raise Denied("PR invalide")
+                raise Denied("invalid PR")
             raw = ev.get("files") or []
             if not isinstance(raw, list):
-                raise Denied("PR invalide")
-            # Chemins gardés tels que git les donne (ni nettoyés ni silencieusement écartés) ; ce qui dépasse est signalé.
+                raise Denied("invalid PR")
+            # Paths kept as git provides them (neither cleaned nor silently discarded); anything extra is reported.
             diff = {"files": [str(f)[:MAX_PATH] for f in raw[:MAX_FILES]], "truncated": len(raw) > MAX_FILES,
                     "additions": int(ev.get("additions") or 0), "deletions": int(ev.get("deletions") or 0)}
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(pr_number=n, pr_url=url, diff=diff, updated_at=t,
@@ -519,38 +582,42 @@ def report(runner, ref, ev):
             policy = (repo["settings"] or {}).get("merge_policy", "off")
             if not db.one(c, select(db.decisions.c.job_id).where(db.decisions.c.job_id == jid)):
                 c.execute(insert(db.decisions).values(job_id=jid, policy=policy, at=t, confident=False, limits=[],
-                                                      recommendation="L'agent n'a pas donné d'avis."))
+                                                      recommendation=M("The agent gave no opinion.")))
             c.execute(update(db.decisions).where(db.decisions.c.job_id == jid).values(limits=limits, policy=policy))
             all_ok = all(l["ok"] for l in limits)
-            # Jamais de fusion seule pour un job arrêté par un humain, ni pour un onboarding (la recette passe toujours par un humain).
+            # Never an automatic merge for a job stopped by a human, nor for an onboarding (the recipe always goes through a human).
             if policy == "confident" and all_ok and not j["cancel_requested"] and j["source"] != "onboarding":
-                state, status = "approved", "Toutes les barrières tiennent : la Fabrique merge"
+                state, status = "approved", M("Every gate holds: Fabrique merges")
                 enqueue(c, jid, "merge", {"sha": j["verified_sha"]})
-                db.log_audit(c, "fabrique", "Merge décidée", jid, j["verified_sha"] or "", "Merge si confiant · toutes les barrières tiennent")
+                db.log_audit(c, "fabrique", M("Merge decided"), jid, j["verified_sha"] or "", M("Merge if confident · every gate holds"))
             elif policy == "trial":
-                state, status = "ready", "Essai : " + ("aurait mergé" if all_ok else "n'aurait pas mergé") + " · prête à relire"
-                db.log_audit(c, "fabrique", "Décision de merge", jid, j["verified_sha"] or "", status)
+                state, status = "ready", (M("Trial: would have merged · ready for review") if all_ok else M("Trial: would not have merged · ready for review"))
+                db.log_audit(c, "fabrique", M("Merge decision"), jid, j["verified_sha"] or "", status)
             else:
-                state, status = "ready", "Prête à relire"
-                db.log_audit(c, "fabrique", "Décision de merge", jid, j["verified_sha"] or "", jobs.POLICIES[policy][0])
+                state, status = "ready", M("Ready for review")
+                db.log_audit(c, "fabrique", M("Merge decision"), jid, j["verified_sha"] or "", jobs.POLICIES[policy][0])
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(merge_state=state))
             result = {"policy": jobs.POLICIES[policy][0], "status": status, "limits": limits}
+            wl = i18n.job_lang(c, repo)
+            if wl != i18n.DEFAULT:           # the runner copies this decision into the PR comment: language of the written texts
+                result = {"policy": i18n.tr(result["policy"], wl), "status": i18n.tr(status, wl),
+                          "limits": [dict(l, name=i18n.tr(l["name"], wl), detail=i18n.tr(l["detail"], wl)) for l in limits]}
             if state == "ready":
                 ok = sum(1 for l in limits if l["ok"])
-                notify.emit(c, "ready", job=dict(j, pr_url=url), detail=f"{status} · barrières {ok}/{len(limits)}"
+                notify.emit(c, "ready", job=dict(j, pr_url=url), detail=M("{status} · gates {ok}/{count}", status=status, ok=ok, count=len(limits))
                             + "".join(f"\n✗ {l['name']} : {l['detail']}" for l in limits if not l["ok"]))
-            _stage(c, j, "pr", _txt(ev.get("summary"), 300) or f"PR #{n} ouverte, {len(diff['files'])} fichier(s), +{diff['additions']} −{diff['deletions']}.",
+            _stage(c, j, "pr", _txt(ev.get("summary"), 300) or M("PR #{n} opened, {files} file(s), +{add} −{rem}.", n=n, files=len(diff['files']), add=diff['additions'], rem=diff['deletions']),
                    status)
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(activity="idle"))
         elif kind == "diff":
-            # Diff du commit vérifié, pour la lecture dans le dashboard. Du texte, rangé tel quel et plafonné : il ne sert à
-            # aucune barrière (celles-ci s'appuient sur la liste des fichiers de l'événement « pr »).
+            # Verified commit diff, for reading in the dashboard. Text, kept as is and capped: it is used by
+            # no gate (the gates rely on the file list of the "pr" event).
             sha = _txt(ev.get("sha"), 40)
             if not re.fullmatch(r"[0-9a-f]{7,40}", sha) or not isinstance(ev.get("text"), str):
-                raise Denied("diff invalide")
+                raise Denied("invalid diff")
             rs = db.one(c, select(db.repos.c.settings).where(db.repos.c.id == j["repo_id"])) or {}
-            # Repo dont le code ne doit pas être copié ici (réglage du repo) : rien n'est gardé, même si un runner l'envoie
-            # (réglage changé pendant le job, runner modifié). Accepté sans erreur : le job continue.
+            # Repo whose code must not be copied here (repo setting): nothing is kept, even if a runner sends it
+            # (setting changed during the job, runner modified). Accepted without error: the job continues.
             if jobs.repo_keeps_diff(rs.get("settings")):
                 text, cut = diffview.clip(ev["text"])
                 vals = dict(sha=sha[:12], text=text, truncated=bool(cut or ev.get("truncated")), files=diffview.summary(text), at=t)
@@ -563,7 +630,7 @@ def report(runner, ref, ev):
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(cost=max(0.0, cost), tokens=max(0, tok), updated_at=t,
                                                                          session_id=_txt(ev.get("session_id"), 80) or j["session_id"]))
             for a in (ev.get("agents") or [])[:30]:
-                name = _txt(a.get("name"), 80) or "session principale"
+                name = _txt(a.get("name"), 80) or M("main session")
                 row = db.one(c, select(db.agents.c.id).where(db.agents.c.job_id == jid, db.agents.c.name == name))
                 vals = dict(task=_txt(a.get("task"), 240), model=_txt(a.get("model"), 80), tokens=int(a.get("tokens") or 0),
                             cost=float(a.get("cost") or 0), state="running" if a.get("running") else "done")
@@ -575,96 +642,102 @@ def report(runner, ref, ev):
             role, verdict = _txt(ev.get("role"), 20), _txt(ev.get("verdict"), 20)
             sha = _txt(ev.get("sha"), 40)[:12]
             if role not in ROLES or verdict not in VERDICTS or not sha:
-                raise Denied("vérification invalide")
+                raise Denied(M("invalid review"))
             c.execute(db.reviews.delete().where(db.reviews.c.job_id == jid, db.reviews.c.sha == sha, db.reviews.c.role == role))
             c.execute(insert(db.reviews).values(job_id=jid, sha=sha, role=role, verdict=verdict, summary=_txt(ev.get("summary"), 2000),
                                                 points=[_txt(p, 400) for p in (ev.get("points") or [])[:12]], model=_txt(ev.get("model"), 80), at=t))
-            db.log_event(c, jid, "vérification", f"{ROLES[role]} : {VERDICTS[verdict]}")
+            db.log_event(c, jid, M("review"), M("{role}: {verdict}", role=ROLES[role], verdict=VERDICTS[verdict]))
         elif kind == "cancelled":
-            who = j["cancel_requested"] or "un reviewer"
+            who = j["cancel_requested"] or M("a reviewer")
             c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(cancel_requested=None))
-            _stage(c, j, "failed", f"Arrêté à la demande de {who} ; le runner a tué l'agent.", f"Arrêté par {who}")
-            db.log_audit(c, "fabrique", "Job arrêté", jid, detail=f"demandé par {who}, confirmé par le runner")
+            _stage(c, j, "failed", M("Stopped at the request of {who}; the runner killed the agent.", who=who), M("Stopped by {who}", who=who))
+            db.log_audit(c, "fabrique", M("Job stopped"), jid, detail=M("requested by {who}, confirmed by the runner", who=who))
         elif kind == "log":
             db.log_event(c, jid, _txt(ev.get("kind"), 30) or "agent", _txt(ev.get("message"), 1000))
         elif kind == "onboard_wait":
             reason = _txt(ev.get("reason"), 120)
-            if j["source"] != "onboarding" or not (reason in ("vide", "branche") or reason.startswith("acces:")):
-                raise Denied("attente invalide")
+            if j["source"] != "onboarding" or not (reason in ("empty", "branch") or reason.startswith("access:")):
+                raise Denied("invalid wait")
             repo = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
             text = onboard_wait_text(repo, reason)
             if repo["onboarding"] not in ("waiting", "empty"):
                 notify.emit(c, "repo_waiting", repo=repo, detail=text)
-            c.execute(update(db.repos).where(db.repos.c.id == repo["id"]).values(onboarding="empty" if reason == "vide" else "waiting"))
+            c.execute(update(db.repos).where(db.repos.c.id == repo["id"]).values(onboarding="empty" if reason == "empty" else "waiting"))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(stage="queued", activity="idle", status_text=text, updated_at=t))
             db.log_event(c, jid, "onboarding", text)
         elif kind == "initialized":
             if j["source"] != "onboarding":
-                raise Denied("initialisation invalide")
+                raise Denied("invalid initialization")
             r0 = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
             rs0 = {k: v for k, v in (r0["settings"] or {}).items() if k != "to_create"}
-            rs0["vierge"] = True      # la branche principale porte une recipe (vide) : le repo est utilisable dès maintenant
+            rs0["blank"] = True      # the main branch contains a recipe (empty): the repo is usable immediately
             c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(onboarding="blank", settings=rs0,
                                                                                     recipe={"setup": [], "checks": {}, "env": []}))
-            _stage(c, j, "merged", "Repo initialisé (recipe vide, et un README s'il n'y en avait pas). Repo vierge : prêt pour une première demande ; "
-                                   "l'onboarding sera relancé après la première merge.", "Repo initialisé")
-            db.log_audit(c, "fabrique", "Repo initialisé", jid, detail=_txt(ev.get("sha"), 40)[:12])
+            _stage(c, j, "merged", M("Repo initialized (empty recipe, and a README if there was none). Blank repo: ready for a first request; onboarding will be restarted after the first merge."), M("Repo initialized"))
+            db.log_audit(c, "fabrique", M("Repo initialized"), jid, detail=_txt(ev.get("sha"), 40)[:12])
         elif kind == "onboarded":
             if j["source"] != "onboarding" or not isinstance(ev.get("recipe"), dict):
-                raise Denied("onboarding invalide")
+                raise Denied("invalid onboarding")
             c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(onboarding="ready", recipe=_recipe(ev["recipe"])))
-            _stage(c, j, "merged", "Recipe déjà présente sur la branche principale : repo prêt, rien à merger.", "Repo prêt")
-            db.log_audit(c, "fabrique", "Onboarding terminé", jid, detail="recipe existante reprise")
+            _stage(c, j, "merged", M("Recipe already present on the main branch: repo ready, nothing to merge."), M("Repo ready"))
+            db.log_audit(c, "fabrique", M("Onboarding finished"), jid, detail=M("existing recipe reused"))
         elif kind == "merged":
             sha = _txt(ev.get("sha"), 40)
             repo = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
             if j["source"] == "onboarding":
-                rs1 = {k: v for k, v in (repo["settings"] or {}).items() if k != "vierge"}
+                rs1 = {k: v for k, v in (repo["settings"] or {}).items() if k != "blank"}
                 vals = {"onboarding": "ready", "settings": rs1}
                 c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(**vals))
-                db.log_audit(c, "fabrique", "Onboarding terminé", jid, detail="recipe mergée : le repo accepte les jobs")
+                db.log_audit(c, "fabrique", M("Onboarding finished"), jid, detail=M("recipe merged: the repo accepts jobs"))
             elif repo["onboarding"] == "blank" and not db.one(c, select(db.jobs.c.id).where(
                     db.jobs.c.repo_id == repo["id"], db.jobs.c.source == "onboarding", db.jobs.c.stage == "pr", db.jobs.c.archived.is_(False))):
-                # (une PR de recipe déjà ouverte attend un humain : on ne la refait pas à chaque merge)
-                # Première fusion dans un dépôt vierge : le projet existe, l'agent d'onboarding peut écrire sa vraie recette.
-                ref_onb = jobs.onboard_in(c, {"user": "fabrique", "name": "la Fabrique"}, repo["id"])
-                db.log_event(c, jid, "onboarding", f"première merge dans un repo vierge : onboarding lancé ({ref_onb})")
+                # (a recipe PR is already open waiting for a human: we do not recreate it at every merge)
+                # First merge in a blank repo: the project exists, the onboarding agent can write its real recipe.
+                ref_onb = jobs.onboard_in(c, {"user": "fabrique", "name": "Fabrique"}, repo["id"])
+                db.log_event(c, jid, "onboarding", M("first merge in a blank repo: onboarding started ({ref_onb})", ref_onb=ref_onb))
                 onb = db.one(c, select(db.jobs.c.id).where(db.jobs.c.ref == ref_onb))
-                # Dit sur le job d'onboarding lui-même pourquoi il démarre sans que personne l'ait demandé. Une seule fois :
-                # deux PR mergées coup sur coup relancent le même onboarding, sans répéter l'explication.
+                # Explains in the onboarding job itself why it starts without anyone having requested it. Only once:
+                # two PRs merged one after another restart the same onboarding, without repeating the explanation.
                 if onb and not db.one(c, select(db.events.c.id).where(db.events.c.job_id == onb["id"], db.events.c.kind == "onboarding",
-                                                                       db.events.c.message.like("lancé par la Fabrique après %"))):
-                    db.log_event(c, onb["id"], "onboarding", f"lancé par la Fabrique après {j['ref']}, première merge de ce repo vierge : "
-                                 "le projet existe maintenant, l'agent écrit sa vraie recipe (installation et checks). PR à relire et merger.")
+                                                                       db.events.c.message.like('%"m": "started by Fabrique after %'))):
+                    db.log_event(c, onb["id"], "onboarding", M("started by Fabrique after {ref}, the first merge of this blank repo: the project now exists, the agent writes its real recipe (installation and checks). PR to review and merge.", ref=j['ref']))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(merge_state="merged"))
             c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
-            _stage(c, j, "merged", f"Mergé sur {ev.get('branch') or 'main'}, épinglé au sha vérifié {j['verified_sha']}.",
-                   "Mergé par la Fabrique")
-            notify.emit(c, "merged", job=j, detail=f"Mergé sur {ev.get('branch') or 'main'} (sha vérifié {j['verified_sha']}).")
-            db.log_audit(c, "fabrique", "Mergé", jid, j["verified_sha"] or "", f"squash → {sha[:12]}")
+            _stage(c, j, "merged", M("Merged into {p}, pinned to the verified sha {verified_sha}.", p=ev.get('branch') or 'main', verified_sha=j['verified_sha']),
+                   M("Merged by Fabrique"))
+            notify.emit(c, "merged", job=j, detail=M("Merged into {p} (verified sha {verified_sha}).", p=ev.get('branch') or 'main', verified_sha=j['verified_sha']))
+            db.log_audit(c, "fabrique", M("Merged"), jid, j["verified_sha"] or "", f"squash → {sha[:12]}")
         elif kind == "failed":
-            reason = _txt(ev.get("reason"), 400) or "échec"
+            reason = _txt(ev.get("reason"), 400) or M("failed")
             blank = False
             if j["source"] == "onboarding":
                 r1 = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"]))
                 blank = jobs.is_blank(r1)
-                if blank:    # repo déjà initialisé : il reste vierge et utilisable, l'onboarding sera retenté après une merge
+                if blank:    # repo already initialized: it stays blank and usable, the onboarding will be retried after a merge
                     c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"]).values(onboarding="blank"))
-                    reason = (reason[:300] + " — sans effet sur le repo, qui reste utilisable ; l'onboarding sera retenté après la prochaine merge.")
+                    reason = (reason[:300] + M(" — no effect on the repo, which stays usable; onboarding will be retried after the next merge."))
                 else:
                     c.execute(update(db.repos).where(db.repos.c.id == j["repo_id"], db.repos.c.onboarding != "ready").values(onboarding="failed"))
             c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
             if ev.get("attempts"):
                 c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(attempts=max(1, min(20, int(ev["attempts"])))))
-            _stage(c, j, "failed", reason, "Échec : " + reason[:200])
-            db.log_audit(c, "fabrique", "Échec", jid, detail=reason)
+            _stage(c, j, "failed", reason, M("Failed: ") + _cut(reason, 200))
+            db.log_audit(c, "fabrique", M("Failed"), jid, detail=reason)
             notify.emit(c, "failed", job=j, detail=reason)
+        elif kind == "closed":
+            # The agent gave its opinion and changed nothing (request already covered, dropped at the requester's request…):
+            # an explicit end, not a failure. Nothing to review, nothing to merge.
+            reason = _txt(ev.get("reason"), 400)
+            c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
+            _stage(c, j, "closed", M("The agent changed nothing and said why: {reason}", reason=reason) if reason else M("The agent changed nothing."),
+                   M("Closed without change"))
+            db.log_audit(c, "fabrique", M("Job closed without change"), jid, detail=reason)
         elif kind == "intent_done":
             c.execute(update(db.intents).where(db.intents.c.id == it["id"]).values(state="done", done_at=t, note=_txt(ev.get("note"), 400)))
             if ev.get("attempts") is not None:
                 c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(attempts=int(ev["attempts"])))
             c.execute(update(db.jobs).where(db.jobs.c.id == jid, db.jobs.c.stage.notin_(list(jobs.ACTIVE))).values(activity="idle"))
         else:
-            raise Denied("type d'événement inconnu")
+            raise Denied("unknown event type")
     return result

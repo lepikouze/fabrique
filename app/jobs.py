@@ -1,46 +1,61 @@
-"""Jobs : étapes, lectures filtrées par rôle, inbox, actions humaines (demande, réponse, décision, archive).
-Au lot 1 il n'y a pas encore de runner : les actions sont enregistrées (audit + événement) et seront exécutées par le runner
-au lot 2. Le simulateur de démonstration (demo.py) joue le rôle du runner pour montrer le cycle complet."""
+"""Jobs: stages, reads filtered by role, inbox, human actions (request, response, decision, archive).
+In phase 1 there was no runner yet: actions are recorded (audit + event) and will be executed by the runner
+in phase 2. The demo simulator (demo.py) plays the role of the runner to show the complete cycle."""
+from .i18n import M
 import re, time
 from sqlalchemy import and_, func, insert, or_, select, true, update
-from . import config, db
+from . import config, db, i18n
 
-# (clé, libellé, couleur). L'orange de marque est réservé aux actions ; l'ambre signale « attend ta réponse ».
+# (key, label, color). Brand orange is reserved for actions; amber signals "waiting for your response".
 STAGES = [
     ("queued", "Queue", "#8a8f98"),
-    ("triage", "Triage", "#7aa2f7"),
-    ("spec", "Spec à valider", "#c4a7ff"),
-    ("investigating", "Investigation", "#a78bfa"),
-    ("implementing", "Implémentation", "#5b8def"),
-    ("verifying", "Checks", "#2dd4bf"),
-    ("review", "Vérification", "#e879c9"),
-    ("pr", "PR · CI", "#60a5fa"),
-    ("waiting", "Attend ta réponse", "#f5b83d"),
-    ("merged", "Mergé", "#4ade80"),
-    ("done", "Étude rendue", "#86efac"),
-    ("failed", "Échec", "#f87171"),
+    ("triage", M("Triage"), "#7aa2f7"),
+    ("spec", M("Spec to approve"), "#c4a7ff"),
+    ("investigating", M("Investigation"), "#a78bfa"),
+    ("implementing", M("Implementation"), "#5b8def"),
+    ("verifying", M("Checks"), "#2dd4bf"),
+    ("review", M("Review"), "#e879c9"),
+    ("pr", M("PR · CI"), "#60a5fa"),
+    ("waiting", M("Waiting for your answer"), "#f5b83d"),
+    ("merged", M("Merged"), "#4ade80"),
+    ("done", M("Study delivered"), "#86efac"),
+    ("closed", M("Closed without change"), "#8a8f98"),
+    ("failed", M("Failed"), "#f87171"),
 ]
 STAGE = {k: {"key": k, "label": l, "color": c} for k, l, c in STAGES}
 ORDER = [k for k, _, _ in STAGES]
-FLOW = ["triage", "investigating", "implementing", "verifying", "review", "pr", "merged"]   # étapes de la chronologie
-STUDY_FLOW = ["triage", "investigating", "done"]                                            # … et celles d'une étude
-FINAL = ("merged", "done", "failed")
+FLOW = ["triage", "investigating", "implementing", "verifying", "review", "pr", "merged"]   # timeline stages
+STUDY_FLOW = ["triage", "investigating", "done"]                                            # ... and those of a study
+FINAL = ("merged", "done", "closed", "failed")
 ACTIVE = {"triage", "investigating", "implementing", "verifying", "review", "pr"}
 HARNESSES = {"claude-code": "Claude Code", "codex": "Codex"}
-READY = {"claude-code", "codex"}   # agents que le runner sait lancer ; les autres sont affichés « bientôt »
-POLICIES = {"off": ("Désactivée", "Chaque PR attend ta vérification. La Fabrique n'évalue rien."),
-            "trial": ("Essai", "La Fabrique évalue et affiche « aurait mergé », sans merger."),
-            "confident": ("Merge si confiant", "La Fabrique merge seul quand toutes les barrières tiennent : checks verts, "
-                                                "vérification OK, premier essai, aucun protected path, taille respectée.")}
-INBOX_KIND = {"question": ("Question", "#f5b83d"), "review": ("Prête à relire", "#60a5fa"),
-              "spec": ("Spec à valider", "#c4a7ff"), "study": ("Étude rendue", "#86efac"), "failed": ("Échec", "#f87171")}
+READY = {"claude-code", "codex"}   # agents that the runner knows how to launch; others are displayed "coming soon"
+POLICIES = {"off": (M("Disabled"), M("Every PR waits for your review. Fabrique evaluates nothing.")),
+            "trial": (M("Trial"), M("Fabrique evaluates and shows “would have merged”, without merging.")),
+            "confident": (M("Merge if confident"), M("Fabrique merges on its own when every gate holds: checks green, review OK, first attempt, no protected path, size respected."))}
+INBOX_KIND = {"question": ("Question", "#f5b83d"), "review": (M("Ready for review"), "#60a5fa"),
+              "spec": (M("Spec to approve"), "#c4a7ff"), "study": (M("Study delivered"), "#86efac"), "failed": (M("Failed"), "#f87171")}
+
+
+# Applied when a change request was filed without a "Done when" criterion: universal, with no side effect. The code
+# reviewer judges it like any other criterion; it is shown as the default one wherever the criterion appears.
+DEFAULT_DONE = M("The change does what the request asks, the repository's existing checks still pass, and nothing unrelated is modified.")
+
+
+def done_when_of(j, lang=None):
+    """(criterion, is it the default one) of a job. The default only applies to change requests: a study has its own outline."""
+    if (j.get("done_when") or "").strip():
+        return j["done_when"], False
+    if j.get("source") in ("study", "onboarding", "demo"):
+        return "", False
+    return i18n.tr(DEFAULT_DONE, lang) if lang else DEFAULT_DONE, True
 
 
 _demo = {"at": 0.0, "v": None}
 
 
 def demo_visible():
-    """Données de démonstration affichées ? (réglage, seulement si FABRIQUE_DEMO=1 ; cache de 2 s)."""
+    """Display demo data? (setting, only if FABRIQUE_DEMO=1; 2s cache)."""
     if not config.DEMO:
         return False
     if _demo["v"] is None or time.time() - _demo["at"] > 2:
@@ -55,15 +70,15 @@ def forget_demo():
 
 
 class Refused(Exception):
-    """Action refusée (droits, état du job) : message lisible pour l'utilisateur."""
+    """Action refused (permissions, job status): human-readable message for the user."""
 
 
 def _visible(user):
-    """Filtre SQL : un requester ne voit que ses demandes ; les jobs de démonstration seulement s'ils sont affichés."""
+    """SQL filter: a requester only sees their requests; demo jobs only if they are displayed."""
     from .auth import can
     conds = [] if can(user, "see_all") else [db.jobs.c.requester == user["user"]]
     if not demo_visible():
-        conds.append(db.jobs.c.source != "démo")
+        conds.append(db.jobs.c.source != "demo")
     return and_(true(), *conds)
 
 
@@ -76,8 +91,8 @@ def _runners(c):
 
 
 def listing(user, repo=None, archived=False):
-    """Jobs visibles, du plus récemment modifié au plus ancien. Dans une requête de page, la liste n'est lue qu'une fois :
-    la page, les compteurs du pied et l'inbox s'en servent tous (lecture seule : personne ne la modifie)."""
+    """Jobs visible, from most recently modified to oldest. In a page request, the list is read only once:
+    the page, the footer counters, and the inbox all use it (read-only: no one modifies it)."""
     key = ("jobs", user.get("user"), user.get("role"), repo or None, bool(archived))
     return db.cached(key, lambda: _listing(user, repo, archived))
 
@@ -112,17 +127,17 @@ def _decorate(j, repos, runners):
 
 
 def activity_label(j):
-    """Ce que fait le job, en un mot. « en pause » est réservé à ce qui est suspendu : une question sans réponse, ou le
-    budget du jour atteint."""
+    """What the job does, in one word. "on pause" is reserved for what is suspended: an unanswered question, or the
+    daily budget reached."""
     from .work import PAUSED
     st = j["stage"]
     if st in FINAL:
-        return "terminé"
+        return M("done", _ctx="job")
     if st == "waiting" or j.get("status_text") == PAUSED:
-        return "en pause"
+        return M("paused")
     if j.get("activity") == "active":
-        return "actif"
-    return "en file" if st == "queued" else "en attente"
+        return M("active")
+    return M("queued") if st == "queued" else M("waiting")
 
 
 def by_stage(js):
@@ -132,11 +147,11 @@ def by_stage(js):
     return [(STAGE[k], groups[k]) for k in ORDER]
 
 
-# Vue condensée (préférence personnelle) : quatre familles au lieu d'une colonne par étape.
-FAMILIES = [("wait", "En attente", "#8a8f98", ("queued",)),
-            ("run", "En cours", "#5b8def", ("triage", "investigating", "implementing", "verifying", "review")),
-            ("you", "À toi", "#f5b83d", ("spec", "pr", "waiting")),
-            ("end", "Terminé", "#4ade80", ("merged", "done", "failed"))]
+# Compact view (personal preference): four families instead of one column per step.
+FAMILIES = [("wait", M("Waiting"), "#8a8f98", ("queued",)),
+            ("run", M("Running"), "#5b8def", ("triage", "investigating", "implementing", "verifying", "review")),
+            ("you", M("Yours"), "#f5b83d", ("spec", "pr", "waiting")),
+            ("end", M("Done"), "#4ade80", ("merged", "done", "closed", "failed"))]
 FAMILY_OF = {s: k for k, _, _, stages in FAMILIES for s in stages}
 
 
@@ -148,7 +163,7 @@ def by_family(js):
 
 
 def get(user, ref):
-    """Le job complet (question, chronologie, agents, preuves, décision, audit, événements) ou None s'il n'est pas visible."""
+    """The complete job (question, timeline, agents, evidence, decision, audit, events) or None if not visible."""
     with db.tx() as c:
         j = db.one(c, select(db.jobs).where(db.jobs.c.ref == ref, _visible(user)))
         if not j:
@@ -164,18 +179,21 @@ def get(user, ref):
         j["audit"] = db.rows(c, select(db.audit).where(db.audit.c.job_id == jid).order_by(db.audit.c.at.desc()))
         j["events"] = db.rows(c, select(db.events).where(db.events.c.job_id == jid, db.events.c.kind != "audit")
                               .order_by(db.events.c.id.desc()).limit(200))
-        # Diff envoyé par le runner : seulement son résumé ici (le texte est lu à la demande, voir diff_view).
+        # Diff sent by the runner: only its summary here (the text is read on demand, see diff_view).
         j["patch"] = db.one(c, select(db.diffs.c.sha, db.diffs.c.truncated, db.diffs.c.files, db.diffs.c.at).where(db.diffs.c.job_id == jid))
     j["open_question"] = next((q for q in j["questions"] if q["answer"] is None), None)
     j["timeline"] = _timeline(j, tl)
+    from . import translate
+    with db.tx() as c:          # reader in another language than the job: stored translations, shown unless the original is asked for
+        translate.attach(c, j, show=not i18n.original())
     return j
 
 
 def patch_info(j):
-    """Résumé du diff à afficher dans la fiche du job, ou None : il doit correspondre au commit vérifié (un diff plus ancien
-    ne se montre pas), et une étude n'en a pas."""
+    """Summary of the diff to display in the job card, or None: it must correspond to the verified commit (an older
+    diff is not shown), and a study does not have one."""
     p = j.get("patch")
-    if not p or not j.get("verified_sha") or p["sha"] != j["verified_sha"] or j.get("source") == "étude" or diff_off(j):
+    if not p or not j.get("verified_sha") or p["sha"] != j["verified_sha"] or j.get("source") == "study" or diff_off(j):
         return None
     files = p["files"] or []
     return {"sha": p["sha"], "truncated": p["truncated"], "files": files, "n": len(files), "add": sum(f.get("add", 0) for f in files),
@@ -183,18 +201,18 @@ def patch_info(j):
 
 
 def repo_keeps_diff(settings):
-    """Réglage du repo « Afficher le diff dans la Fabrique » : activé par défaut. Désactivé pour un repo confidentiel, dont
-    le code ne doit pas être copié dans la base de la Fabrique : le runner n'envoie rien et le dashboard ne garde rien."""
+    """'Show diff in Fabrique' repo setting: enabled by default. Disabled for a confidential repo, whose
+    code must not be copied into the Fabrique database: the runner sends nothing and the dashboard keeps nothing."""
     return (settings or {}).get("diff") is not False
 
 
 def diff_off(j):
-    """Vrai si le repo du job ne conserve pas de diff (la fiche le dit, et renvoie vers la PR)."""
+    """True if the job repo does not keep a diff (the card states this and links to the PR)."""
     return not repo_keeps_diff((j.get("repo") or {}).get("settings"))
 
 
 def report_formats(c=None):
-    """Formats dans lesquels un rapport d'étude se télécharge (Settings → Budgets et barrières) : les deux par défaut."""
+    """Formats in which a study report is downloaded (Settings → Budgets and gates): both by default."""
     def load(cx):
         lim = db.get_setting(cx, "limits")[0] or {}
         return {"md": lim.get("report_md") is not False, "pdf": lim.get("report_pdf") is not False}
@@ -205,12 +223,12 @@ def report_formats(c=None):
 
 
 def diff_view(user, ref, sha=""):
-    """Diff complet d'un job, découpé par fichier, avec les fichiers protégés signalés. Mêmes droits que la lecture du job ;
-    None si le job n'est pas visible, n'a pas de diff, ou si le diff ne correspond plus au commit vérifié."""
+    """Full diff of a job, split by file, with protected files flagged. Same permissions as job reading;
+    None if the job is not visible, has no diff, or if the diff no longer matches the verified commit."""
     from . import diffview, work
     with db.tx() as c:
         j = db.one(c, select(db.jobs.c.id, db.jobs.c.repo_id, db.jobs.c.verified_sha, db.jobs.c.source).where(db.jobs.c.ref == ref, _visible(user)))
-        if not j or not j["verified_sha"] or j["source"] == "étude":
+        if not j or not j["verified_sha"] or j["source"] == "study":
             return None
         row = db.one(c, select(db.diffs).where(db.diffs.c.job_id == j["id"]))
         if not row or row["sha"] != j["verified_sha"] or (sha and sha != row["sha"]):
@@ -225,10 +243,10 @@ def diff_view(user, ref, sha=""):
 
 
 def _timeline(j, tl):
-    """Étapes passées (avec résumé), courante, et à venir (grisées)."""
+    """Past steps (with summary), current, and upcoming (grayed out)."""
     seen = [dict(t, state="done") for t in tl]
     cur = j["stage"]
-    flow = STUDY_FLOW if j.get("source") == "étude" else FLOW
+    flow = STUDY_FLOW if j.get("source") == "study" else FLOW
     if seen and cur not in FINAL:
         seen[-1]["state"] = "current" if seen[-1]["stage"] == cur else "done"
     done_stages = {t["stage"] for t in tl}
@@ -241,15 +259,15 @@ def _timeline(j, tl):
     return seen + future
 
 
-# Ce qu'un humain doit regarder lui-même quand une relecture n'a pas rendu de verdict.
-REVIEW_FOCUS = {"code": "la justesse : le changement fait-il ce que dit la demande ? cas limites, erreurs non gérées, tests qui testent vraiment",
-                "securite": "les failles : entrées non validées, injection, secret écrit en dur, droits trop larges",
-                "archi": "la structure : modules respectés, dépendances ou couplage inutiles, duplication",
-                "infra": "le déploiement : conteneur, CI, migrations, configuration, retour arrière"}
+# What a human must look at themselves when a review has not returned a verdict.
+REVIEW_FOCUS = {"code": M("correctness: does the change do what the request says? edge cases, unhandled errors, tests that really test"),
+                "security": M("vulnerabilities: unvalidated input, injection, hard-coded secret, rights that are too broad"),
+                "architecture": M("structure: modules respected, needless dependencies or coupling, duplication"),
+                "infra": M("deployment: container, CI, migrations, configuration, rollback")}
 
 
 def changes_url(j):
-    """Lien direct vers le diff de la PR chez le provider (onglet des changements)."""
+    """Direct link to the PR diff at the provider (changes tab)."""
     url, prov = j.get("pr_url") or "", ((j.get("repo") or {}).get("provider") or "")
     if not url.startswith(("https://", "http://")):
         return ""
@@ -257,7 +275,7 @@ def changes_url(j):
 
 
 def to_check(j):
-    """Pour chaque barrière rouge : quoi vérifier soi-même avant d'approuver."""
+    """For each red gate: what to check yourself before approving."""
     from .work import ROLES, VERDICTS
     d = j.get("decision") or {}
     cur = [r for r in j.get("reviews") or [] if r["sha"] == j.get("verified_sha")]
@@ -265,66 +283,61 @@ def to_check(j):
     for l in d.get("limits") or []:
         if l["ok"]:
             continue
-        n = l["name"]
-        if n == "Vérification":
+        n = l.get("key")
+        if n == "review":
             for r in sorted(cur, key=lambda r: r["role"]):
-                if r["verdict"] == "indetermine":
-                    out.append({"title": f"Vérification {ROLES.get(r['role'], r['role'])} sans verdict",
-                                "text": (r["summary"] or "Aucun verdict rendu.") + f" Relis toi-même {REVIEW_FOCUS.get(r['role'], '')} "
-                                        "dans les changements, ou relance la vérification."})
+                if r["verdict"] == "undetermined":
+                    out.append({"title": M("No verdict from the {get} review", get=ROLES.get(r['role'], r['role'])),
+                                "text": (r["summary"] or M("No verdict given.")) + M(" Review {get} yourself in the changes, or rerun the review.", get=REVIEW_FOCUS.get(r['role'], ''))})
                 elif r["verdict"] != "ok":
                     pts = " ; ".join(r["points"] or []) or r["summary"] or ""
-                    out.append({"title": f"Vérification {ROLES.get(r['role'], r['role'])} : {VERDICTS[r['verdict']]}", "text": pts})
-            if not cur or not {"code", "securite"} <= {r["role"] for r in cur}:
-                out.append({"title": "Vérification incomplète", "text": "Code et sécurité sont exigés au sha vérifié : relance la vérification."})
-        elif n == "Checks verts":
-            if "aucun check" in l["detail"]:
-                out.append({"title": "Aucun check", "text": "La recipe du repo n'a pas encore de checks (repo vierge) : rien n'a été "
-                            "vérifié automatiquement. Lis les changements et leurs tests ; après le merge, l'onboarding proposera la recipe."})
+                    out.append({"title": M("{get} review: {p}", get=ROLES.get(r['role'], r['role']), p=VERDICTS[r['verdict']]), "text": pts})
+            if not cur or not {"code", "security"} <= {r["role"] for r in cur}:
+                out.append({"title": M("Review incomplete"), "text": M("Code and security are required on the verified sha: rerun the review.")})
+        elif n == "checks":
+            if l.get("no_checks"):
+                out.append({"title": M("No check"), "text": M("The repo's recipe has no checks yet (blank repo): nothing was verified automatically. Read the changes and their tests; after the merge, onboarding will propose the recipe.")})
             else:
-                out.append({"title": "Checks", "text": "Ouvre la section Preuves du job : la sortie de chaque check en échec y est dépliable."})
-        elif n == "Premier essai":
-            out.append({"title": "Plusieurs tentatives", "text": f"{l['detail']} : regarde ce que la correction a changé, et pourquoi."})
-        elif n == "Protected paths":
-            out.append({"title": "Fichiers protégés", "text": l["detail"] + " : ces fichiers demandent une vérification humaine attentive."})
-        elif n == "Taille":
-            out.append({"title": "PR volumineuse", "text": l["detail"] + " : au-delà de la limite, le merge seul est interdite."})
-        elif n == "Avis de l'agent":
-            out.append({"title": "L'agent n'est pas confiant", "text": "Lis son interprétation et ses hypothèses dans le job."})
+                out.append({"title": M("Checks"), "text": M("Open the Evidence section of the job: the output of each failed check can be unfolded there.")})
+        elif n == "first_attempt":
+            out.append({"title": M("Several attempts"), "text": M("{detail}: look at what the fix changed, and why.", detail=l['detail'])})
+        elif n == "protected":
+            out.append({"title": M("Protected files"), "text": l["detail"] + M(": these files need careful human review.")})
+        elif n == "size":
+            out.append({"title": M("Large PR"), "text": l["detail"] + M(": beyond the limit, merging on its own is not allowed.")})
+        elif n == "opinion":
+            out.append({"title": M("The agent is not confident"), "text": M("Read its interpretation and its assumptions in the job.")})
     for e in j.get("evidence") or []:
         if e.get("sha") == j.get("verified_sha") and security_warn(e):
-            why = ("le job a tenté de joindre un site hors de la liste blanche du proxy : une dépendance à autoriser, ou un agent "
-                   "trompé." if e.get("name") == "Réseau" else "secret écrit en dur, ou paquet introuvable ou tout juste publié.")
-            out.append({"title": (e.get("output") or "").split("\n", 1)[0], "text": f"Ouvre la ligne {e.get('name')} dans les Preuves "
-                        f"du job : {why} Ce contrôle ne bloque pas : à toi de juger."})
+            why = (M("the job tried to reach a site outside the proxy's allowlist: a dependency to allow, or an agent that was tricked.") if e.get("kind") == "network" else M("hard-coded secret, or a package that cannot be found or was only just published."))
+            out.append({"title": (e.get("output") or "").split("\n", 1)[0], "text": M("Open the {name} line in the job's Evidence: {why} This check does not block: it is your call.", name=e.get('name'), why=why)})
     return out
 
 
-EFFORT = {1: "trivial", 2: "léger", 3: "moyen", 4: "conséquent", 5: "lourd"}
+EFFORT = {1: "trivial", 2: M("light"), 3: M("medium"), 4: M("substantial"), 5: M("heavy")}
 
 
 def review_effort(j):
-    """Effort de relecture de 1 à 5 (même calcul que le runner pour la PR), ou None tant qu'il n'y a pas de diff."""
+    """Review effort from 1 to 5 (same calculation as the runner for the PR), or None until there is a diff."""
     d = j.get("diff") or {}
     files = d.get("files") or []
     if not files:
         return None
     lines = int(d.get("additions") or 0) + int(d.get("deletions") or 0)
     n = 1 if lines <= 30 and len(files) <= 2 else 2 if lines <= 120 and len(files) <= 5 else 3 if lines <= 300 and len(files) <= 10 else 4 if lines <= 800 else 5
-    prot = any(not l["ok"] for l in ((j.get("decision") or {}).get("limits") or []) if l["name"] == "Protected paths")
+    prot = any(not l["ok"] for l in ((j.get("decision") or {}).get("limits") or []) if l.get("key") == "protected")
     n = min(5, n + (1 if prot else 0))
     return {"n": n, "label": EFFORT[n], "files": len(files), "add": int(d.get("additions") or 0), "rem": int(d.get("deletions") or 0)}
 
 
 def security_warn(e):
-    """Ligne « Sécurité » ou « Réseau » des preuves (contrôles du runner, à titre d'information) qui signale quelque chose :
-    des alertes, ou des sorties réseau refusées."""
-    first = (e.get("output") or "").split("\n", 1)[0]
-    return (e.get("name") == "Sécurité" and "alerte" in first) or (e.get("name") == "Réseau" and "refusée(s)" in first)
+    """A security or network line of the evidence (runner checks, for information) that reports something: alerts, or
+    refused network egress. The runner says so itself (kind, warn): nothing is read from the text of the report."""
+    return e.get("kind") in ("security", "network") and bool(e.get("warn"))
 
 
 def inbox(user):
-    """Ce qui attend un humain. Un requester ne voit que les questions sur ses propres demandes."""
+    """What awaits a human. A requester only sees questions about their own requests."""
     from .auth import can
     items = []
     for j in listing(user):
@@ -332,15 +345,15 @@ def inbox(user):
         if j["stage"] == "waiting" and j["open_question"]:
             kind, why = "question", j["open_question"]
         elif j["stage"] == "done" and j.get("report") and not j.get("report_seen"):
-            kind, why = "study", "Le rapport d'étude est rendu : lis-le, puis marque-le comme lu ou fais-en une demande."
+            kind, why = "study", M("The study report is delivered: read it, then mark it as read or turn it into a request.")
         elif not can(user, "see_all"):
             continue
         elif j["stage"] == "spec":
-            kind, why = "spec", j["status_text"] or "La spec attend ta validation avant l'investigation."
+            kind, why = "spec", j["status_text"] or M("The spec is waiting for your approval before the investigation.")
         elif j["merge_state"] == "ready":
-            kind, why = "review", j["status_text"] or "Prête à relire."
+            kind, why = "review", j["status_text"] or M("Ready for review.")
         elif j["stage"] == "failed":
-            kind, why = "failed", j["status_text"] or "Le job a échoué."
+            kind, why = "failed", j["status_text"] or M("The job failed.")
         if kind:
             items.append({"job": j, "kind": kind, "label": INBOX_KIND[kind][0], "color": INBOX_KIND[kind][1], "why": why})
     order = {"question": 0, "spec": 1, "review": 2, "study": 3, "failed": 4}
@@ -348,7 +361,7 @@ def inbox(user):
 
 
 def access_requests():
-    """Demandes d'accès en attente (vues par les admins). Lue une fois par page : le compteur du menu et l'inbox s'en servent."""
+    """Pending access requests (viewed by admins). Read once per page: the menu counter and the inbox use it."""
     def load():
         with db.tx() as c:
             return db.rows(c, select(db.users).where(db.users.c.requested_role.is_not(None)).order_by(db.users.c.requested_at))
@@ -388,10 +401,10 @@ def repos_for_requests():
 
 
 def _next_ref(c):
-    """Numéro du prochain job. Un compteur qui ne redescend jamais (réglage « job_seq ») : un numéro supprimé n'est pas
-    réattribué, car des commits (« Fabrique-Job: FAB-14 ») et l'audit y renvoient pour toujours."""
+    """Next job number. A counter that never decreases (setting "job_seq"): a deleted number is not
+    reassigned, because commits ("Fabrique-Job: FAB-14") and the audit refer to it forever."""
     seq = int((db.get_setting(c, "job_seq")[0] or {}).get("n") or 0)
-    if not seq:   # première fois : on part du plus grand numéro déjà attribué
+    if not seq:   # first time: we start from the highest number already assigned
         for r in db.rows(c, select(db.jobs.c.ref)):
             m = re.fullmatch(re.escape(config.JOB_PREFIX) + r"-(\d+)", r["ref"] or "")
             seq = max(seq, int(m.group(1))) if m else seq
@@ -402,70 +415,69 @@ def _next_ref(c):
     return f"{config.JOB_PREFIX}-{n}"
 
 
-def create(user, title, request, done_when, repo_id, harness="", model="", source="formulaire", kind="start", study=False, profile=""):
+def create(user, title, request, done_when, repo_id, harness="", model="", source="form", kind="start", study=False, profile=""):
     from .auth import can
     title, request, done_when = " ".join(title.split())[:200], request.strip()[:8000], done_when.strip()[:2000]
     if not title or not request:
-        raise Refused("Le titre et le besoin sont obligatoires.")
+        raise Refused(M("The title and the need are required."))
     if (harness or model or profile) and not can(user, "see_all"):
-        harness = model = profile = ""   # le demandeur ne choisit ni l'agent, ni le modèle, ni le profil : réglages du dépôt
+        harness = model = profile = ""   # the requester chooses neither the agent, nor the model, nor the profile: repo settings
     if harness and harness not in HARNESSES:
-        raise Refused("Agent inconnu.")
+        raise Refused(M("Unknown agent."))
     if harness and harness not in READY:
-        raise Refused(f"{HARNESSES[harness]} n'est pas encore disponible.")
-    if study and source == "formulaire":
-        source = "étude"   # étude : l'agent rend un rapport, le runner ne pousse rien
+        raise Refused(M("{p} is not available yet.", p=HARNESSES[harness]))
+    if study and source == "form":
+        source = "study"   # study: the agent returns a report, the runner pushes nothing
     with db.tx() as c:
         return insert_job(c, user, title, request, done_when, repo_id, harness, model, source, kind, profile)
 
 
-def insert_job(c, user, title, request, done_when, repo_id, harness="", model="", source="formulaire", kind="start", profile=""):
-    """Création d'un job dans une transaction déjà ouverte (formulaire, onboarding, relance automatique)."""
+def insert_job(c, user, title, request, done_when, repo_id, harness="", model="", source="form", kind="start", profile=""):
+    """Creation of a job in an already open transaction (form, onboarding, automatic restart)."""
     t = time.time()
     repo = db.one(c, select(db.repos).where(db.repos.c.id == repo_id, db.repos.c.accepts_jobs.is_(True)))
     if not repo:
-        raise Refused("Ce repo n'accepte pas de nouvelles demandes.")
-    if repo["onboarding"] not in ("ready", "blank") and not is_blank(repo) and source not in ("onboarding", "démo"):
-        raise Refused("Ce repo n'est pas encore prêt : l'onboarding doit d'abord être mergé.")
+        raise Refused(M("This repo does not accept new requests."))
+    if repo["onboarding"] not in ("ready", "blank") and not is_blank(repo) and source not in ("onboarding", "demo"):
+        raise Refused(M("This repo is not ready yet: onboarding must be merged first."))
     glob, _ = db.get_setting(c, "agents")
     limits, _ = db.get_setting(c, "limits")
     rs = repo["settings"] or {}
     from . import providers, profiles
     eff_h = harness or rs.get("harness") or glob["harness"]
     if profile and not profiles.get(c, profile):
-        raise Refused("Profil de modèles inconnu.")
+        raise Refused(M("Unknown model profile."))
     eff_m, extra = profiles.resolve(c, rs, source, model, profile)
-    if not eff_m and source == "démo":
-        eff_m = "modèle-de-démonstration"               # données fictives : aucun agent ne tourne, aucun modèle n'est requis
+    if not eff_m and source == "demo":
+        eff_m = "demo-model"               # dummy data: no agent is running, no model is required
     if not eff_m:
         raise Refused(providers.default_problem(c))
     if eff_h not in READY:
-        raise Refused(f"L'agent retenu ({HARNESSES.get(eff_h, eff_h)}, réglage du repo ou global) n'est pas encore disponible : "
-                      "choisis Claude Code dans les settings.")
+        raise Refused(M("The selected agent ({eff_h}, repo or global setting) is not available yet: choose Claude Code in the settings.", eff_h=HARNESSES.get(eff_h, eff_h)))
     known = {m["id"]: m for m in providers.models_with_provider(c)}
     if model and model not in known:
-        raise Refused("Modèle inconnu.")
+        raise Refused(M("Unknown model."))
     if eff_m in known and not providers.compatible(known[eff_m], eff_h):
-        raise Refused(f"{HARNESSES.get(eff_h, eff_h)} ne sait pas utiliser {known[eff_m]['name']} : choisis un modèle compatible.")
+        raise Refused(M("{eff_h} cannot use {name}: choose a compatible model.", eff_h=HARNESSES.get(eff_h, eff_h), name=known[eff_m]['name']))
     ref = _next_ref(c)
     jid = c.execute(insert(db.jobs).values(
         ref=ref, title=title, request=request, done_when=done_when, requester=user["user"], source=source, repo_id=repo["id"],
-        stage="queued", activity="idle", status_text="En attente d'un runner", branch=f"fabrique/{ref}",
-        harness=harness or rs.get("harness") or glob["harness"], model=eff_m, models=extra,
+        stage="queued", activity="idle", status_text=M("Waiting for a runner"), branch=f"fabrique/{ref}",
+        harness=harness or rs.get("harness") or glob["harness"], model=eff_m, models=extra, lang=i18n.job_lang(c, repo),
         budget=float(rs.get("budget_job") or limits["budget_job"]), created_at=t, updated_at=t)).inserted_primary_key[0]
     c.execute(update(db.repos).where(db.repos.c.id == repo["id"]).values(last_activity=t))
-    if source != "démo":
+    if source != "demo":
         from .work import enqueue
         enqueue(c, jid, kind)
-    db.log_event(c, jid, "créé", f"Demande déposée par {user['name']}")
-    db.log_audit(c, user["user"], "Demande créée", jid, ref, f"repo {repo['slug']}")
+    db.log_event(c, jid, M("created"), M("Request filed by {name}", name=user['name']))
+    db.log_audit(c, user["user"], M("Request created"), jid, ref, f"repo {repo['slug']}")
     return ref
 
 
 def _job_for_action(c, user, ref):
     j = db.one(c, select(db.jobs).where(db.jobs.c.ref == ref, _visible(user)))
     if not j:
-        raise Refused("Job introuvable.")
+        raise Refused(M("Job not found."))
     return j
 
 
@@ -473,56 +485,54 @@ def answer(user, ref, text):
     from .auth import can
     text = text.strip()[:4000]
     if not text:
-        raise Refused("La réponse est vide.")
+        raise Refused(M("The answer is empty."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
         if not (can(user, "answer") or (can(user, "answer_own") and j["requester"] == user["user"])):
-            raise Refused("Tu ne peux pas répondre à cette question.")
+            raise Refused(M("You cannot answer this question."))
         q = db.one(c, select(db.questions).where(db.questions.c.job_id == j["id"], db.questions.c.answer.is_(None)))
         if not q or j["stage"] != "waiting":
-            raise Refused("Aucune question en attente sur ce job.")
+            raise Refused(M("No question is waiting on this job."))
         t = time.time()
         c.execute(update(db.questions).where(db.questions.c.id == q["id"]).values(answer=text, answered_by=user["user"], answered_at=t))
-        # La réponse est une donnée pour l'agent, jamais une consigne de plus haut niveau : le runner l'encadre (lot 2).
+        # The response is data for the agent, never a higher-level instruction: the runner frames it (phase 2).
         c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="triage", activity="idle", updated_at=t,
-                                                                         status_text="Réponse reçue · reprise au tri"))
-        c.execute(insert(db.timeline).values(job_id=j["id"], stage="triage", at=t, summary="Reprise avec la réponse reçue."))
-        if j["source"] != "démo":
+                                                                         status_text=M("Answer received · resuming at triage")))
+        c.execute(insert(db.timeline).values(job_id=j["id"], stage="triage", at=t, summary=M("Resuming with the answer received.")))
+        if j["source"] != "demo":
             from .work import enqueue
             enqueue(c, j["id"], "resume", {"answer": text, "question": q["question"], "by": user["name"]})
-        db.log_event(c, j["id"], "réponse", f"Réponse de {user['name']} : l'agent reprend au tri")
-        db.log_audit(c, user["user"], "Question répondue", j["id"], ref, text[:200])
+        db.log_event(c, j["id"], M("answer"), M("Answer from {name}: the agent resumes at triage", name=user['name']))
+        db.log_audit(c, user["user"], M("Question answered"), j["id"], ref, text[:200])
 
 
-ONBOARD_TEXT = ("Écrire la recipe .fabrique/setup.json du repo {slug} : commandes d'installation, checks (tests, lint, "
-                "typage, build) et variables d'environnement nécessaires, prouvée en la lançant. Ne modifier aucun autre fichier.",
-                "La recipe est la seule modification ; le runner la rejoue dans un conteneur neuf ; un humain merge la PR.")
+ONBOARD_TEXT = ("Write the repo {slug}'s recipe .fabrique/setup.json: installation commands, checks (tests, lint, typing, build) and required environment variables, proven by running it. Change no other file.",
+                M("The recipe is the only change; the runner replays it in a fresh container; a human merges the PR."))
 
 
 def is_blank(repo):
-    """Repo initialisé par la Fabrique : sa branche principale porte déjà une recipe (vide). Il accepte des demandes et le
-    reste quoi que devienne son onboarding, qui ne fait qu'essayer d'écrire une recipe plus riche."""
-    return bool(repo and (repo.get("settings") or {}).get("vierge"))
+    """Repo initialized by Fabrique: its main branch already contains a recipe (empty). It accepts requests, and
+    keeps doing so whatever becomes of its onboarding, which only tries to write a richer recipe."""
+    return bool(repo and (repo.get("settings") or {}).get("blank"))
 
 
 def remove_repo(user, repo_id):
-    """Retire un repo de la Fabrique. Rien n'est supprimé sur la forge. Possible tant que le repo n'a servi qu'à son
-    onboarding : dès qu'une demande y a été déposée, son historique compte et le repo se ferme au lieu de disparaître."""
+    """Removes a repo from Fabrique. Nothing is deleted on the Git host. Possible as long as the repo was only used for
+    its onboarding: as soon as a request has been submitted, its history counts and the repo is closed instead of disappearing."""
     from sqlalchemy import delete
     from .auth import can
     if not can(user, "repos_edit"):
-        raise Refused("Seuls les admins retirent un repo.")
+        raise Refused(M("Only admins remove a repo."))
     with db.tx() as c:
         repo = db.one(c, select(db.repos).where(db.repos.c.id == repo_id))
         if not repo:
-            raise Refused("Repo introuvable.")
+            raise Refused(M("Repo not found."))
         js = db.rows(c, select(db.jobs.c.id, db.jobs.c.source, db.jobs.c.stage).where(db.jobs.c.repo_id == repo_id))
         if any(j["source"] != "onboarding" for j in js):
-            raise Refused("Ce repo a déjà reçu des demandes : son historique est gardé. Pour l'arrêter, décoche "
-                          "« Accepte les nouvelles demandes ».")
+            raise Refused(M("This repo has already received requests: its history is kept. To stop it, untick “Accepts new requests”."))
         ids = [j["id"] for j in js]
         if ids and db.one(c, select(db.intents.c.id).where(db.intents.c.job_id.in_(ids), db.intents.c.state == "leased")):
-            raise Refused("L'onboarding de ce repo est en cours sur un runner : attends sa fin, ou arrête le job, puis réessaie.")
+            raise Refused(M("This repo's onboarding is running on a runner: wait for it to end, or stop the job, then try again."))
         if ids:
             for t in reversed(db.meta.sorted_tables):
                 if "job_id" in t.c:
@@ -533,15 +543,15 @@ def remove_repo(user, repo_id):
             other = db.one(c, select(db.repos.c.id).order_by(db.repos.c.name).limit(1))
             if other:
                 c.execute(update(db.repos).where(db.repos.c.id == other["id"]).values(is_default=True))
-        db.log_audit(c, user["user"], "Repo retiré", target=repo["slug"], detail="rien n'est supprimé sur la forge")
+        db.log_audit(c, user["user"], M("Repo removed"), target=repo["slug"], detail=M("nothing is deleted on the Git host"))
     return repo["name"]
 
 
 def onboard(user, repo_id):
-    """Lancer (ou relancer) l'onboarding d'un repo : un job dont l'agent n'écrit que la recipe .fabrique/setup.json."""
+    """Launch (or relaunch) a repo's onboarding: a job where the agent only writes the .fabrique/setup.json recipe."""
     from .auth import can
     if not can(user, "repos_edit"):
-        raise Refused("Seuls les admins lancent l'onboarding d'un repo.")
+        raise Refused(M("Only admins start a repo's onboarding."))
     with db.tx() as c:
         return onboard_in(c, user, repo_id)
 
@@ -549,18 +559,18 @@ def onboard(user, repo_id):
 def onboard_in(c, user, repo_id, kind="onboard"):
     repo = db.one(c, select(db.repos).where(db.repos.c.id == repo_id))
     if repo and (repo["settings"] or {}).get("to_create") and kind == "onboard":
-        kind = "create"     # la création validée n'a pas abouti : on la relance, pas un onboarding
+        kind = "create"     # the validated creation did not succeed: we relaunch it, not an onboarding
     if not repo or repo["onboarding"] in ("ready", "analyzing"):
-        raise Refused("Ce repo est déjà prêt ou en cours d'onboarding.")
-    # Un seul job d'onboarding par dépôt : on relance le dernier au lieu d'en empiler de nouveaux.
+        raise Refused(M("This repo is already ready or being onboarded."))
+    # Only one onboarding job per repo: we relaunch the last one instead of stacking new ones.
     last = db.one(c, select(db.jobs).where(db.jobs.c.repo_id == repo_id, db.jobs.c.source == "onboarding", db.jobs.c.archived.is_(False))
                   .order_by(db.jobs.c.id.desc()).limit(1))
     from .work import enqueue
     if last and last["stage"] != "merged":
         if db.one(c, select(db.intents.c.id).where(db.intents.c.job_id == last["id"], db.intents.c.state.in_(["pending", "leased"]))):
-            return last["ref"]                                  # un essai est déjà en file : rien à ajouter
+            return last["ref"]                                  # an attempt is already queued: nothing to add
         t = time.time()
-        # Une relance repart avec l'agent et le modèle en vigueur : c'est souvent un réglage corrigé qui la motive.
+        # A retry starts with the current agent and model: it is often a corrected setting that motivates it.
         glob, _ = db.get_setting(c, "agents")
         rs = repo["settings"] or {}
         from . import profiles
@@ -569,58 +579,57 @@ def onboard_in(c, user, repo_id, kind="onboard"):
         c.execute(update(db.jobs).where(db.jobs.c.id == last["id"]).values(
             harness=rs.get("harness") or glob["harness"], model=model or last["model"], models=extra,
             stage="queued", activity="idle", updated_at=t,
-            status_text={"init": "Initialisation du repo", "create": "Création relancée"}.get(kind, "Onboarding relancé") + " · en attente d'un runner"))
+            status_text={"init": M("Repo initialization"), "create": M("Creation restarted")}.get(kind, M("Onboarding restarted")) + M(" · waiting for a runner")))
         if kind == "create":
             c.execute(update(db.repos).where(db.repos.c.id == repo_id).values(onboarding="creating"))
         if kind == "onboard" and not is_blank(repo):
             c.execute(update(db.repos).where(db.repos.c.id == repo_id).values(onboarding="pending"))
-        db.log_audit(c, user["user"], "Initialisation du repo validée" if kind == "init" else "Onboarding relancé", last["id"], target=repo["slug"])
+        db.log_audit(c, user["user"], M("Repo initialization approved") if kind == "init" else M("Onboarding restarted"), last["id"], target=repo["slug"])
         return last["ref"]
     if kind == "init":
-        raise Refused("Aucun onboarding ouvert pour ce repo.")
+        raise Refused(M("No onboarding open for this repo."))
     req, done = ONBOARD_TEXT
-    return insert_job(c, user, f"Onboarding de {repo['slug']}", req.format(slug=repo["slug"]), done, repo_id, source="onboarding", kind="onboard")
+    return insert_job(c, user, f"Onboarding of {repo['slug']}", req.format(slug=repo["slug"]), done, repo_id, source="onboarding", kind="onboard")
 
 
 REPO_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
 
 
 def request_repo(user, provider, name, description=""):
-    """Demande de création d'un repo (reviewer ou admin) : rien n'est créé avant la validation d'un admin."""
+    """Repo creation request (reviewer or admin): nothing is created before admin validation."""
     from .auth import can
     if not can(user, "decide"):
-        raise Refused("Seuls les reviewers et les admins demandent la création d'un repo.")
+        raise Refused(M("Only reviewers and admins request the creation of a repo."))
     name, description = name.strip().lower(), description.strip()[:300]
     if not REPO_NAME.match(name):
-        raise Refused("Nom invalide : minuscules, chiffres, points, tirets (100 caractères au plus).")
+        raise Refused(M("Invalid name: lowercase letters, digits, dots, hyphens (100 characters at most)."))
     from . import forges
     with db.tx() as c:
-        g = forges.resolve(c, provider) or {}                   # provider précis (son identifiant) ; un type seul reste accepté
+        g = forges.resolve(c, provider) or {}                   # precise provider (its identifier); a single type is still accepted
         typ = g.get("type") or provider
         if typ not in forges.TYPES:
-            raise Refused("Provider inconnu.")
+            raise Refused("Unknown provider.")
         if not g:
             g = next((x for x in forges.listing(c) if x["type"] == typ), {})
         ns = (g.get("creation") or (db.get_setting(c, "creation")[0] or {}).get(typ) or "").strip()
         if not ns:
-            raise Refused("La création de repos n'est pas activée pour ce provider : renseigne « Organisation des nouveaux repos » dans "
-                          "Settings → Providers Git.")
+            raise Refused(M("Repo creation is not enabled for this provider: fill in “Organization for new repos” in Settings → Git providers."))
         slug, gid = f"{ns}/{name}", g.get("id", "")
         if db.one(c, select(db.repos.c.id).where(db.repos.c.slug == slug, db.repos.c.git_id == gid)):
-            raise Refused(f"Le repo {slug} est déjà connu de la Fabrique.")
+            raise Refused(M("Repo {slug} is already known to Fabrique.", slug=slug))
         rid = c.execute(insert(db.repos).values(provider=typ, git_id=gid, slug=slug, name=name, onboarding="requested", accepts_jobs=False,
                                                 settings={"merge_policy": "off", "description": description, "requested_by": user["user"],
                                                           "to_create": True},
                                                 created_at=time.time())).inserted_primary_key[0]
-        db.log_audit(c, user["user"], "Création de repo demandée", target=slug, detail=description)
+        db.log_audit(c, user["user"], M("Repo creation requested"), target=slug, detail=description)
         from . import notify
         notify.emit(c, "repo_request", repo={"id": rid, "slug": slug},
-                    detail=f"Demandé par {user.get('name') or user['user']}" + (f" : « {description} »" if description else "") + ". À valider dans la inbox.")
+                    detail=M("Requested by {p}", p=user.get('name') or user['user']) + (M(": “{description}”", description=description) if description else "") + M(". To approve in the inbox."))
         return rid
 
 
 def can_decide_repo(user, repo):
-    """Un admin valide toujours ; un reviewer valide la demande d'un autre (jamais la sienne)."""
+    """An admin always validates; a reviewer validates the request of another (never their own)."""
     from .auth import can
     if can(user, "repos_edit"):
         return True
@@ -628,159 +637,159 @@ def can_decide_repo(user, repo):
 
 
 def repo_requests():
-    with db.tx() as c:   # tirées de la liste des repos déjà lue pour la page, quand il y en a une
+    with db.tx() as c:   # taken from the list of repos already read for the page, when there is one
         return sorted((r for r in _repo_names(c).values() if r["onboarding"] == "requested"), key=lambda r: r["created_at"])
 
 
 def decide_repo(user, rid, approve, note=""):
-    """Validation humaine (admin) : le runner crée le repo dans le groupe dédié, l'initialise, et il devient « vierge »."""
+    """Human validation (admin): the runner creates the repo in the dedicated group, initializes it, and it becomes "blank"."""
     with db.tx() as c:
         repo = db.one(c, select(db.repos).where(db.repos.c.id == rid, db.repos.c.onboarding == "requested"))
         if not repo:
-            raise Refused("Cette demande n'attend plus de décision.")
+            raise Refused(M("This request is no longer waiting for a decision."))
         if not can_decide_repo(user, repo):
-            raise Refused("La création doit être validée par un admin, ou par un autre reviewer que celui qui l'a demandée.")
+            raise Refused(M("The creation must be approved by an admin, or by a reviewer other than the one who requested it."))
         if not approve:
             c.execute(db.repos.delete().where(db.repos.c.id == rid))
-            db.log_audit(c, user["user"], "Création de repo refusée", target=repo["slug"], detail=note[:300])
+            db.log_audit(c, user["user"], M("Repo creation refused"), target=repo["slug"], detail=note[:300])
             return None
         c.execute(update(db.repos).where(db.repos.c.id == rid).values(onboarding="creating", accepts_jobs=True))
-        db.log_audit(c, user["user"], "Création de repo validée", target=repo["slug"], detail=note[:300])
+        db.log_audit(c, user["user"], M("Repo creation approved"), target=repo["slug"], detail=note[:300])
         rs = repo["settings"] or {}
-        return insert_job(c, user, f"Création de {repo['slug']}",
-                          f"Créer le repo {repo['slug']} (privé) puis l'initialiser : README et recipe vide. "
-                          f"Description : {rs.get('description') or '—'}",
-                          "Le repo existe chez le provider et le dashboard le marque « vierge ».", rid, source="onboarding", kind="create")
+        return insert_job(c, user, M("Creation of {slug}", slug=repo['slug']),
+                          M("Create the repo {slug} (private), then initialize it: README and empty recipe. Description: {p}", slug=repo['slug'], p=rs.get('description') or '—'),
+                          M("The repo exists at the provider and the dashboard marks it “blank”."), rid, source="onboarding", kind="create")
 
 
 def init_repo(user, repo_id):
-    """Repo vide : un humain valide l'initialisation (premier commit poussé sur la branche principale par le runner)."""
+    """Empty repo: a human validates the initialization (first commit pushed to the main branch by the runner)."""
     from .auth import can
     if not can(user, "repos_edit"):
-        raise Refused("Seuls les admins initialisent un repo.")
+        raise Refused(M("Only admins initialize a repo."))
     with db.tx() as c:
         repo = db.one(c, select(db.repos).where(db.repos.c.id == repo_id))
         if not repo or repo["onboarding"] != "empty":
-            raise Refused("Seul un repo vide peut être initialisé.")
+            raise Refused(M("Only an empty repo can be initialized."))
         return onboard_in(c, user, repo_id, kind="init")
 
 
 def rereview(user, ref):
-    """Relancer la vérification au sha vérifié (reviewer ou admin), sans relancer l'agent."""
+    """Relaunch the review at the verified sha (reviewer or admin), without relaunching the agent."""
     from .auth import can
     if not can(user, "decide"):
-        raise Refused("Seuls les reviewers et les admins relancent la vérification.")
+        raise Refused(M("Only reviewers and admins rerun the review."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
-        if j["merge_state"] != "ready" or not j["verified_sha"] or not j["pr_number"] or j["source"] == "démo":
-            raise Refused("Rien à relire : la PR n'attend pas de décision.")
+        if j["merge_state"] != "ready" or not j["verified_sha"] or not j["pr_number"] or j["source"] == "demo":
+            raise Refused(M("Nothing to review: the PR is not waiting for a decision."))
         if db.one(c, select(db.intents.c.id).where(db.intents.c.job_id == j["id"], db.intents.c.state.in_(["pending", "leased"]))):
-            raise Refused("Une commande est déjà en cours pour ce job.")
+            raise Refused(M("An order is already in progress for this job."))
         from .work import enqueue
         enqueue(c, j["id"], "review", {"sha": j["verified_sha"]})
         c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(merge_state="reviewing", updated_at=time.time(),
-                                                                         status_text="Vérification relancée · en attente du runner"))
-        db.log_audit(c, user["user"], "Vérification relancée", j["id"], j["verified_sha"] or "")
+                                                                         status_text=M("Review rerun · waiting for the runner")))
+        db.log_audit(c, user["user"], M("Review rerun"), j["id"], j["verified_sha"] or "")
 
 
 def decide(user, ref, verdict, note=""):
-    """Approuver ou refuser un merge (reviewer ou admin). Le merge elle-même sera faite par le dashboard, épinglée au sha."""
+    """Approve or refuse a merge (reviewer or admin). The merge itself will be performed by the dashboard, pinned to the sha."""
     from .auth import can
     if not can(user, "decide"):
-        raise Refused("Seuls les reviewers et les admins décident d'un merge.")
+        raise Refused(M("Only reviewers and admins decide on a merge."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
         if j["merge_state"] != "ready":
-            raise Refused("Cette PR n'attend pas de décision.")
+            raise Refused(M("This PR is not waiting for a decision."))
         t = time.time()
         if verdict == "approve":
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(merge_state="approved", updated_at=t,
-                                                                             status_text="Merge approuvée · en attente du runner"))
-            if j["source"] != "démo":
+                                                                             status_text=M("Merge approved · waiting for the runner")))
+            if j["source"] != "demo":
                 from .work import enqueue
                 enqueue(c, j["id"], "merge", {"sha": j["verified_sha"]})
-            db.log_audit(c, user["user"], "Merge approuvée", j["id"], j["verified_sha"] or "", note[:300] or "Approuvée dans la inbox")
+            db.log_audit(c, user["user"], M("Merge approved"), j["id"], j["verified_sha"] or "", note[:300] or M("Approved in the inbox"))
         elif verdict == "refuse":
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(merge_state="refused", updated_at=t,
-                                                                             status_text="Merge refusée"))
-            db.log_audit(c, user["user"], "Merge refusée", j["id"], j["verified_sha"] or "", note[:300])
+                                                                             status_text=M("Merge refused")))
+            db.log_audit(c, user["user"], M("Merge refused"), j["id"], j["verified_sha"] or "", note[:300])
         else:
-            raise Refused("Décision inconnue.")
+            raise Refused(M("Unknown decision."))
 
 
 def validate_spec(user, ref, ok, note=""):
     from .auth import can
     if not can(user, "decide"):
-        raise Refused("Seuls les reviewers et les admins valident une spec.")
+        raise Refused(M("Only reviewers and admins approve a spec."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
         if j["stage"] != "spec":
-            raise Refused("Ce job n'a pas de spec à valider.")
+            raise Refused(M("This job has no spec to approve."))
         t = time.time()
         if ok:
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="investigating", activity="idle", updated_at=t,
-                                                                             status_text="Spec validée · investigation"))
-            c.execute(insert(db.timeline).values(job_id=j["id"], stage="investigating", at=t, summary="Spec validée par un humain."))
-            db.log_audit(c, user["user"], "Spec validée", j["id"], ref, note[:300])
+                                                                             status_text=M("Spec approved · investigation")))
+            c.execute(insert(db.timeline).values(job_id=j["id"], stage="investigating", at=t, summary=M("Spec approved by a human.")))
+            db.log_audit(c, user["user"], M("Spec approved"), j["id"], ref, note[:300])
         else:
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="failed", activity="idle", updated_at=t,
-                                                                             status_text="Spec refusée" + (f" : {note[:180]}" if note else "")))
-            db.log_audit(c, user["user"], "Spec refusée", j["id"], ref, note[:300])
+                                                                             status_text=M("Spec refused") + (f" : {note[:180]}" if note else "")))
+            db.log_audit(c, user["user"], M("Spec refused"), j["id"], ref, note[:300])
 
 
 def cancel(user, ref):
-    """Arrêter un job en cours. Sans runner dessus : arrêt immédiat. Avec un runner : il tue l'agent puis confirme."""
+    """Stop an ongoing job. Without a runner on it: immediate stop. With a runner: it kills the agent then confirms."""
     from .auth import can
     if not can(user, "decide"):
-        raise Refused("Seuls les reviewers et les admins arrêtent un job.")
+        raise Refused(M("Only reviewers and admins stop a job."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
         if j["stage"] in FINAL:
-            raise Refused("Ce job est déjà terminé.")
+            raise Refused(M("This job is already finished."))
         t = time.time()
         leased = db.one(c, select(db.intents.c.id).where(db.intents.c.job_id == j["id"], db.intents.c.state == "leased"))
         c.execute(update(db.intents).where(db.intents.c.job_id == j["id"], db.intents.c.state == "pending")
-                  .values(state="done", done_at=t, note="arrêt demandé"))
+                  .values(state="done", done_at=t, note=M("stop requested")))
         if leased:
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(cancel_requested=user["name"], updated_at=t,
-                                                                             status_text="Arrêt demandé : le runner arrête l'agent"))
-            db.log_audit(c, user["user"], "Arrêt demandé", j["id"], ref)
-            return f"Arrêt de {ref} demandé : le runner arrête l'agent."
+                                                                             status_text=M("Stop requested: the runner is stopping the agent")))
+            db.log_audit(c, user["user"], M("Stop requested"), j["id"], ref)
+            return M("Stop of {ref} requested: the runner is stopping the agent.", ref=ref)
         c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="failed", activity="idle", updated_at=t,
-                                                                         status_text=f"Arrêté par {user['name']}"))
-        c.execute(insert(db.timeline).values(job_id=j["id"], stage="failed", at=t, summary=f"Arrêté par {user['name']} avant tout travail du runner."))
-        db.log_audit(c, user["user"], "Job arrêté", j["id"], ref)
-        return f"{ref} arrêté."
+                                                                         status_text=M("Stopped by {name}", name=user['name'])))
+        c.execute(insert(db.timeline).values(job_id=j["id"], stage="failed", at=t, summary=M("Stopped by {name} before the runner did any work.", name=user['name'])))
+        db.log_audit(c, user["user"], M("Job stopped"), j["id"], ref)
+        return M("{ref} stopped.", ref=ref)
 
 
 def archive(user, ref, restore=False):
     from .auth import can
     if not can(user, "archive"):
-        raise Refused("Seuls les reviewers et les admins archivent.")
+        raise Refused(M("Only reviewers and admins archive."))
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
         if not restore and j["stage"] not in FINAL and j["merge_state"] != "refused":
-            raise Refused("Seuls les jobs terminés s'archivent.")
+            raise Refused(M("Only finished jobs can be archived."))
         c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(archived=not restore, updated_at=time.time()))
-        db.log_audit(c, user["user"], "Job restauré" if restore else "Job archivé", j["id"], ref)
+        db.log_audit(c, user["user"], M("Job restored") if restore else M("Job archived"), j["id"], ref)
 
 
-# ---------- archives : recherche, suppression définitive, archivage automatique, ménage des dossiers ----------
+# ---------- archives: search, permanent deletion, automatic archiving, folder cleanup ----------
 
 ARCHIVE_PAGE = 50
-OUTCOMES = {"merged": "Mergé", "failed": "Échec", "refused": "Refusé", "done": "Étude rendue"}
+OUTCOMES = {"merged": M("Merged"), "failed": M("Failed"), "refused": M("Refused", _ctx="job"), "done": M("Study delivered"),
+            "closed": M("Closed without change")}
 
 
 def outcome(j):
-    """Issue d'un job terminé, pour les archives : mergé, échec, refusé ou étude rendue."""
+    """Outcome of a finished job, for the archives: merged, failed, refused or study delivered."""
     return "refused" if j.get("merge_state") == "refused" and j["stage"] != "merged" else j["stage"] if j["stage"] in OUTCOMES else "failed"
 
 
 def search_archives(user, q="", repo=0, state="", regex=False, page=1):
-    """Jobs archivés visibles par l'utilisateur, du plus récent au plus ancien. q cherche dans la référence, le titre, la
-    demande et le demandeur : texte simple (tous les mots, sans tenir compte de la casse) ou expression régulière.
-    Renvoie (lignes de la page, total, erreur de motif). Le motif est borné : il s'applique à des textes courts, côté
-    serveur, pour qu'une expression mal écrite ne bloque pas le dashboard."""
+    """Archived jobs visible by the user, from newest to oldest. q searches in the reference, title, the
+    request and the requester: plain text (all words, case-insensitive) or regular expression.
+    Returns (page lines, total, pattern error). The pattern is bounded: it applies to short texts, server-side,
+    so that a poorly written expression does not block the dashboard."""
     q = (q or "").strip()[:200]
     with db.tx() as c:
         sel = select(db.jobs).where(_visible(user), db.jobs.c.archived.is_(True))
@@ -800,10 +809,10 @@ def search_archives(user, q="", repo=0, state="", regex=False, page=1):
         hay = lambda j: " ".join(fields(j))
         if regex:
             try:
-                pat = re.compile(q, re.I)   # champ par champ : un motif ancré (^FAB-1[0-9]$) vise la référence seule
+                pat = re.compile(q, re.I)   # field by field: an anchored pattern (^FAB-1[0-9]$) targets the reference only
                 js = [j for j in js if any(pat.search(f) for f in fields(j))]
             except re.error as e:
-                err, js = f"Expression régulière invalide : {e}", []
+                err, js = M("Invalid regular expression: {e}", e=e), []
         else:
             words = q.lower().split()
             js = [j for j in js if all(w in hay(j).lower() for w in words)]
@@ -813,60 +822,60 @@ def search_archives(user, q="", repo=0, state="", regex=False, page=1):
 
 
 def delete_phrase(j):
-    """Ce qu'il faut taper pour confirmer la suppression d'un job : « repo/FAB-3 »."""
+    """What to type to confirm job deletion: "repo/FAB-3"."""
     return f"{(j.get('repo') or {}).get('slug') or ''}/{j['ref']}"
 
 
 def delete_job(user, ref, typed):
-    """Suppression DÉFINITIVE d'un job archivé : admin seulement, confirmée en tapant « repo/FAB-3 ». Le job et tout son
-    contenu disparaissent ; l'audit reste (ses lignes sont détachées du job) et une ligne dit qui a supprimé quoi. Rien
-    n'est touché sur la forge. Le dossier de travail est nettoyé par le runner à son prochain passage."""
+    """PERMANENT deletion of an archived job: admin only, confirmed by typing "repo/FAB-3". The job and all its
+    content disappear; the audit remains (its lines are detached from the job) and a line states who deleted what. Nothing
+    is touched on the Git host. The working directory is cleaned up by the runner on its next pass."""
     from sqlalchemy import delete
     from .auth import can
     if not can(user, "settings"):
-        raise Refused("Seuls les admins suppriment un job.")
+        raise Refused(M("Only admins delete a job."))
     with db.tx() as c:
         j = db.one(c, select(db.jobs).where(db.jobs.c.ref == ref))
-        if not j or (j["source"] == "démo"):
-            raise Refused("Job introuvable.")
+        if not j or (j["source"] == "demo"):
+            raise Refused(M("Job not found."))
         if not j["archived"]:
-            raise Refused("Seul un job archivé se supprime : archive-le d'abord.")
+            raise Refused(M("Only an archived job can be deleted: archive it first."))
         if db.one(c, select(db.intents.c.id).where(db.intents.c.job_id == j["id"], db.intents.c.state.in_(["pending", "leased"]))):
-            raise Refused("Une commande est encore en cours sur ce job : attends sa fin, puis réessaie.")
+            raise Refused(M("An order is still in progress on this job: wait for it to end, then try again."))
         repo = db.one(c, select(db.repos).where(db.repos.c.id == j["repo_id"])) or {}
         want = f"{repo.get('slug') or ''}/{j['ref']}"
         if (typed or "").strip() != want:
-            raise Refused(f"Confirmation incorrecte : tape exactement {want} pour supprimer ce job.")
-        c.execute(update(db.audit).where(db.audit.c.job_id == j["id"]).values(job_id=None))   # l'audit survit au job
+            raise Refused(M("Wrong confirmation: type exactly {want} to delete this job.", want=want))
+        c.execute(update(db.audit).where(db.audit.c.job_id == j["id"]).values(job_id=None))   # the audit outlives the job
         for t in reversed(db.meta.sorted_tables):
             if "job_id" in t.c and t.name != "audit":
                 c.execute(delete(t).where(t.c.job_id == j["id"]))
         c.execute(delete(db.jobs).where(db.jobs.c.id == j["id"]))
-        db.log_audit(c, user["user"], "Job supprimé", None, ref, f"{j['title'][:120]} · {repo.get('slug') or '—'} · demandé par {j['requester']}")
+        db.log_audit(c, user["user"], M("Job deleted"), None, ref, M("{p} · {p2} · requested by {requester}", p=j['title'][:120], p2=repo.get('slug') or '—', requester=j['requester']))
     return ref
 
 
 def auto_archive(now=None):
-    """Archive les jobs mergés, et les études déjà lues, terminés depuis plus de N jours (Settings → Budgets et barrières ;
-    0 : jamais). Les échecs et les PR refusées restent visibles : ils demandent souvent une suite. Renvoie le nombre archivé."""
+    """Archives merged jobs, and studies already read, finished for more than N days (Settings → Budgets and gates;
+    0: never). Failures and refused PRs remain visible: they often require follow-up. Returns the number archived."""
     now = now or time.time()
     with db.tx() as c:
         days = int((db.get_setting(c, "limits")[0] or {}).get("auto_archive_days") or 0)
         if days <= 0:
             return 0
-        old = db.rows(c, select(db.jobs).where(db.jobs.c.archived.is_(False), db.jobs.c.source != "démo",
+        old = db.rows(c, select(db.jobs).where(db.jobs.c.archived.is_(False), db.jobs.c.source != "demo",
                                                db.jobs.c.updated_at < now - days * 86400,
                                                or_(db.jobs.c.stage == "merged", and_(db.jobs.c.stage == "done", db.jobs.c.report_seen.is_not(None)))))
         for j in old:
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(archived=True))
-            db.log_audit(c, "fabrique", "Job archivé", j["id"], j["ref"], f"archivage automatique après {days} jour(s)")
+            db.log_audit(c, "fabrique", M("Job archived"), j["id"], j["ref"], M("automatic archiving after {days} day(s)", days=days))
     return len(old)
 
 
 def workspaces_to_purge(names, now=None):
-    """Parmi les dossiers de travail qu'un runner dit avoir (un par job), ceux qu'il peut supprimer : le job n'existe plus
-    (supprimé), ou il est terminé depuis plus d'une heure sans commande en attente. Seuls les noms de CETTE installation
-    (préfixe des jobs) sont considérés."""
+    """Among the working directories that a runner says it has (one per job), those it can delete: the job no longer exists
+    (deleted), or it has been finished for more than one hour without a pending order. Only the names of THIS installation
+    (job prefix) are considered."""
     now = now or time.time()
     pat = re.compile(re.escape(config.JOB_PREFIX) + r"-\d+")
     names = [n for n in dict.fromkeys(str(x) for x in (names or [])) if pat.fullmatch(n)][:500]
@@ -884,11 +893,11 @@ def workspaces_to_purge(names, now=None):
 
 
 def mark_seen(user, ref):
-    """Étude lue : elle sort de l'inbox (elle reste dans les jobs)."""
+    """Study read: it leaves the inbox (it remains in the jobs)."""
     with db.tx() as c:
         j = _job_for_action(c, user, ref)
-        if j["source"] != "étude" or not j.get("report"):
-            raise Refused("Ce job n'a pas de rapport d'étude.")
+        if j["source"] != "study" or not j.get("report"):
+            raise Refused(M("This job has no study report."))
         c.execute(update(db.jobs).where(db.jobs.c.id == j["id"], db.jobs.c.report_seen.is_(None)).values(report_seen=time.time()))
 
 
@@ -897,8 +906,8 @@ def activity(limit=300):
         js = db.rows(c, select(db.jobs.c.id, db.jobs.c.ref, db.jobs.c.source))
         rs = db.rows(c, select(db.audit).order_by(db.audit.c.at.desc()).limit(limit * 3))
     refs = {r["id"]: r["ref"] for r in js}
-    hidden = set() if demo_visible() else {r["id"] for r in js if r["source"] == "démo"}
-    out = [r for r in rs if r["job_id"] not in hidden and not (hidden and r["action"] == "Données de démonstration")][:limit]
+    hidden = set() if demo_visible() else {r["id"] for r in js if r["source"] == "demo"}
+    out = [r for r in rs if r["job_id"] not in hidden and not (hidden and r["action"] == M("Demo data"))][:limit]
     for r in out:
         r["ref"] = refs.get(r["job_id"])
     return out

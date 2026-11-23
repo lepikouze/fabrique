@@ -1,4 +1,4 @@
-"""Key gateway : l'agent présente le token de son job, le provider reçoit la vraie clé ; rien d'autre ne passe."""
+"""Key gateway: the agent presents its job token, the provider receives the real key; nothing else passes through."""
 import socket, threading
 import httpx
 from runner import agent, config, gateway
@@ -38,7 +38,7 @@ def test_gateway_refuses_unknown_token_and_relays_keyless_local_server():
     url, gw = start(jobs.get, httpx.MockTransport(lambda req: called.append(req) or httpx.Response(200)))
     assert httpx.post(url + "/m/v1/messages", headers={"x-api-key": "faux"}).status_code == 403
     assert not called
-    # serveur local sans clé : relayé lui aussi (sans en-tête d'authentification), pour que les jobs n'aient pas à le joindre
+    # local server without key: also relayed (without authentication header), so that jobs do not have to join it
     assert httpx.post(url + "/m/v1/messages", headers={"authorization": "Bearer tok-local"}, json={}).status_code == 200
     assert str(called[0].url) == "http://m:8080/v1/messages" and "authorization" not in called[0].headers
     gw.server.shutdown()
@@ -60,10 +60,10 @@ def test_agent_env_never_contains_the_real_key(monkeypatch):
     assert env["ANTHROPIC_BASE_URL"] == "http://fabrique-runner:7072/m" and env["ANTHROPIC_API_KEY"] == "tok-job" and not local
     assert "sk-ant-VRAIE" not in str(env)
     env, local = agent.model_env({"id": "gemma", "provider": "openai", "base_url": "http://m:8080/v1", "key": ""}, "http://gw", "tok")
-    assert env["ANTHROPIC_BASE_URL"] == "http://gw/m" and local                            # local sans clé : par la passerelle aussi
+    assert env["ANTHROPIC_BASE_URL"] == "http://gw/m" and local                            # local without key: via the gateway too
 
 
-# Corps réel envoyé par Claude Code 2.1.322 (capturé), réduit à ce qui compte ici.
+# Actual body sent by Claude Code 2.1.322 (captured), reduced to what matters here.
 CLAUDE_CODE_BODY = {"model": "qwen3-latest", "max_tokens": 32000, "stream": True, "messages": [{"role": "user", "content": "x"}],
                     "thinking": {"type": "adaptive"}, "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
                     "output_config": {"effort": "high"}}
@@ -77,7 +77,7 @@ def test_anthropic_only_parameters_are_removed_for_a_compatible_server_only():
     url, gw = start(jobs.get, httpx.MockTransport(lambda req: seen.append(json.loads(req.content)) or httpx.Response(200, json={})))
     httpx.post(url + "/m/v1/messages?beta=true", headers={"x-api-key": "tok-local"}, json=CLAUDE_CODE_BODY)
     local = seen[-1]
-    assert "thinking" not in local and "context_management" not in local and "output_config" not in local   # vLLM : « Unexpected reasoning effort »
+    assert "thinking" not in local and "context_management" not in local and "output_config" not in local   # vLLM: "Unexpected reasoning effort"
     assert local["model"] == "qwen3-latest" and local["messages"] == CLAUDE_CODE_BODY["messages"] and local["stream"] is True
     httpx.post(url + "/m/v1/messages?beta=true", headers={"x-api-key": "tok-claude"}, json=CLAUDE_CODE_BODY)
     assert seen[-1] == CLAUDE_CODE_BODY                                                                    # Anthropic : intact
@@ -94,8 +94,8 @@ def test_for_compatible_keeps_other_output_settings_and_non_json_bodies():
 
 
 def test_abnormally_long_model_answers_are_reported():
-    """Une réponse très longue ou très grosse (boucle du modèle jusqu'à sa limite de sortie) laisse une ligne dans le job."""
+    """A very long or very large response (model loop up to its output limit) leaves a line in the job."""
     assert gateway.slow_message(14, 78_000, "m") is None
     msg = gateway.slow_message(427, 4_034_235, "gemma-4-26b-a4b")
-    assert "gemma-4-26b-a4b" in msg and "7 min 07 s" in msg and "3,8 Mo" in msg and "boucle" in msg
-    assert "45 s" in gateway.slow_message(45, 2_000_000, "m") and "500 Ko" in gateway.slow_message(130, 512_000, "m")
+    assert "gemma-4-26b-a4b" in msg and "7 min 07 s" in msg and "3.8 MB" in msg and "loop" in msg
+    assert "45 s" in gateway.slow_message(45, 2_000_000, "m") and "500 kB" in gateway.slow_message(130, 512_000, "m")

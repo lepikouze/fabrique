@@ -2,20 +2,20 @@
 {% block title %}Repos{% endblock %}
 {% block h1 %}Repos{% endblock %}
 {% block counters %}{% endblock %}
-{% block tools %}{% if can(user, 'decide') %}<button type="button" class="btn" data-open-dialog="new-repo">Demander un nouveau repo</button>{% endif %}{% if can(user, 'repos_edit') %}<button type="button" class="btn primary" data-open-dialog="add-repo">{{ ic('plus') }}Ajouter un repo</button>{% endif %}{% endblock %}
+{% block tools %}{% if can(user, 'decide') %}<button type="button" class="btn" data-open-dialog="new-repo">Request a new repo</button>{% endif %}{% if can(user, 'repos_edit') %}<button type="button" class="btn primary" data-open-dialog="add-repo">{{ ic('plus') }}Add a repo</button>{% endif %}{% endblock %}
 {% macro onb_pill(r) %}{% set o = ONB[r.onboarding] %}{% if r.onboarding == 'ready' %}<span class="pill" style="--c:{{o[1]}}">{{ o[0] }}</span>{% elif r.onboarding == 'failed' %}<span class="pill bad">{{ o[0] }}</span>{% elif r.onboarding in ('empty', 'blank', 'requested') %}<span class="pill" style="--c:{{o[1]}}">{{ o[0] }}</span>{% else %}<span class="pill" style="--c:{{o[1]}}"><span class="spin" aria-hidden="true"></span>{{ o[0] }}</span>{% endif %}{% endmacro %}
 {% block content %}
 <div data-live="repos" class="jobs-wrap {{ 'with-panel' if cur }}">
 {% if not repos %}
- {{ empty('Aucun repo.', 'Ajoute un repo Forgejo, GitLab ou GitHub : un agent écrira sa recipe (installation et checks) dans une PR, puis il pourra recevoir des demandes.') }}
+ {{ empty('No repo.', 'Add a Forgejo, GitLab or GitHub repo: an agent will write its recipe (installation and checks) in a PR, then it will be able to receive requests.') }}
 {% else %}
  <div class="list">
  {% for r in repos %}{% set o = ONB[r.onboarding] %}
   <a class="row repo {{'sel' if sel == r.id}}" href="?repo={{r.id}}" data-row title="{{ o[0] }}">
-   {{ dot(o[1]) }}<span class="r-title"><span class="t">{{ r.name }}</span>{% if r.is_default %}<span class="pill">Par défaut</span>{% endif %}{{ onb_pill(r) }}</span>
+   {{ dot(o[1]) }}<span class="r-title"><span class="t">{{ r.name }}</span>{% if r.is_default %}<span class="pill">Default</span>{% endif %}{{ onb_pill(r) }}</span>
    <span class="mono muted hide-narrow">{{ GIT_NAME(r) }} · {{ r.slug }}</span>
-   <span class="muted">{% if r.onboarding not in ('ready', 'blank') %}pas prêt{% elif not r.accepts_jobs %}fermé{% else %}{{ open_n.get(r.id, 0) }} en cours{% endif %}</span>
-   <span class="mono r-at">{{ r.last_activity|quand }}</span>
+   <span class="muted">{% if r.onboarding not in ('ready', 'blank') %}not ready{% elif not r.accepts_jobs %}closed{% else %}{{ open_n.get(r.id, 0) }} running{% endif %}</span>
+   <span class="mono r-at">{{ r.last_activity|when }}</span>
   </a>
  {% endfor %}
  </div>
@@ -24,103 +24,105 @@
 {% if can(user, 'decide') %}
 <dialog id="new-repo" class="dlg" aria-labelledby="new-repo-t">
  <form method="post" action="/repos/request" class="frm">
-  <h2 id="new-repo-t">Demander un nouveau repo</h2>
-  <p class="muted small">Rien n'est créé tout de suite : un admin valide la demande dans la inbox. Le repo est alors créé (privé) dans le groupe dédié du provider, initialisé, puis prêt pour une première demande.</p>
+  <h2 id="new-repo-t">Request a new repo</h2>
+  <p class="muted small">Nothing is created right away: an admin approves the request in the inbox. The repo is then created (private) in the provider's dedicated group, initialized, and ready for a first request.</p>
   <label for="nr-prov">Provider</label><select id="nr-prov" name="provider">{% if git %}{% for g in git %}<option value="{{ g.id }}">{{ g.name }} ({{ PROVIDERS[g.type] }})</option>{% endfor %}{% else %}{% for k, v in PROVIDERS.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}{% endif %}</select>
-  <label for="nr-name">Nom <small>minuscules, chiffres, tirets</small></label><input id="nr-name" name="name" required maxlength="100" pattern="[a-z0-9][a-z0-9._-]*" class="mono" placeholder="api-notes">
-  <label for="nr-desc">Description <small>facultative</small></label><input id="nr-desc" name="description" maxlength="300" placeholder="Petite API de notes pour l'équipe">
-  <div class="row-end"><button type="button" class="btn" data-close-dialog>Annuler</button><button class="btn primary">Envoyer la demande</button></div>
+  <label for="nr-name">Name <small>lowercase letters, digits, hyphens</small></label><input id="nr-name" name="name" required maxlength="100" pattern="[a-z0-9][a-z0-9._-]*" class="mono" placeholder="notes-api">
+  <label for="nr-desc">Description <small>optional</small></label><input id="nr-desc" name="description" maxlength="300" placeholder="Small notes API for the team">
+  <div class="row-end"><button type="button" class="btn" data-close-dialog>Cancel</button><button class="btn primary">Send the request</button></div>
  </form>
 </dialog>
 {% endif %}
 {% if can(user, 'repos_edit') %}
 <dialog id="add-repo" class="dlg" aria-labelledby="add-repo-t">
  <form method="post" action="/repos" class="frm">
-  <h2 id="add-repo-t">Ajouter un repo</h2>
-  <p class="muted">Un agent écrira la recipe <span class="mono">.fabrique/setup.json</span> (installation, checks) dans une PR qui ne touche que ce fichier. Les checks sont ensuite figés : une PR qui les modifie revient toujours à un humain.</p>
+  <h2 id="add-repo-t">Add a repo</h2>
+  <p class="muted">An agent will write the recipe <span class="mono">.fabrique/setup.json</span> (installation, checks) in a PR that touches only this file. The checks are then frozen: a PR that changes them always goes back to a human.</p>
   <label for="r-prov">Provider</label>
   <select id="r-prov" name="provider">{% if git %}{% for g in git %}<option value="{{ g.id }}">{{ g.name }} ({{ PROVIDERS[g.type] }})</option>{% endfor %}{% else %}{% for k, v in PROVIDERS.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}{% endif %}</select>
-  <label for="r-slug">Chemin <small>groupe/projet</small></label>
-  <input id="r-slug" name="slug" required maxlength="200" placeholder="equipe/projet" class="mono">
-  <label for="r-name">Nom affiché</label>
-  <input id="r-name" name="name" maxlength="120" placeholder="Carnet de liens">
-  <div class="row-end"><button type="button" class="btn" data-close-dialog>Annuler</button><button class="btn primary">Ajouter</button></div>
+  <label for="r-slug">Path <small>group/project</small></label>
+  <input id="r-slug" name="slug" required maxlength="200" placeholder="team/project" class="mono">
+  <label for="r-name">Display name</label>
+  <input id="r-name" name="name" maxlength="120" placeholder="Link notebook">
+  <div class="row-end"><button type="button" class="btn" data-close-dialog>Cancel</button><button class="btn primary">Add</button></div>
  </form>
 </dialog>
 {% endif %}
 {% endblock %}
 {% block aside %}
-<aside class="panel" id="panel" aria-label="Détail du repo" {% if not cur %}hidden{% endif %} data-kind="repo">
+<aside class="panel" id="panel" aria-label="Repo detail" {% if not cur %}hidden{% endif %} data-kind="repo">
 {% if cur %}{% set s = cur.settings or {} %}{% set o = ONB[cur.onboarding] %}
- <div class="p-bar"><a class="ghost sq" href="/repos" aria-label="Fermer" title="Fermer (Échap)" data-close>{{ ic('x') }}</a></div>
+ <div class="p-bar"><a class="ghost sq" href="/repos" aria-label="Close" title="Close (Esc)" data-close>{{ ic('x') }}</a></div>
  <div class="p-body">
   <div class="p-id mono">{{ GIT_NAME(cur) }} · {{ cur.slug }}</div>
   <h2 class="p-title">{{ cur.name }}</h2>
-  <div class="p-badges" data-live="repo-etat">{{ onb_pill(cur) }}{% if cur.is_default %}<span class="pill">Par défaut</span>{% elif can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}"><input type="hidden" name="action" value="default"><button class="btn sm">Rendre par défaut</button></form>{% endif %}<span class="muted">{{ open_n.get(cur.id, 0) }} job(s) en cours</span></div>
+  <div class="p-badges" data-live="repo-etat">{{ onb_pill(cur) }}{% if cur.is_default %}<span class="pill">Default</span>{% elif can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}"><input type="hidden" name="action" value="default"><button class="btn sm">Make default</button></form>{% endif %}<span class="muted">{{ open_n.get(cur.id, 0) }} job(s) running</span></div>
   <section class="sec" data-live="repo-onboarding"><h3>Onboarding</h3>
   {% if cur.onboarding in ('requested', 'creating') %}
-   <div class="callout c-amber"><b class="ct">{{ 'Création à valider' if cur.onboarding == 'requested' else 'Création en cours' }}</b><p>{% if cur.onboarding == 'requested' %}Demandé par {{ (cur.settings or {}).requested_by or '—' }}{% if (cur.settings or {}).description %} : « {{ cur.settings.description }} »{% endif %}. Rien n'existe encore chez le provider : la création attend la validation d'un admin, ou d'un autre reviewer.{% else %}Le runner crée le repo dans le groupe dédié puis l'initialise.{% endif %}</p></div>
-   {% if cur.onboarding == 'requested' and CAN_DECIDE_REPO(user, cur) %}<div class="row-end"><form method="post" action="/repos/{{cur.id}}/decide" data-confirm="Refuser la création de {{ cur.slug }} ?"><input type="hidden" name="verdict" value="refuse"><button class="btn">Refuser</button></form><form method="post" action="/repos/{{cur.id}}/decide"><input type="hidden" name="verdict" value="approve"><button class="btn primary">Créer le repo</button></form></div>{% endif %}
+   <div class="callout c-amber"><b class="ct">{{ 'Creation to approve' if cur.onboarding == 'requested' else 'Creation in progress' }}</b><p>{% if cur.onboarding == 'requested' %}Requested by {{ (cur.settings or {}).requested_by or '—' }}{% if (cur.settings or {}).description %} : “{{ cur.settings.description }}”{% endif %}. Nothing exists at the provider yet: the creation is waiting for an admin, or another reviewer, to approve it.{% else %}The runner creates the repo in the dedicated group, then initializes it.{% endif %}</p></div>
+   {% if cur.onboarding == 'requested' and CAN_DECIDE_REPO(user, cur) %}<div class="row-end"><form method="post" action="/repos/{{cur.id}}/decide" data-confirm="Refuse the creation of {{ cur.slug }}?"><input type="hidden" name="verdict" value="refuse"><button class="btn">Refuse</button></form><form method="post" action="/repos/{{cur.id}}/decide"><input type="hidden" name="verdict" value="approve"><button class="btn primary">Create the repo</button></form></div>{% endif %}
   {% elif cur.onboarding == 'empty' %}
-   <div class="callout c-amber"><b class="ct">Rien à analyser</b><p>Le repo est vide, ou ne contient qu'un README ou une licence. Pour une fabrique à code, c'est un point de départ normal : initialise-le, et la Fabrique construira le projet à partir de tes demandes.</p>
-   <p>L'initialisation pousse <b>directement sur {{ cur.default_branch }}</b> un commit (une recipe vide, et un README s'il n'y en a pas ; ce qui existe est gardé) : c'est la seule poussée sur la branche principale que la Fabrique fait, d'où ta validation. Le repo devient « vierge » : il accepte des demandes, chaque merge passe par un humain, et l'onboarding écrit la vraie recipe après la première merge.</p></div>
-   {% if can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/init" class="row-end"><small class="muted">Ou pousse toi-même le code du projet : la Fabrique le verra toute seule.</small><button class="btn primary">Initialiser le repo</button></form>{% endif %}
+   <div class="callout c-amber"><b class="ct">Nothing to analyse</b><p>The repo is empty, or contains only a README or a licence. For a code factory that is a normal starting point: initialize it, and Fabrique will build the project from your requests.</p>
+   <p>Initialization pushes <b>directly to {{ cur.default_branch }}</b> one commit (an empty recipe, and a README if there is none; what exists is kept): it is the only push to the main branch Fabrique ever makes, hence your approval. The repo becomes “blank”: it accepts requests, every merge goes through a human, and onboarding writes the real recipe after the first merge.</p></div>
+   {% if can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/init" class="row-end"><small class="muted">Or push the project's code yourself: Fabrique will notice on its own.</small><button class="btn primary">Initialize the repo</button></form>{% endif %}
   {% elif cur.onboarding == 'blank' %}
-   <div class="callout"><b class="ct">Repo vierge</b><p>Initialisé par la Fabrique. Dépose une première demande (par exemple « Crée une API … avec ses tests ») : comme la recipe n'a pas encore de checks, la PR attendra ta vérification. Après sa merge, l'onboarding écrira la vraie recipe du projet.</p></div>
+   <div class="callout"><b class="ct">Blank repo</b><p>Initialized by Fabrique. File a first request (for example “Create an API … with its tests”): as the recipe has no checks yet, the PR will wait for your review. After it is merged, onboarding will write the project's real recipe.</p></div>
    {% set oj = onb.get(cur.id) %}
-   {% if oj and oj.stage == 'failed' %}<p class="muted small">Dernier essai d'onboarding ({{ oj.ref }}) : {{ oj.status_text }} <a class="link" href="/jobs?job={{ oj.ref }}">Voir</a></p>
-   {% elif oj and oj.stage == 'pr' %}<p class="muted small">Une recipe est proposée en PR ({{ oj.ref }}) : la relire et la merger rend le repo « prêt ». En attendant, le repo accepte des demandes. <a class="link" href="/jobs?job={{ oj.ref }}">Voir</a></p>
-   {% elif oj and oj.stage not in ('merged', 'done') %}<p class="muted small">Onboarding en cours ({{ oj.ref }}) ; le repo accepte des demandes pendant ce temps.</p>{% endif %}
-   {% if oj and oj.stage == 'failed' and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">Relancer l’onboarding</button></form>{% endif %}
+   {% if oj and oj.stage == 'failed' %}<p class="muted small">Last onboarding attempt ({{ oj.ref }}): {{ oj.status_text }} <a class="link" href="/jobs?job={{ oj.ref }}">See</a></p>
+   {% elif oj and oj.stage == 'pr' %}<p class="muted small">A recipe is proposed in a PR ({{ oj.ref }}): reviewing and merging it makes the repo “ready”. Meanwhile, the repo accepts requests. <a class="link" href="/jobs?job={{ oj.ref }}">See</a></p>
+   {% elif oj and oj.stage not in ('merged', 'done') %}<p class="muted small">Onboarding in progress ({{ oj.ref }}); the repo accepts requests in the meantime.</p>{% endif %}
+   {% if oj and oj.stage == 'failed' and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">Restart onboarding</button></form>{% endif %}
   {% elif cur.recipe %}
-   <p class="muted small">Recipe <span class="mono">.fabrique/setup.json</span> {{ "écrite par l'agent d'onboarding, figée depuis." if cur.onboarding == 'ready' else ("proposée par l'agent d'onboarding, mais l'onboarding n'a pas abouti." if cur.onboarding == 'failed' else "proposée par l'agent d'onboarding : PR à relire et merger.") }}</p>
+   <p class="muted small">Recipe <span class="mono">.fabrique/setup.json</span> {{ "written by the onboarding agent, frozen since." if cur.onboarding == 'ready' else ("proposed by the onboarding agent, but onboarding did not complete." if cur.onboarding == 'failed' else "proposed by the onboarding agent: PR to review and merge.") }}</p>
    <dl class="kv"><dt>Image</dt><dd class="mono">{{ cur.recipe.image or 'python' }}</dd><dt>Installation</dt><dd class="mono">{{ cur.recipe.setup|join(' && ') }}</dd>
    {% for k, cmd in cur.recipe.checks.items() %}<dt>{{ k|capitalize }}</dt><dd class="mono">{{ cmd }}</dd>{% endfor %}
-   {% for e in cur.recipe.env or [] %}<dt>Variable</dt><dd><span class="mono">{{ e.name }}</span> · {{ e.purpose }}{% if e.required %} (requise){% endif %}</dd>{% endfor %}</dl>
+   {% for e in cur.recipe.env or [] %}<dt>Variable</dt><dd><span class="mono">{{ e.name }}</span> · {{ e.purpose }}{% if e.required %} (required){% endif %}</dd>{% endfor %}</dl>
    {% set oj = onb.get(cur.id) %}
    {% if oj and cur.onboarding in ('waiting', 'failed', 'analyzing', 'pending') %}<div class="callout {{ 'c-red' if cur.onboarding == 'failed' else 'c-amber' }}"><p><b>{{ oj.status_text }}</b> <a class="link" href="/jobs?job={{ oj.ref }}">{{ oj.ref }}</a></p></div>{% endif %}
-   {% if cur.onboarding in ('pending', 'failed', 'waiting') and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">{{ 'Réessayer maintenant' if cur.onboarding == 'waiting' else 'Relancer l’onboarding' }}</button></form>{% endif %}
+   {% if cur.onboarding in ('pending', 'failed', 'waiting') and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">{{ 'Try again now' if cur.onboarding == 'waiting' else 'Restart onboarding' }}</button></form>{% endif %}
   {% else %}
-   <div class="callout c-amber"><b class="ct">Pas encore de recipe</b><p>Un agent d'onboarding lit le repo, écrit la recipe <span class="mono">.fabrique/setup.json</span> (installation, checks, variables nécessaires) et la prouve ; le runner la rejoue dans un conteneur neuf puis ouvre une PR. Le repo accepte des jobs une fois cette PR mergée par un humain.</p>
+   <div class="callout c-amber"><b class="ct">No recipe yet</b><p>An onboarding agent reads the repo, writes the recipe <span class="mono">.fabrique/setup.json</span> (installation, checks, required variables) and proves it; the runner replays it in a fresh container, then opens a PR. The repo accepts jobs once a human has merged that PR.</p>
    {% set oj = onb.get(cur.id) %}
    {% if oj and cur.onboarding in ('waiting', 'failed', 'analyzing', 'pending') %}<p><b>{{ oj.status_text }}</b> <a class="link" href="/jobs?job={{ oj.ref }}">{{ oj.ref }}</a></p>{% endif %}</div>
-   {% if cur.onboarding in ('pending', 'failed', 'waiting') and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">{{ 'Réessayer maintenant' if cur.onboarding == 'waiting' else ('Relancer la création' if (cur.settings or {}).to_create else 'Relancer l’onboarding') }}</button></form>{% endif %}
+   {% if cur.onboarding in ('pending', 'failed', 'waiting') and can(user, 'repos_edit') %}<form method="post" action="/repos/{{cur.id}}/onboard"><button class="btn">{{ 'Try again now' if cur.onboarding == 'waiting' else ('Restart the creation' if (cur.settings or {}).to_create else 'Restart onboarding') }}</button></form>{% endif %}
   {% endif %}
   </section>
   <form method="post" action="/repos/{{cur.id}}" class="frm sec">
-   <h3>Settings du repo <small class="muted">priment sur les settings globaux ; une demande peut les préciser</small></h3>
+   <h3>Repo settings <small class="muted">take precedence over the global settings; a request can refine them</small></h3>
    <fieldset {% if not can(user, 'repos_edit') %}disabled{% endif %}>
-   <label for="rs-name">Nom affiché</label><input id="rs-name" name="name" value="{{ cur.name }}" maxlength="120">
-   <label for="rs-tags">Tags de runner exigées <small class="muted">séparées par des virgules ; vide = n'importe quel runner</small></label><input id="rs-tags" name="tags" maxlength="200" class="mono" value="{{ (s.tags or [])|join(', ') }}" placeholder="interne, docker">
-   <label class="check-row"><input type="checkbox" name="accepts_jobs" value="1" {{'checked' if cur.accepts_jobs}}> Accepte les nouvelles demandes</label>
+   <label for="rs-name">Display name</label><input id="rs-name" name="name" value="{{ cur.name }}" maxlength="120">
+   <label for="rs-tags">Required runner tags <small class="muted">comma-separated; empty = any runner</small></label><input id="rs-tags" name="tags" maxlength="200" class="mono" value="{{ (s.tags or [])|join(', ') }}" placeholder="internal, docker">
+   <label class="check-row"><input type="checkbox" name="accepts_jobs" value="1" {{'checked' if cur.accepts_jobs}}> Accepts new requests</label>
+   <label for="rs-wl">Job language <small>agents' texts, PR, review guide, notifications</small></label>
+   <select id="rs-wl" name="lang" style="max-width:320px"><option value="">Global setting</option>{% for code, label in LANGS.items() %}<option value="{{ code }}"{% if s.lang == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
    <input type="hidden" name="diff_field" value="1">
-   <label class="check-row"><input type="checkbox" name="diff" value="1" {{'checked' if s.diff is not false}}> Afficher le diff dans la Fabrique</label>
-   <small class="help">À décocher pour un repo confidentiel, dont le code ne doit pas être copié dans la base de la Fabrique : le runner n'envoie plus le diff, ceux déjà enregistrés pour ce repo sont supprimés, et la relecture se fait sur la forge.</small>
+   <label class="check-row"><input type="checkbox" name="diff" value="1" {{'checked' if s.diff is not false}}> Show the diff in Fabrique</label>
+   <small class="help">Untick it for a confidential repo, whose code must not be copied into Fabrique's database: the runner stops sending the diff, those already stored for this repo are deleted, and the review happens on the Git host.</small>
    <div class="grid2">
-    <div><label for="rs-h">Agent</label><select id="rs-h" name="harness"><option value="">Réglage global ({{ HARNESSES[agents_s.harness] }})</option>{% for k, v in HARNESSES.items() %}<option value="{{k}}" {{'selected' if s.harness == k}} {{ 'disabled' if k not in READY }}>{{v}}{{ ' (bientôt)' if k not in READY }}</option>{% endfor %}</select></div>
+    <div><label for="rs-h">Agent</label><select id="rs-h" name="harness"><option value="">Global setting ({{ HARNESSES[agents_s.harness] }})</option>{% for k, v in HARNESSES.items() %}<option value="{{k}}" {{'selected' if s.harness == k}} {{ 'disabled' if k not in READY }}>{{v}}{{ ' (soon)' if k not in READY }}</option>{% endfor %}</select></div>
     {% set gp = profs|selectattr('id', 'equalto', agents_s.profile)|first %}
-    <div><label for="rs-m">Modèle ou profil</label><select id="rs-m" name="choice">{{ model_or_profile(profs, models, s.model, s.profile if profs|selectattr('id', 'equalto', s.profile)|first else '', inherit='Réglage global (' ~ (('profil ' ~ gp.name) if gp else agents_s.model) ~ ')') }}</select><small class="help">Un modèle pour tout, ou un profil : un modèle par rôle.</small></div>
+    <div><label for="rs-m">Model or profile</label><select id="rs-m" name="choice">{{ model_or_profile(profs, models, s.model, s.profile if profs|selectattr('id', 'equalto', s.profile)|first else '', inherit=(_tf('Global setting (profile {name})', 'repos.html', gp.name) if gp else _tf('Global setting ({model})', 'repos.html', agents_s.model))) }}</select><small class="help">One model for everything, or a profile: one model per role.</small></div>
    </div>
    <span class="lbl-like" id="pol-l">Merge</span>
    <div class="radios" role="radiogroup" aria-labelledby="pol-l">{% for k, (lbl, help) in POLICIES.items() %}
     <label class="radio"><input type="radio" name="merge_policy" value="{{k}}" {{'checked' if (s.merge_policy or 'off') == k}}><span><b>{{ lbl }}</b><small>{{ help }}</small></span></label>{% endfor %}</div>
-   <label for="rs-paths">Protected paths <small>un motif par ligne ; vide = ceux des settings globaux</small></label>
+   <label for="rs-paths">Protected paths <small>one pattern per line; empty = those of the global settings</small></label>
    <textarea id="rs-paths" name="protected_paths" rows="5" class="mono" placeholder="{{ limits.protected_paths|join('\n') }}">{{ (s.protected_paths or [])|join('\n') }}</textarea>
-   <small class="help">Une PR qui touche l'un d'eux ne merge jamais seule.</small>
+   <small class="help">A PR that touches one of them never merges on its own.</small>
    <div class="grid2">
-    <div><label for="rs-size">Taille maximale <small>lignes, pour merger seule</small></label><input id="rs-size" name="size_limit" type="number" min="0" max="100000" value="{{ s.size_limit or '' }}" placeholder="{{ limits.size_limit }}"></div>
-    <div><label for="rs-budget">Budget par job <small>$</small></label><input id="rs-budget" name="budget_job" type="number" step="0.5" min="0" max="1000" value="{{ s.budget_job or '' }}" placeholder="{{ limits.budget_job }}"></div>
+    <div><label for="rs-size">Maximum size <small>lines, to merge on its own</small></label><input id="rs-size" name="size_limit" type="number" min="0" max="100000" value="{{ s.size_limit or '' }}" placeholder="{{ limits.size_limit }}"></div>
+    <div><label for="rs-budget">Budget per job <small>$</small></label><input id="rs-budget" name="budget_job" type="number" step="0.5" min="0" max="1000" value="{{ s.budget_job or '' }}" placeholder="{{ limits.budget_job }}"></div>
    </div>
    </fieldset>
-   {% if can(user, 'repos_edit') %}<div class="sticky-save"><button class="btn primary">Enregistrer</button></div>{% endif %}
+   {% if can(user, 'repos_edit') %}<div class="sticky-save"><button class="btn primary">Save</button></div>{% endif %}
   </form>
   {% if can(user, 'repos_edit') %}<section class="sec danger-zone">
-   <h3>Retirer ce repo</h3>
-   <p class="muted small">Le repo sort de la Fabrique ; rien n'est supprimé sur la forge. Possible tant qu'aucune demande n'y a été déposée : ensuite son historique est gardé, et on le ferme en décochant « Accepte les nouvelles demandes ».</p>
-   <form method="post" action="/repos/{{cur.id}}/remove" data-confirm="Retirer {{ cur.name }} de la Fabrique ? Rien n'est supprimé sur la forge."><button class="btn ghostb">Retirer le repo</button></form>
+   <h3>Remove this repo</h3>
+   <p class="muted small">The repo leaves Fabrique; nothing is deleted on the Git host. Possible as long as no request has been filed on it: after that its history is kept, and it is closed by unticking “Accepts new requests”.</p>
+   <form method="post" action="/repos/{{cur.id}}/remove" data-confirm="Remove {{ cur.name }} from Fabrique? Nothing is deleted on the Git host."><button class="btn ghostb">Remove the repo</button></form>
   </section>{% endif %}
  </div>
 {% endif %}
 </aside>
 {% endblock %}
-{% block foot %}{{ repos|length }} repo{{'s' if repos|length != 1}} · {{ repos|selectattr('accepts_jobs')|list|length }} accepte{{'nt' if repos|selectattr('accepts_jobs')|list|length > 1}} des demandes{% endblock %}
+{% block foot %}{{ nb(repos|length, "{n} repo", "{n} repos") }} · {% set acc_n = repos|selectattr("accepts_jobs")|list|length %}{{ nb(acc_n, "{n} accepts requests", "{n} accept requests", acc_n > 1) }}{% endblock %}

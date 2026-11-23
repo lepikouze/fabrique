@@ -1,4 +1,5 @@
-"""Client HTTP du panneau (jeton Bearer du runner), avec quelques nouvelles tentatives sur les erreurs réseau."""
+"""Dashboard HTTP client (runner Bearer token), with a few retries on network errors."""
+from .texts import pack_tree
 import logging, time
 import httpx
 from . import config
@@ -14,14 +15,14 @@ class Panel:
     def _post(self, path, body, tries=4):
         for i in range(tries):
             try:
-                r = self.h.post(path, json=body)
+                r = self.h.post(path, json=pack_tree(body))
                 if r.status_code >= 500:
                     raise httpx.HTTPError(f"{r.status_code}")
                 return r
             except httpx.HTTPError as e:
                 if i == tries - 1:
                     raise
-                log.warning("panneau injoignable (%s), nouvel essai", e)
+                log.warning("dashboard unreachable (%s), retrying", e)
                 time.sleep(2 ** i)
 
     def heartbeat(self, info):
@@ -39,6 +40,6 @@ class Panel:
     def event(self, ref, **ev):
         r = self._post(f"/api/runner/jobs/{ref}/event", ev)
         if r.status_code != 200:
-            log.error("événement %s refusé pour %s : %s", ev.get("type"), ref, r.text[:200])
+            log.error("event %s refused for %s: %s", ev.get("type"), ref, r.text[:200])
             return None
         return r.json()

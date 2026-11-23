@@ -1,4 +1,4 @@
-"""Client GitLab du runner : mêmes contrats que Forgejo (MR, commentaire de décision unique, merge épinglé au sha)."""
+"""GitLab client for the runner: same contracts as Forgejo (MR, single decision comment, merge pinned to sha)."""
 import base64, json
 import httpx
 import pytest
@@ -12,7 +12,7 @@ def gitlab(handler):
 def test_git_env_uses_basic_auth_header_not_url():
     g = gitlab(lambda r: httpx.Response(500))
     env = g.git_env()
-    assert g.clone_url("grp/sous/proj") == "https://gl.example/grp/sous/proj.git"      # pas de jeton dans l'URL
+    assert g.clone_url("grp/sous/proj") == "https://gl.example/grp/sous/proj.git"      # no token in the URL
     assert env["GIT_CONFIG_KEY_0"] == "http.https://gl.example/.extraheader"
     assert base64.b64decode(env["GIT_CONFIG_VALUE_0"].split()[-1]).decode() == "oauth2:tok"
     assert g.pr_url("grp/proj", 7) == "https://gl.example/grp/proj/-/merge_requests/7"
@@ -36,7 +36,7 @@ def test_open_mr_new_then_existing():
     g = gitlab(handler)
     assert g.open_pr("grp/proj", "fabrique/FAB-1", "main", "t", "b") == 3
     assert g.open_pr("grp/proj", "fabrique/FAB-1", "main", "t2", "b2") == 3
-    assert ("PUT", "/api/v4/projects/grp%2Fproj/merge_requests/3") in calls       # mise à jour, pas de doublon
+    assert ("PUT", "/api/v4/projects/grp%2Fproj/merge_requests/3") in calls       # update, no duplicates
 
 
 def test_pr_is_normalised_like_forgejo():
@@ -48,7 +48,7 @@ def test_pr_is_normalised_like_forgejo():
 def test_decision_comment_is_created_once_then_updated():
     notes, seen = [], []
 
-    # un autre compte a déjà posté un commentaire portant le marqueur : le runner ne doit jamais le modifier
+    # another account has already posted a comment with the marker: the runner must never modify it
     notes.append({"id": 5, "body": forge.GitLab.MARK + "\nfaux", "author": {"username": "mallory"}})
 
     def handler(req):
@@ -83,7 +83,7 @@ def test_merge_is_pinned_to_sha_and_retries_while_mergeability_is_computed():
     assert gitlab(handler).merge("grp/proj", 3, "abc123", "titre", wait=0) == "m1"
     assert all(t["sha"] == "abc123" and t["squash"] for t in tries) and len(tries) == 2
     gitlab(handler).merge("grp/proj", 3, "abc123", "titre", wait=0, message="Fabrique-Job: FAB-1")
-    assert tries[-1]["squash_commit_message"] == "titre\n\nFabrique-Job: FAB-1"         # ligne de rattachement au job
+    assert tries[-1]["squash_commit_message"] == "titre\n\nFabrique-Job: FAB-1"         # job attachment line
 
 
 def test_merge_refused_when_head_moved():
@@ -93,7 +93,7 @@ def test_merge_refused_when_head_moved():
 
 def test_make_by_provider():
     assert isinstance(forge.make("gitlab"), forge.GitLab) and isinstance(forge.make("forgejo"), forge.Forgejo)
-    assert isinstance(forge.make("gitea"), forge.Forgejo)                                    # Gitea : même API que Forgejo
+    assert isinstance(forge.make("gitea"), forge.Forgejo)                                    # Gitea: same API as Forgejo
     with pytest.raises(RuntimeError):
         forge.make("svn")
 
@@ -162,9 +162,9 @@ def test_create_repo_per_forge():
             return httpx.Response(200, json={"login": "moi"})
         return httpx.Response(201, json={})
     fj = forge.Forgejo(base="https://fj.example", token="t", transport=httpx.MockTransport(h))
-    assert fj.create_repo("fabrique", "api", "d") == "créé"
+    assert fj.create_repo("fabrique", "api", "d") == "created"
     assert seen[-1][1] == "/api/v1/orgs/fabrique/repos" and seen[-1][2]["private"] and not seen[-1][2]["auto_init"]
-    assert gitlab(h).create_repo("fabrique", "api") == "créé" and seen[-1][2]["namespace_id"] == 39 and seen[-1][2]["visibility"] == "private"
-    assert github(h).create_repo("moi", "api") == "créé" and seen[-1][1] == "/user/repos"
-    assert github(h).create_repo("une-org", "api") == "créé" and seen[-1][1] == "/orgs/une-org/repos"
-    assert forge.Forgejo(base="https://fj.example", token="t", transport=httpx.MockTransport(lambda r: httpx.Response(409))).create_repo("o", "a") == "existe"
+    assert gitlab(h).create_repo("fabrique", "api") == "created" and seen[-1][2]["namespace_id"] == 39 and seen[-1][2]["visibility"] == "private"
+    assert github(h).create_repo("moi", "api") == "created" and seen[-1][1] == "/user/repos"
+    assert github(h).create_repo("une-org", "api") == "created" and seen[-1][1] == "/orgs/une-org/repos"
+    assert forge.Forgejo(base="https://fj.example", token="t", transport=httpx.MockTransport(lambda r: httpx.Response(409))).create_repo("o", "a") == "exists"

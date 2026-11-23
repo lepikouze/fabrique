@@ -1,60 +1,66 @@
 {% from "_macros.html" import ic, dot, changes %}
 <div class="p-bar">
- <a class="ghost sq" href="/jobs/{{j.ref}}" title="Ouvrir le job en grand" aria-label="Ouvrir le job en grand">{{ ic('expand') }}</a>
- <a class="ghost sq" href="/inbox" title="Fermer (Échap)" aria-label="Fermer" data-close>{{ ic('x') }}</a>
+ <a class="ghost sq" href="/jobs/{{j.ref}}" title="Open the job in full view" aria-label="Open the job in full view">{{ ic('expand') }}</a>
+ <a class="ghost sq" href="/inbox" title="Close (Esc)" aria-label="Close" data-close>{{ ic('x') }}</a>
 </div>
 <div class="p-body narrow" data-ref="{{j.ref}}">
  <div class="p-id mono">{{ j.ref }}</div>
  <h2 class="p-title">{{ j.title }}</h2>
- <div class="p-badges"><span class="pill stage" style="--c:{{cur.color}}">{{ dot(cur.color) }}{{ cur.label }}</span>{% if j.repo %}<span class="pill mono">{{ j.repo.slug }}</span>{% endif %}<a class="link" href="/jobs?job={{j.ref}}">Voir le job</a></div>
- <p class="p-from muted">Demandé par <b>{{ j.requester }}</b> · {{ j.updated_at|depuis }}</p>
- <section class="sec"><h3>Pourquoi c'est ici</h3>
-  {% if cur.kind == 'question' %}<div class="callout c-amber"><b class="ct">Question pour toi</b><p>{{ cur.why }}</p></div>
+ <div class="p-badges"><span class="pill stage" style="--c:{{cur.color}}">{{ dot(cur.color) }}{{ cur.label }}</span>{% if j.repo %}<span class="pill mono">{{ j.repo.slug }}</span>{% endif %}<a class="link" href="/jobs?job={{j.ref}}">See the job</a></div>
+ <p class="p-from muted">Requested by <b>{{ j.requester }}</b> · {{ j.updated_at|since }}</p>
+{% set tx = j.translation %}{% if tx and tx.needed and (tx.done or tx.available) %}
+<div class="tx-bar" data-tx>
+ {% if tx.showing %}<span class="tx-note">Machine translation</span><span class="muted">{{ nb(tx.done, "{n} text translated", "{n} texts translated") }} · {{ tx.model }}{% if tx.cost %} · {{ tx.cost|money }}{% endif %}</span>
+ <button type="button" class="btn sm" data-mt-toggle data-original="Show the original" data-translated="Show the translation">Show the original</button>{% endif %}
+ {% if tx.available and tx.done < tx.total %}<form method="post" action="/jobs/{{ j.ref }}/translate"><button class="btn sm" title="Translates the texts written by the agents into your language, with the translation model">{{ 'Translate the rest' if tx.done else 'Translate' }}</button></form>{% endif %}
+</div>{% endif %}
+ <section class="sec"><h3>Why it is here</h3>
+  {% if cur.kind == 'question' %}<div class="callout c-amber"><b class="ct">Question for you</b><p>{{ cur.why }}</p></div>
   {% else %}<p>{{ cur.why }}</p>{% endif %}
  </section>
- <details class="long ctx"><summary>La demande <span class="link">afficher</span></summary>
+ <details class="long ctx"><summary>The request <span class="link">show</span></summary>
   <p class="prose">{{ j.request }}</p>
-  {% if j.done_when %}<p class="prose"><b>Terminé quand :</b> {{ j.done_when }}</p>{% endif %}
+  {% set dw = DONE_WHEN(j) %}{% if dw[0] %}<p class="prose"><b>Done when:</b> {{ dw[0] }}{% if dw[1] %} <span class="pill">default criterion</span>{% endif %}</p>{% endif %}
  </details>
  {% if cur.kind == 'question' %}
  <form method="post" action="/jobs/{{j.ref}}/answer" class="answer" data-cmd-enter>
-  <label for="ans-{{j.ref}}">Ta réponse</label>
-  <textarea id="ans-{{j.ref}}" name="answer" rows="4" required maxlength="4000" placeholder="Réponds à la question…"></textarea>
-  <div class="row-end"><small class="muted">L'agent reprend au tri avec ta réponse, traitée comme une donnée.</small><button class="btn primary">{{ ic('send') }}Envoyer</button></div>
+  <label for="ans-{{j.ref}}">Your answer</label>
+  <textarea id="ans-{{j.ref}}" name="answer" rows="4" required maxlength="4000" placeholder="Answer the question…"></textarea>
+  <div class="row-end"><small class="muted">The agent resumes at triage with your answer, treated as data.</small><button class="btn primary">{{ ic('send') }}Send</button></div>
  </form>
  {% elif cur.kind == 'review' %}
   {% set d = j.decision %}
   {% if d %}<ul class="limits">{% for l in d.limits %}<li class="{{ 'l-ok' if l.ok else 'l-bad' }}">{{ ic('check' if l.ok else 'x') }}<b>{{ l.name }}</b><span class="muted">{{ l.detail }}</span></li>{% endfor %}</ul>
   <p class="verdict {{ 'ok' if d.confident else 'amber' }}">{{ ic('check' if d.confident else 'x') }}{{ d.verdict }}</p>{% endif %}
   {% set checks = TO_CHECK(j) %}{% set chg = CHANGES_URL(j) %}
-  {% if checks %}<div class="callout c-amber"><b class="ct">À vérifier avant d'approuver</b>
-   <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b> : {{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if checks %}<div class="callout c-amber"><b class="ct">To check before approving</b>
+   <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b>{{ COLON() }}{{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
   {{ changes(j) }}
-  <p class="links">{% if chg %}<a class="link" href="{{ chg }}" target="_blank" rel="noopener noreferrer">Voir les changements {{ ic('ext') }}</a>{% endif %}
-   {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="link" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Relire la PR #{{ j.pr_number }} {{ ic('ext') }}</a>{% endif %}</p>
+  <p class="links">{% if chg %}<a class="link" href="{{ chg }}" target="_blank" rel="noopener noreferrer">See the changes {{ ic('ext') }}</a>{% endif %}
+   {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="link" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Review PR #{{ j.pr_number }} {{ ic('ext') }}</a>{% endif %}</p>
   <form method="post" action="/jobs/{{j.ref}}/decide" class="decide">
-   <input name="note" maxlength="300" placeholder="Commentaire pour l'audit (facultatif)" aria-label="Commentaire">
-   <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approuver le merge</button>
-   <button class="btn danger" name="verdict" value="refuse">Refuser</button>
+   <input name="note" maxlength="300" placeholder="Comment for the audit log (optional)" aria-label="Comment">
+   <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approve the merge</button>
+   <button class="btn danger" name="verdict" value="refuse">Refuse</button>
   </form>
-  {% if j.source != 'onboarding' %}<form method="post" action="/jobs/{{j.ref}}/reviews" class="inline"><button class="btn" title="Le runner relit le même sha, sans relancer l'agent">Relancer la vérification</button></form>{% endif %}
+  {% if j.source != 'onboarding' %}<form method="post" action="/jobs/{{j.ref}}/reviews" class="inline"><button class="btn" title="The runner reviews the same sha again, without restarting the agent">Rerun the review</button></form>{% endif %}
  {% elif cur.kind == 'spec' %}
   <form method="post" action="/jobs/{{j.ref}}/spec" class="decide">
-   <input name="note" maxlength="300" placeholder="Commentaire (facultatif)" aria-label="Commentaire">
-   <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Valider la spec</button>
-   <button class="btn danger" name="verdict" value="refuse">Refuser</button>
+   <input name="note" maxlength="300" placeholder="Comment (optional)" aria-label="Comment">
+   <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approve the spec</button>
+   <button class="btn danger" name="verdict" value="refuse">Refuse</button>
   </form>
  {% elif cur.kind == 'study' %}
   <div class="prose report">{{ j.report }}</div>
-  <p class="muted small">Texte rendu par l'agent, affiché tel quel. Une étude ne modifie rien : aucune branche, aucune PR.</p>
+  <p class="muted small">Text delivered by the agent, shown as is. A study changes nothing: no branch, no PR.</p>
   <div class="decide">
-   {% if can(user, 'request') %}<a class="btn primary" href="/new?from={{ j.ref }}">{{ ic('plus') }}En faire une demande</a>{% endif %}
-   <form method="post" action="/jobs/{{j.ref}}/seen"><button class="btn">{{ ic('check') }}Marquer comme lue</button></form>
-   {% set rf = REPORT_FORMATS() %}{% if rf.pdf %}<a class="btn" href="/jobs/{{ j.ref }}/rapport.pdf" download>Télécharger le rapport (PDF)</a>{% endif %}
-   {% if rf.md %}<a class="btn" href="/jobs/{{ j.ref }}/rapport.md" download>{{ 'Markdown' if rf.pdf else 'Télécharger le rapport (Markdown)' }}</a>{% endif %}
+   {% if can(user, 'request') %}<a class="btn primary" href="/new?from={{ j.ref }}">{{ ic('plus') }}Turn it into a request</a>{% endif %}
+   <form method="post" action="/jobs/{{j.ref}}/seen"><button class="btn">{{ ic('check') }}Mark as read</button></form>
+   {% set rf = REPORT_FORMATS() %}{% if rf.pdf %}<a class="btn" href="/jobs/{{ j.ref }}/report.pdf" download>Download the report (PDF)</a>{% endif %}
+   {% if rf.md %}<a class="btn" href="/jobs/{{ j.ref }}/report.md" download>{{ 'Markdown' if rf.pdf else 'Download the report (Markdown)' }}</a>{% endif %}
   </div>
  {% elif cur.kind == 'failed' %}
-  <p class="muted">Corrige la cause (recipe, variable, accès), puis archive le job ou dépose une nouvelle demande.</p>
-  <form method="post" action="/jobs/{{j.ref}}/archive"><button class="btn">{{ ic('archive') }}Archiver</button></form>
+  <p class="muted">Fix the cause (recipe, variable, access), then archive the job or file a new request.</p>
+  <form method="post" action="/jobs/{{j.ref}}/archive"><button class="btn">{{ ic('archive') }}Archive</button></form>
  {% endif %}
 </div>

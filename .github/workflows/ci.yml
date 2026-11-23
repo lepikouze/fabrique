@@ -1,4 +1,4 @@
-# Tests, puis images publiées sur le registre GitHub (ghcr.io/<propriétaire>/…), étiquetées « latest » et « sha-<8> ».
+# Tests, then images published to the GitHub registry (ghcr.io/<owner>/...), tagged "latest" and "sha-<8>".
 name: ci
 on:
   push:
@@ -19,13 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Connexion au registre
+      - name: Log in to the registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Construire et pousser
+      - name: Build and push
         run: |
           R=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           SHA=sha-${GITHUB_SHA::8}
-          build() {   # build <image> <dockerfile> [arguments de build…]
+          build() {   # build <image> <dockerfile> [build arguments…]
             img=$R/$1; shift; file=$1; shift
             docker build -q --build-arg GIT_SHA=${GITHUB_SHA::8} -f "$file" "$@" -t "$img:latest" -t "$img:$SHA" .
             docker push -q "$img:latest"; docker push -q "$img:$SHA"

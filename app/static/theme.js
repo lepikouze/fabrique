@@ -1,4 +1,4 @@
-// Appliqué avant l'affichage : thème (clair, sombre ou auto = celui du système ; sombre par défaut) et barre latérale.
+// Applied before display: theme (light, dark or auto = system; dark by default) and sidebar.
 (function () {
   var d = document.documentElement, t = null, s = null;
   try { t = localStorage.getItem("fabrique-theme"); s = localStorage.getItem("fabrique-side"); } catch (e) {}

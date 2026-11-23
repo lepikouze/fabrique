@@ -1,11 +1,11 @@
-{# Diff d'un job, par fichier (fragment inséré dans la fiche du job). Tout est du texte échappé : aucun contenu du repo n'est interprété. #}
-{% if d.truncated %}<div class="callout c-amber"><b class="ct">Diff tronqué</b><p>Ce diff dépasse la taille que la Fabrique garde : la fin manque. Lis la suite sur la forge avant de décider.</p></div>{% endif %}
+{# Diff of a job, by file (fragment inserted into the job page). Everything is escaped text: no repo content is interpreted. #}
+{% if d.truncated %}<div class="callout c-amber"><b class="ct">Diff truncated</b><p>This diff is larger than what Fabrique keeps: the end is missing. Read the rest on the Git host before deciding.</p></div>{% endif %}
 {% for f in d.files %}
 <details class="dfile" data-key="dfile-{{ loop.index0 }}" {% if f.open %}open{% endif %}>
- <summary><span class="mono dpath">{{ f.path }}</span>{% if f.status != 'modified' %}<span class="pill">{{ f.label }}</span>{% endif %}{% if f.protected %}<span class="pill prot" title="Chemin protégé : à relire avec attention">protégé</span>{% endif %}<span class="mono right"><span class="ok">+{{ f.add }}</span> <span class="bad">−{{ f.rem }}</span></span></summary>
- {% if f.binary %}<p class="muted small dnote">Fichier binaire : son contenu n'est pas affiché.</p>
- {% elif not f.hunks %}<p class="muted small dnote">Aucune ligne à afficher (fichier vide, ou seul son mode a changé).</p>
+ <summary><span class="mono dpath">{{ f.path }}</span>{% if f.status != 'modified' %}<span class="pill">{{ f.label }}</span>{% endif %}{% if f.protected %}<span class="pill prot" title="Protected path: review it carefully">protected</span>{% endif %}<span class="mono right"><span class="ok">+{{ f.add }}</span> <span class="bad">−{{ f.rem }}</span></span></summary>
+ {% if f.binary %}<p class="muted small dnote">Binary file: its content is not shown.</p>
+ {% elif not f.hunks %}<p class="muted small dnote">No line to show (empty file, or only its mode changed).</p>
  {% else %}<div class="dscroll"><div class="dcode">{% for h in f.hunks %}<div class="dl hunk"><span class="ln"></span><span class="ln"></span><span class="tx">{{ h.header }}</span></div>{% for k, o, n, t in h.lines %}<div class="dl {{ k }}"><span class="ln">{{ o if o is not none else '' }}</span><span class="ln">{{ n if n is not none else '' }}</span><span class="tx">{{ t }}</span></div>{% endfor %}{% endfor %}</div></div>{% endif %}
 </details>
-{% else %}<p class="muted">Ce diff est vide.</p>
+{% else %}<p class="muted">This diff is empty.</p>
 {% endfor %}

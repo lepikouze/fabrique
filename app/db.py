@@ -1,11 +1,27 @@
-"""Base de données : SQLAlchemy Core (aucun SQL propre à un moteur), migrations Alembic (app/migrations).
-SQLite au départ ; PostgreSQL plus tard en changeant seulement DATABASE_URL."""
+"""Database: SQLAlchemy Core (no engine-specific SQL), Alembic migrations (app/migrations).
+SQLite at first; PostgreSQL later by only changing DATABASE_URL."""
 import logging
 import contextvars, copy, json, os, time
 from contextlib import contextmanager
 from sqlalchemy import (JSON, Boolean, Column, Float, ForeignKey, Index, Integer, MetaData, String, Table, Text, UniqueConstraint,
                         create_engine, event, false, insert, select, update)
-from . import config
+from sqlalchemy.types import TypeDecorator
+from . import config, i18n
+
+
+class Worded(TypeDecorator):
+    """A text column that may hold what Fabrique words itself: such a text is stored as a fact (its template and its
+    values, see i18n.pack) and comes back as a Msg, which each reader sees in their own language. Any other text (what
+    a person or an agent wrote) is stored and returned as it is."""
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return i18n.pack(value)
+
+    def process_result_value(self, value, dialect):
+        return i18n.revive(value)
+
 
 meta = MetaData()
 
@@ -15,41 +31,41 @@ users = Table(
     Column("username", String(120), nullable=False, unique=True),
     Column("name", String(120), nullable=False, default=""),
     Column("email", String(200), nullable=False, default=""),
-    Column("role", String(20), nullable=False, default="requester"),   # none (en attente) | requester | verifier | admin
-    Column("role_source", String(40), nullable=False, default=""),     # « panneau » (choisi par un admin), groupe OIDC, défaut, secours
-    Column("requested_role", String(20)),                              # demande d'accès en attente
+    Column("role", String(20), nullable=False, default="requester"),   # none (pending) | requester | reviewer | admin
+    Column("role_source", String(40), nullable=False, default=""),     # "dashboard" (chosen by an admin), OIDC group, default, fallback
+    Column("requested_role", String(20)),                              # access request pending
     Column("request_note", Text),
     Column("requested_at", Float),
     Column("groups", JSON, nullable=False, default=list),
     Column("created_at", Float, nullable=False),
     Column("last_login", Float),
-    Column("prefs", JSON),                                             # préférences personnelles (affichage des jobs)
-    Column("sessions_after", Float),                                   # sessions ouvertes avant cet instant : révoquées
-    Column("password_hash", String(300)),                              # compte local (secours) : mot de passe haché (scrypt)
+    Column("prefs", JSON),                                             # personal preferences (job display)
+    Column("sessions_after", Float),                                   # sessions open before this moment: revoked
+    Column("password_hash", String(300)),                              # local account (fallback): hashed password (scrypt)
 )
 
 repos = Table(
     "repos", meta,
     Column("id", Integer, primary_key=True),
     Column("provider", String(20), nullable=False),        # forgejo | gitea | gitlab | github
-    Column("git_id", String(60), nullable=False, default=""),  # provider Git précis (Settings → Providers Git), voir app/forges.py
+    Column("git_id", String(60), nullable=False, default=""),  # specific Git provider (Settings → Git providers), see app/forges.py
     Column("slug", String(200), nullable=False),
     Column("name", String(120), nullable=False),
     Column("default_branch", String(80), nullable=False, default="main"),
     Column("is_default", Boolean, nullable=False, default=False),
     Column("accepts_jobs", Boolean, nullable=False, default=True),
     Column("onboarding", String(20), nullable=False, default="pending"),   # pending | analyzing | ready | failed
-    Column("recipe", JSON),                                 # contenu de .fabrique/setup.json une fois l'onboarding fait
+    Column("recipe", JSON),                                 # content of .fabrique/setup.json once onboarding is done
     Column("settings", JSON, nullable=False, default=dict),  # harness, model, merge_policy, protected_paths, size_limit, budget_job
     Column("created_at", Float, nullable=False),
     Column("last_activity", Float),
-    UniqueConstraint("git_id", "slug", name="uq_repos_git_slug"),   # un même chemin peut exister chez deux providers
+    UniqueConstraint("git_id", "slug", name="uq_repos_git_slug"),   # the same path can exist in two providers
 )
 
 notifications = Table(
     "notifications", meta,
     Column("id", Integer, primary_key=True),
-    Column("channel", String(40), nullable=False),            # identifiant du canal (réglage « channels »)
+    Column("channel", String(40), nullable=False),            # channel identifier ("channels" setting)
     Column("event", String(30), nullable=False),
     Column("payload", JSON, nullable=False),
     Column("state", String(12), nullable=False, index=True),  # pending | sent | failed
@@ -65,7 +81,7 @@ runners = Table(
     Column("id", Integer, primary_key=True),
     Column("name", String(120), nullable=False, unique=True),
     Column("host", String(200), nullable=False, default=""),
-    Column("kind", String(20), nullable=False, default="vm"),   # vm | conteneur | kubernetes
+    Column("kind", String(20), nullable=False, default="vm"),   # vm | container | kubernetes
     Column("online", Boolean, nullable=False, default=False),
     Column("last_seen", Float),
     Column("capacity", Integer, nullable=False, default=2),
@@ -73,9 +89,9 @@ runners = Table(
     Column("harnesses", JSON, nullable=False, default=list),   # [{"name": "Claude Code", "version": "…"}]
     Column("metrics", JSON, nullable=False, default=dict),     # cpu, mem, disk
     Column("version", String(40), nullable=False, default=""),
-    Column("token_hash", String(64)),                          # empreinte SHA-256 du jeton du runner (le jeton n'est jamais stocké)
+    Column("token_hash", String(64)),                          # SHA-256 fingerprint of the runner token (the token is never stored)
     Column("revoked", Boolean, nullable=False, default=False, server_default=false()),
-    Column("tags", JSON, nullable=False, default=list, server_default="[]"),   # étiquettes déclarées par le runner (RUNNER_TAGS)
+    Column("tags", JSON, nullable=False, default=list, server_default="[]"),   # tags declared by the runner (RUNNER_TAGS)
 )
 
 jobs = Table(
@@ -86,12 +102,12 @@ jobs = Table(
     Column("request", Text, nullable=False, default=""),
     Column("done_when", Text, nullable=False, default=""),
     Column("requester", String(120), nullable=False),
-    Column("source", String(20), nullable=False, default="formulaire"),
+    Column("source", String(20), nullable=False, default="form"),
     Column("repo_id", Integer, ForeignKey("repos.id"), nullable=False),
     Column("stage", String(20), nullable=False, default="queued"),
     Column("activity", String(10), nullable=False, default="idle"),   # active | idle
-    Column("status_text", String(240), nullable=False, default=""),
-    Column("summary", Text, nullable=False, default=""),
+    Column("status_text", Worded, nullable=False, default=""),
+    Column("summary", Worded, nullable=False, default=""),
     Column("harness", String(40), nullable=False, default=""),
     Column("model", String(80), nullable=False, default=""),
     Column("runner_id", Integer, ForeignKey("runners.id")),
@@ -107,12 +123,13 @@ jobs = Table(
     Column("merge_state", String(20), nullable=False, default=""),   # "" | waiting_checks | ready | approved | refused | merged
     Column("archived", Boolean, nullable=False, default=False),
     Column("report", Text),
-    Column("models", JSON),                                    # profil : {profile, effort, review_model, review_effort}, figé à la création
-    Column("report_seen", Float),                              # étude : rapport marqué comme lu (sort de l'inbox)                                    # mode étude : rapport rendu par l'agent
-    Column("session_id", String(80)),                          # session de l'agent (reprise après une réponse)
+    Column("lang", String(8), nullable=False, default=""),    # job language when it was filed (what agents and Fabrique write for people)
+    Column("models", JSON),                                    # profile: {profile, effort, review_model, review_effort}, frozen at creation
+    Column("report_seen", Float),                              # study: report marked as read (leaves the inbox)                                    # study mode: report submitted by the agent
+    Column("session_id", String(80)),                          # agent session (resumed after a response)
     Column("attempts", Integer, nullable=False, default=0, server_default="0"),
-    Column("diff", JSON),                                      # {"files": [...], "additions": n, "deletions": n} de la PR
-    Column("cancel_requested", String(120)),                   # qui a demandé l'arrêt (le runner tue l'agent et confirme)
+    Column("diff", JSON),                                      # {"files": [...], "additions": n, "deletions": n} of the PR
+    Column("cancel_requested", String(120)),                   # who requested the stop (the runner kills the agent and confirms)
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
     Index("ix_jobs_stage", "stage"),
@@ -134,18 +151,18 @@ timeline = Table(
     Column("id", Integer, primary_key=True),
     Column("job_id", Integer, ForeignKey("jobs.id"), nullable=False, index=True),
     Column("stage", String(20), nullable=False),
-    Column("summary", Text, nullable=False, default=""),
+    Column("summary", Worded, nullable=False, default=""),
     Column("at", Float, nullable=False),
 )
 
-# Flux d'événements : sert à la fois aux « événements en direct » d'un job et au temps réel (SSE) du panneau.
+# Event stream: used for both job "live events" and dashboard real-time (SSE).
 events = Table(
     "events", meta,
     Column("id", Integer, primary_key=True),
     Column("job_id", Integer, ForeignKey("jobs.id"), index=True),
     Column("at", Float, nullable=False),
     Column("kind", String(30), nullable=False),
-    Column("message", Text, nullable=False, default=""),
+    Column("message", Worded, nullable=False, default=""),
 )
 
 agents = Table(
@@ -172,6 +189,8 @@ evidence = Table(
     Column("duration_ms", Integer, nullable=False, default=0),
     Column("output", Text, nullable=False, default=""),
     Column("ran_by", String(20), nullable=False, default="runner"),   # runner | agent
+    Column("kind", String(20), nullable=False, default="check"),      # check (a recipe check) | security | network (for information)
+    Column("warn", Boolean, nullable=False, default=False),           # an informative line that reports something
     Column("at", Float, nullable=False),
 )
 
@@ -185,8 +204,21 @@ decisions = Table(
     Column("confident", Boolean, nullable=False, default=False),
     Column("verdict", Text, nullable=False, default=""),
     Column("notes", Text, nullable=False, default=""),
-    Column("limits", JSON, nullable=False, default=list),   # [{"name", "ok", "detail"}] : barrières évaluées par le code
+    Column("limits", JSON, nullable=False, default=list),   # [{"name", "ok", "detail"}] : gates evaluated by the code
     Column("at", Float, nullable=False),
+)
+
+translations = Table(
+    "translations", meta,                                     # machine translations of what a job's agents wrote, kept per text and language
+    Column("id", Integer, primary_key=True),
+    Column("job_id", Integer, ForeignKey("jobs.id"), nullable=False, index=True),
+    Column("lang", String(8), nullable=False),
+    Column("source_hash", String(64), nullable=False),        # sha256 of the source text: a text that changes is translated again
+    Column("text", Text, nullable=False),
+    Column("model", String(80), nullable=False, default=""),
+    Column("cost", Float, nullable=False, default=0.0),
+    Column("at", Float, nullable=False),
+    UniqueConstraint("job_id", "lang", "source_hash", name="uq_translations_job_lang_source"),
 )
 
 audit = Table(
@@ -194,28 +226,28 @@ audit = Table(
     Column("id", Integer, primary_key=True),
     Column("at", Float, nullable=False, index=True),
     Column("actor", String(120), nullable=False),
-    Column("action", String(60), nullable=False),
+    Column("action", Worded, nullable=False),
     Column("job_id", Integer, ForeignKey("jobs.id")),
     Column("target", String(200), nullable=False, default=""),
-    Column("detail", Text, nullable=False, default=""),
+    Column("detail", Worded, nullable=False, default=""),
 )
 
-# Relectures : un agent relecteur par rôle (code, sécurité, architecture, infra), en lecture seule, sur le sha vérifié.
+# Reviews: one reviewer agent per role (code, security, architecture, infra), read-only, on the verified sha.
 reviews = Table(
     "reviews", meta,
     Column("id", Integer, primary_key=True),
     Column("job_id", Integer, ForeignKey("jobs.id"), nullable=False, index=True),
     Column("sha", String(40), nullable=False),
-    Column("role", String(20), nullable=False),              # code | securite | archi | infra
-    Column("verdict", String(20), nullable=False),           # ok | a_revoir | bloquant | indetermine
-    Column("summary", Text, nullable=False, default=""),
+    Column("role", String(20), nullable=False),              # code | security | architecture | infra
+    Column("verdict", String(20), nullable=False),           # ok | needs_changes | blocking | undetermined
+    Column("summary", Worded, nullable=False, default=""),
     Column("points", JSON, nullable=False, default=list),
     Column("model", String(80), nullable=False, default=""),
     Column("at", Float, nullable=False),
 )
 
-# Diff du job au sha vérifié, envoyé par le runner avec la PR (le dashboard ne lit jamais le code lui-même). Texte plafonné ;
-# « files » résume chaque fichier pour l'affichage sans relire tout le texte. Une ligne par job : le dernier diff remplace l'ancien.
+# Job diff at the verified sha, sent by the runner with the PR (the dashboard never reads the code itself). Text capped;
+# "files" summarizes each file for display without re-reading all the text. One line per job: the latest diff replaces the old one.
 diffs = Table(
     "diffs", meta,
     Column("job_id", Integer, ForeignKey("jobs.id"), primary_key=True),
@@ -226,7 +258,7 @@ diffs = Table(
     Column("at", Float, nullable=False),
 )
 
-# File de commandes panneau -> runners (idempotentes, avec bail) : démarrer, reprendre après une réponse, fusionner.
+# Order queue, dashboard -> runners (idempotent, with a lease): start, resume after a response, merge.
 intents = Table(
     "intents", meta,
     Column("id", Integer, primary_key=True),
@@ -257,7 +289,7 @@ NETWORK_FS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.sshfs", "9p"}
 
 
 def fs_type(path, mounts="/proc/mounts"):
-    """Type du système de fichiers qui porte ce chemin (point de montage le plus long qui le contient) ; '' si inconnu."""
+    """Type of the file system hosting this path (the longest mount point containing it); '' if unknown."""
     path, best, typ = os.path.realpath(path), "", ""
     try:
         for line in open(mounts):
@@ -273,9 +305,9 @@ def fs_type(path, mounts="/proc/mounts"):
 
 
 def journal_mode(db_path):
-    """Mode du journal SQLite. WAL (rapide) sur un disque local ; rollback (« delete ») sur un système de fichiers réseau :
-    WAL y repose sur une mémoire partagée que NFS ne fournit pas, et les accès s'y bloquent (pages qui tournent sans fin).
-    FABRIQUE_SQLITE_JOURNAL=wal|delete force le choix."""
+    """SQLite journal mode. WAL (fast) on a local disk; rollback ("delete") on a network file system:
+    WAL relies on shared memory which NFS does not provide, and access will hang (pages spinning endlessly).
+    FABRIQUE_SQLITE_JOURNAL=wal|delete forces the choice."""
     forced = (os.environ.get("FABRIQUE_SQLITE_JOURNAL") or "").strip().lower()
     if forced in ("wal", "delete"):
         return forced
@@ -290,13 +322,14 @@ def engine():
         if url.startswith("sqlite"):
             os.makedirs(os.path.dirname(url.split("///", 1)[1]) or ".", exist_ok=True)
             kw["connect_args"] = {"check_same_thread": False, "timeout": 15}
-        _engine = create_engine(url, future=True, json_serializer=lambda o: json.dumps(o, ensure_ascii=False), **kw)
+        _engine = create_engine(url, future=True, json_serializer=lambda o: json.dumps(i18n.pack_tree(o), ensure_ascii=False),
+                                json_deserializer=lambda s: i18n.revive_tree(json.loads(s)), **kw)
         if url.startswith("sqlite"):
             mode = journal_mode(url.split("///", 1)[1])
             if mode == "delete":
                 logging.getLogger("fabrique.db").warning(
-                    "base sur un système de fichiers réseau : journal SQLite en mode rollback (WAL n'y fonctionne pas). "
-                    "Pour de meilleures performances, place le volume des données sur un stockage local ou bloc.")
+                    "database on a network file system: SQLite journal in rollback mode (WAL does not work there). "
+                    "For better performance, put the data volume on local or block storage.")
 
             @event.listens_for(_engine, "connect")
             def _pragmas(dbapi, _):
@@ -320,7 +353,7 @@ def tx():
 
 
 def migrate():
-    """Applique les migrations Alembic jusqu'à la dernière version."""
+    """Applies Alembic migrations up to the latest version."""
     from alembic import command
     from alembic.config import Config
     here = os.path.dirname(__file__)
@@ -343,31 +376,33 @@ def now():
     return time.time()
 
 
-# Réglages globaux : valeurs par défaut, puis base (modifiable dans le panneau).
+# Global settings: default values, then the database (editable in the dashboard).
 DEFAULTS = {
-    "agents": {"harness": "claude-code", "model": "", "profile": ""},   # aucun modèle tant que l'installation n'en a pas choisi
+    "agents": {"harness": "claude-code", "model": "", "profile": ""},   # no model until the installation has chosen one
     "models": [],
-    "profiles": [],                              # profils de modèles : un modèle et un effort par rôle (app/profiles.py)
+    "profiles": [],                              # model profiles: one model and one effort per role (app/profiles.py)
     "git": [],
     "limits": {"budget_job": 5.0, "budget_day": 30.0, "max_parallel": 2, "size_limit": 300, "watchdog_min": 10,
                "protected_paths": ["**/migrations/**", "**/auth/**", "**/permissions/**", ".forgejo/**", ".gitea/**", ".gitlab-ci.yml",
                                    ".github/**", "Dockerfile", "**/.env*", ".fabrique/**"]},
     "access": {"default_role": "requester"},
-    "oidc_secret": {},                           # secret du client OIDC saisi dans les réglages : {"v": valeur chiffrée}
-    "demo": {"visible": False},                # données de démonstration affichées ou masquées (FABRIQUE_DEMO=1)   # rôle d'un nouveau compte : requester, ou none (en attente d'un admin)
+    "translation": {"model": ""},               # model that translates a job's texts on request ("" : no translation offered)
+    "languages": {"jobs": "en"},                # job language: what Fabrique and its agents write for people (overridable per repo)
+    "oidc_secret": {},                           # OIDC client secret entered in the settings: {"v": encrypted value}
+    "demo": {"visible": False},                # demo data displayed or hidden (FABRIQUE_DEMO=1)   # role of a new account: requester, or none (pending admin)
     "oidc": {"issuer": "", "client_id": "", "scopes": "openid profile email", "groups_claim": "groups",
-             "admin_groups": [], "verifier_groups": [], "requester_groups": []},
+             "admin_groups": [], "reviewer_groups": [], "requester_groups": []},
 }
 
 
-# Cache d'une requête HTTP de lecture (GET) : une page appelle plusieurs fois les mêmes lectures (réglages, liste des jobs
-# pour la page, les compteurs et l'inbox). Chaque lecture coûte cher quand la base est sur un stockage réseau : on la fait
-# une fois par requête. Hors requête (runner, simulateur, tests directs) et pour toute requête qui modifie : pas de cache.
+# Cache for an HTTP read request (GET): a page calls the same reads multiple times (settings, job list
+# for the page, counters and the inbox). Each read is expensive when the database is on network storage: it is done
+# once per request. Outside of a request (runner, simulator, direct tests) and for any request that modifies: no cache.
 _request = contextvars.ContextVar("fabrique_request_cache", default=None)
 
 
 class RequestCache:
-    """Middleware ASGI : ouvre un cache de lectures pour la durée d'une requête GET de page."""
+    """ASGI Middleware: opens a read cache for the duration of a GET page request."""
     def __init__(self, app):
         self.app = app
 
@@ -382,7 +417,7 @@ class RequestCache:
 
 
 def cached(key, load):
-    """Résultat de load(), gardé pour la requête en cours ; simple appel hors requête."""
+    """Result of load(), kept for the current request; simple call outside of a request."""
     box = _request.get()
     if box is None:
         return load()
@@ -398,12 +433,12 @@ def forget_cache():
 
 
 def get_setting(c, key):
-    if _request.get() is not None:   # dans une requête de page : tous les réglages en une seule lecture (la table est petite)
+    if _request.get() is not None:   # in a page request: all settings in a single read (the table is small)
         allv = cached("settings", lambda: {r["key"]: r for r in rows(c, select(settings))})
         r = allv.get(key)
         if r is None:
             return copy.deepcopy(DEFAULTS.get(key)), None
-        r = copy.deepcopy(r)         # l'appelant peut modifier ce qu'il reçoit sans toucher au cache
+        r = copy.deepcopy(r)         # the caller can modify what it receives without touching the cache
         return r["value"], r
     r = one(c, select(settings).where(settings.c.key == key))
     if r is None:
@@ -426,5 +461,5 @@ def log_event(c, job_id, kind, message):
 
 def log_audit(c, actor, action, job_id=None, target="", detail=""):
     c.execute(insert(audit).values(at=now(), actor=actor, action=action, job_id=job_id, target=target, detail=detail))
-    # Toute action d'audit déclenche aussi un rafraîchissement temps réel.
+    # Any audit action also triggers a real-time refresh.
     c.execute(insert(events).values(job_id=job_id, at=now(), kind="audit", message=action))

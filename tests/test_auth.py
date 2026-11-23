@@ -1,4 +1,4 @@
-"""Connexion OIDC générique : provider simulé (aucun réseau), rôles tirés des groupes, refus et mauvaise configuration."""
+"""Generic OIDC connection: simulated provider (no network), roles pulled from groups, refusal and misconfiguration."""
 import base64, hashlib, time
 from urllib.parse import parse_qs, urlsplit
 import httpx, pytest
@@ -42,7 +42,7 @@ class FakeIdP:
 def idp(monkeypatch):
     p = FakeIdP()
     for k, v in dict(OIDC_ISSUER=ISS, OIDC_CLIENT_ID="fabrique", OIDC_CLIENT_SECRET="s3cret", SESSION_SECRET="x" * 40,
-                     PUBLIC_URL="https://fabrique.test", OIDC_ADMIN_GROUPS=["fabrique-admins"], OIDC_VERIFIER_GROUPS=["fabrique-verif"],
+                     PUBLIC_URL="https://fabrique.test", OIDC_ADMIN_GROUPS=["fabrique-admins"], OIDC_REVIEWER_GROUPS=["fabrique-reviewers"],
                      OIDC_REQUESTER_GROUPS=[], FABRIQUE_ADMINS=[]).items():
         monkeypatch.setattr(config, k, v)
     monkeypatch.setattr(auth, "TRANSPORT", httpx.MockTransport(p.handler))
@@ -71,8 +71,8 @@ def test_protected_until_login(idp):
     assert cl.get("/health").status_code == 200
 
 
-@pytest.mark.parametrize("groups,role", [(["fabrique-admins"], "admin"), (["fabrique-verif", "autre"], "verifier"),
-                                         (["autre"], "requester"), (["fabrique-verif", "fabrique-admins"], "admin")])
+@pytest.mark.parametrize("groups,role", [(["fabrique-admins"], "admin"), (["fabrique-reviewers", "autre"], "reviewer"),
+                                         (["autre"], "requester"), (["fabrique-reviewers", "fabrique-admins"], "admin")])
 def test_roles_from_groups(idp, groups, role):
     cl = web()
     r = login(cl, idp, groups=groups)
@@ -90,7 +90,7 @@ def test_requester_groups_restrict_access(idp, monkeypatch):
     auth.invalidate()
     cl = web()
     r = login(cl, idp, user="intrus", groups=["autre"])
-    assert r.status_code == 403 and "aucun rôle" in r.text
+    assert r.status_code == 403 and "no role" in r.text
     assert cl.get("/jobs", headers=HTML).status_code == 303
 
 
@@ -100,14 +100,14 @@ def test_break_glass_admin(idp, monkeypatch):
     login(cl, idp, groups=[])
     assert cl.get("/settings").status_code == 200
     with db.tx() as c:
-        assert db.one(c, select(db.users.c.role_source))["role_source"].startswith("secours")
+        assert db.one(c, select(db.users.c.role_source))["role_source"].startswith("break-glass")
 
 
 def test_role_switch_refused_when_oidc_active(idp):
     cl = web()
     login(cl, idp, groups=["autre"])
     cl.cookies.set("fabrique_as", "admin")
-    assert cl.get("/settings").status_code == 403           # le cookie de démonstration est ignoré
+    assert cl.get("/settings").status_code == 403           # the demo cookie is ignored
     r = cl.post("/dev/as", data={"role": "admin"})
     assert "fabrique_as" not in r.cookies
 
@@ -116,7 +116,7 @@ def test_env_locks_fields_in_settings(idp):
     cl = web()
     login(cl, idp, groups=["fabrique-admins"])
     t = cl.get("/settings?tab=oidc").text
-    assert "Connexion active" in t and "environnement" in t and "s3cret" not in t
+    assert "Sign-in active" in t and "environment" in t and "s3cret" not in t
     cl.post("/settings/oidc", data={"issuer": "https://ailleurs.test", "client_id": "x", "scopes": "openid"})
     auth.invalidate()
     assert auth.conf()["issuer"] == ISS and auth.conf()["client_id"] == "fabrique"
@@ -125,7 +125,7 @@ def test_env_locks_fields_in_settings(idp):
 def test_misconfigured_is_closed(idp, monkeypatch):
     monkeypatch.setattr(config, "SESSION_SECRET", "court")
     r = web().get("/jobs", headers=HTML)
-    assert r.status_code == 503 and "mal configurée" in r.text
+    assert r.status_code == 503 and "misconfigured" in r.text
 
 
 def test_logout_goes_to_provider(idp):
@@ -135,11 +135,11 @@ def test_logout_goes_to_provider(idp):
     from urllib.parse import parse_qs, urlsplit
     loc = urlsplit(r.headers["location"])
     q = parse_qs(loc.query)
-    assert f"{loc.scheme}://{loc.netloc}{loc.path}" == ISS + "/logout"                        # déconnexion chez le provider…
+    assert f"{loc.scheme}://{loc.netloc}{loc.path}" == ISS + "/logout"                        # logout from the provider...
     assert q["post_logout_redirect_uri"] == [config.PUBLIC_URL + "/auth/login?out=1"] and q["client_id"] == [auth.conf()["client_id"]]
     assert cl.get("/jobs", headers=HTML).status_code == 303
-    page = cl.get("/auth/login?out=1")                                                       # …puis retour sur la page de la Fabrique
-    assert page.status_code == 200 and "Tu es déconnecté" in page.text and "Se connecter en SSO" in page.text
+    page = cl.get("/auth/login?out=1")                                                       # ...then return to the Fabrique page
+    assert page.status_code == 200 and "You are signed out." in page.text and "Sign in with SSO" in page.text
 
 
 def test_safe_next():
@@ -152,31 +152,31 @@ def _uid(name):
 
 
 def test_roles_managed_in_panel_without_groups(idp, monkeypatch):
-    for k in ("OIDC_ADMIN_GROUPS", "OIDC_VERIFIER_GROUPS"):
+    for k in ("OIDC_ADMIN_GROUPS", "OIDC_REVIEWER_GROUPS"):
         monkeypatch.setattr(config, k, [])
     monkeypatch.setattr(config, "FABRIQUE_ADMINS", ["alice"])
     auth.invalidate()
     admin, bob = web(), web()
     login(admin, idp, user="alice")
     admin.post("/settings/access", data={"default_role": "none"})
-    # Nouveau compte : en attente, seule « Mon accès » est ouverte
+    # New account: pending, only "My access" is open
     login(bob, idp, user="bob")
     assert bob.get("/jobs", headers=HTML).headers["location"] == "/access"
-    assert "attend qu'un admin" in bob.get("/access").text
+    assert "it is waiting for an admin" in bob.get("/access").text
     assert bob.post("/new", data={"title": "x", "need": "y"}).status_code == 403
-    # Il demande un accès vérificateur ; l'admin le voit dans sa boîte de réception et l'accorde
-    bob.post("/access", data={"role": "verifier", "note": "je relis les PR"})
+    # It requests reviewer access; the admin sees it in their inbox and grants it
+    bob.post("/access", data={"role": "reviewer", "note": "je relis les PR"})
     inbox = admin.get("/inbox").text
-    assert "Demandes d'accès" in inbox and "je relis les PR" in inbox
-    admin.post(f"/users/{_uid('bob')}/role", data={"role": "verifier"})
+    assert "Access requests" in inbox and "je relis les PR" in inbox
+    admin.post(f"/users/{_uid('bob')}/role", data={"role": "reviewer"})
     auth.forget_role()
-    assert bob.get("/jobs", headers=HTML).status_code == 200          # sans se reconnecter
+    assert bob.get("/jobs", headers=HTML).status_code == 200          # without logging out again
     assert bob.get("/settings").status_code == 403
-    # Le rôle choisi dans le panneau tient aux connexions suivantes, même avec des groupes différents
+    # The role chosen in the dashboard depends on the following connections, even with different groups
     bob2 = web(); login(bob2, idp, user="bob", groups=["n-importe"])
     with db.tx() as c:
         u = db.one(c, select(db.users).where(db.users.c.username == "bob"))
-    assert (u["role"], u["role_source"], u["requested_role"]) == ("verifier", "panneau", None)
+    assert (u["role"], u["role_source"], u["requested_role"]) == ("reviewer", "dashboard", None)
 
 
 def test_admin_cannot_change_own_role_and_requester_default(idp, monkeypatch):
@@ -185,9 +185,9 @@ def test_admin_cannot_change_own_role_and_requester_default(idp, monkeypatch):
     auth.invalidate()
     cl = web(); login(cl, idp, user="alice")
     r = cl.post(f"/users/{_uid('alice')}/role", data={"role": "requester"})
-    assert "propre rôle" in cl.get(r.headers["location"]).text
+    assert "own role" in cl.get(r.headers["location"]).text
     other = web(); login(other, idp, user="carla")
-    assert other.get("/jobs", headers=HTML).status_code == 200      # défaut : demandeur directement
+    assert other.get("/jobs", headers=HTML).status_code == 200      # default: requester directly
     cl.post(f"/users/{_uid('carla')}/role", data={"refuse": "1"})
     cl.post(f"/users/{_uid('carla')}/role", data={"role": "none"})
     auth.forget_role()
@@ -195,11 +195,11 @@ def test_admin_cannot_change_own_role_and_requester_default(idp, monkeypatch):
     assert web().post(f"/users/{_uid('carla')}/role", data={"role": "admin"}).status_code in (401, 303)
 
 
-# ---------- premier démarrage et comptes locaux ----------
+# ---------- first run and local accounts ----------
 
 @pytest.fixture
 def closed(monkeypatch):
-    """Installation neuve réelle : ni mode ouvert, ni OIDC."""
+    """Actual new installation: neither open mode nor OIDC."""
     monkeypatch.setattr(config, "OPEN", False)
     monkeypatch.setattr(config, "SETUP_CODE", "AAAA-BBBB-CCCC-DDDD")
     monkeypatch.setattr(config, "SESSION_SECRET", "s" * 40)
@@ -217,20 +217,20 @@ def test_fresh_install_serves_only_setup_and_needs_the_code(closed):
     r = cl.get("/jobs", headers={"accept": "text/html"})
     assert r.status_code == 303 and r.headers["location"] == "/auth/setup"
     assert cl.get("/api/x").status_code == 503 and cl.get("/health").status_code == 200
-    assert "Premier démarrage" in cl.get("/auth/setup").text
+    assert "First start" in cl.get("/auth/setup").text
     bad = cl.post("/auth/setup", data={"code": "0000-0000-0000-0000", "login": "admin", "password": GOOD, "password2": GOOD})
     assert bad.status_code == 403 and auth.mode() == "setup"
     weak = cl.post("/auth/setup", data={"code": "AAAA-BBBB-CCCC-DDDD", "login": "admin", "password": "court", "password2": "court"})
-    assert weak.status_code == 400 and "trop faible" in weak.text
+    assert weak.status_code == 400 and "Password too weak" in weak.text
     ok = cl.post("/auth/setup", data={"code": "aaaa-bbbb-cccc-dddd", "login": "admin", "name": "Admin", "password": GOOD, "password2": GOOD})
     assert ok.status_code == 303 and auth.mode() == "on"
-    assert cl.get("/settings", headers={"accept": "text/html"}).status_code == 200            # connecté, admin
+    assert cl.get("/settings", headers={"accept": "text/html"}).status_code == 200            # logged in, admin
     with db.tx() as c:
         u = db.one(c, select(db.users).where(db.users.c.username == "admin"))
     assert u["role"] == "admin" and u["password_hash"].startswith("scrypt$") and GOOD not in u["password_hash"]
     assert web().post("/auth/setup", data={"code": "AAAA-BBBB-CCCC-DDDD", "login": "autre", "password": GOOD, "password2": GOOD}).status_code == 303
     with db.tx() as c:
-        assert not db.one(c, select(db.users).where(db.users.c.username == "autre"))          # l'installation ne se rejoue pas
+        assert not db.one(c, select(db.users).where(db.users.c.username == "autre"))          # the installation is not replayed
 
 
 def test_password_login_logout_and_lockout(closed):
@@ -238,7 +238,7 @@ def test_password_login_logout_and_lockout(closed):
     cl = web()
     r = cl.get("/jobs", headers={"accept": "text/html"})
     assert r.status_code == 303 and r.headers["location"].startswith("/auth/login")
-    assert "Mot de passe" in cl.get("/auth/login").text
+    assert "Password" in cl.get("/auth/login").text
     assert cl.post("/auth/password", data={"login": "admin", "password": "faux"}).status_code == 401
     assert cl.post("/auth/password", data={"login": "inconnu", "password": GOOD}).status_code == 401
     assert cl.post("/auth/password", data={"login": "admin", "password": GOOD, "next": "/jobs"}).headers["location"] == "/jobs"
@@ -247,12 +247,12 @@ def test_password_login_logout_and_lockout(closed):
     assert cl.get("/settings", headers={"accept": "text/html"}).status_code == 303
     for _ in range(5):
         cl.post("/auth/password", data={"login": "admin", "password": "faux"})
-    assert cl.post("/auth/password", data={"login": "admin", "password": GOOD}).status_code == 429   # verrouillé un quart d'heure
+    assert cl.post("/auth/password", data={"login": "admin", "password": GOOD}).status_code == 429   # locked for fifteen minutes
 
 
 def test_local_admin_is_the_break_glass_when_oidc_is_broken(closed, monkeypatch):
     auth.create_local("admin", "Admin", GOOD, "admin", "")
-    monkeypatch.setattr(config, "OIDC_ISSUER", "https://sso.test/")      # OIDC incomplète (pas d'identifiant client)
+    monkeypatch.setattr(config, "OIDC_ISSUER", "https://sso.test/")      # incomplete OIDC (no client ID)
     auth.invalidate()
     assert auth.problems() and auth.mode() == "on" and not auth.oidc_on()
     cl = web()
@@ -270,8 +270,8 @@ def test_oidc_login_cannot_take_over_a_local_account(idp, monkeypatch):
 def test_admin_creates_local_accounts_and_user_changes_password(closed):
     auth.create_local("admin", "Admin", GOOD, "admin", "")
     cl = web(); cl.post("/auth/password", data={"login": "admin", "password": GOOD})
-    r = cl.post("/users/local", data={"login": "vera", "name": "Vera", "role": "verifier", "password": "Encore-Un-Bon-9"})
-    assert "créé" in cl.get(r.headers["location"]).text
+    r = cl.post("/users/local", data={"login": "vera", "name": "Vera", "role": "reviewer", "password": "Encore-Un-Bon-9"})
+    assert "created" in cl.get(r.headers["location"]).text
     v = web(); assert v.post("/auth/password", data={"login": "vera", "password": "Encore-Un-Bon-9"}).status_code == 303
     assert v.post("/users/local", data={"login": "x1x", "role": "admin", "password": GOOD}).headers["location"].startswith("/jobs")   # pas admin
     assert v.post("/account/password", data={"old": "faux", "new": "Tout-Nouveau-Mot-7"}).status_code == 303
@@ -291,42 +291,42 @@ def _in(cl):
 
 def test_sessions_are_revoked_server_side(closed):
     auth.create_local("admin", "Admin", GOOD, "admin", "")
-    auth.create_local("vera", "Vera", "Encore-Un-Bon-9", "verifier", "")
+    auth.create_local("vera", "Vera", "Encore-Un-Bon-9", "reviewer", "")
     with db.tx() as c:
         vid = db.one(c, select(db.users.c.id).where(db.users.c.username == "vera"))["id"]
     adm = web(); adm.post("/auth/password", data={"login": "admin", "password": GOOD})
     v = web(); v.post("/auth/password", data={"login": "vera", "password": "Encore-Un-Bon-9"})
-    # 1. se déconnecter tue aussi un cookie copié
+    # 1. logging out also kills a copied cookie
     stolen = _copy(v)
     assert _in(v) and _in(stolen)
     v.post("/auth/logout")
     assert not _in(stolen)
-    # 2. un admin ferme les sessions d'un compte ; seul un admin le peut
+    # 2. an admin closes an account's sessions; only an admin can do this
     v.post("/auth/password", data={"login": "vera", "password": "Encore-Un-Bon-9"})
     assert _in(v) and v.post(f"/users/{vid}/logout").headers["location"].startswith("/jobs") and _in(v)
     r = adm.post(f"/users/{vid}/logout")
-    assert "fermées" in adm.get(r.headers["location"]).text and not _in(v) and _in(adm)
-    # 3. changer son mot de passe ferme les autres sessions, pas celle qui vient de le changer
+    assert "closed" in adm.get(r.headers["location"]).text and not _in(v) and _in(adm)
+    # 3. changing your password closes other sessions, not the one that just changed it
     v.post("/auth/password", data={"login": "vera", "password": "Encore-Un-Bon-9"})
     other = _copy(v)
     v.post("/account/password", data={"old": "Encore-Un-Bon-9", "new": "Tout-Nouveau-Mot-7"})
     assert _in(v) and not _in(other)
-    assert "Sessions fermées" in adm.get("/activity").text
+    assert "Sessions closed" in adm.get("/activity").text
 
 
 def test_jobs_view_preference_follows_the_account(closed):
     auth.create_local("admin", "Admin", GOOD, "admin", "")
-    auth.create_local("vera", "Vera", "Encore-Un-Bon-9", "verifier", "")
+    auth.create_local("vera", "Vera", "Encore-Un-Bon-9", "reviewer", "")
     a = web(); a.post("/auth/password", data={"login": "admin", "password": GOOD})
     page = lambda cl: cl.get("/jobs?view=board", headers={"accept": "text/html"}).text
-    assert 'value="stages" role="menuitemradio" aria-checked="true"' in page(a)                # défaut : par étape
+    assert 'value="stages" role="menuitemradio" aria-checked="true"' in page(a)                # default: per step
     a.post("/prefs/jobs", data={"board": "compact", "list": "flat"})
     assert 'value="compact" role="menuitemradio" aria-checked="true"' in page(a)
-    other = web(); other.post("/auth/password", data={"login": "admin", "password": GOOD})   # autre navigateur, même compte
+    other = web(); other.post("/auth/password", data={"login": "admin", "password": GOOD})   # other browser, same account
     assert 'value="compact" role="menuitemradio" aria-checked="true"' in page(other)
     assert 'value="flat" role="menuitemradio" aria-checked="true"' in page(other)
     v = web(); v.post("/auth/password", data={"login": "vera", "password": "Encore-Un-Bon-9"})
-    assert 'value="stages" role="menuitemradio" aria-checked="true"' in page(v)                # un autre compte garde le défaut
+    assert 'value="stages" role="menuitemradio" aria-checked="true"' in page(v)                # another account keeps the default
     with db.tx() as c:
         assert db.one(c, select(db.users.c.prefs).where(db.users.c.username == "admin"))["prefs"] == {"jobs": {"board": "compact", "list": "flat"}}
 
@@ -338,4 +338,4 @@ def test_secrets_are_generated_when_env_is_empty(tmp_path, monkeypatch):
     assert len(a) >= 48 and config._secret("SESSION_SECRET") == a and "SESSION_SECRET" in config.GENERATED
     assert oct((tmp_path / "secrets.json").stat().st_mode & 0o777) == "0o600"
     monkeypatch.setenv("SESSION_SECRET", "x" * 40)
-    assert config._secret("SESSION_SECRET") == "x" * 40                                       # l'environnement l'emporte
+    assert config._secret("SESSION_SECRET") == "x" * 40                                       # the environment wins

@@ -1,12 +1,18 @@
-"""Fournisseurs Git : Forgejo, GitLab et GitHub, même interface. Le jeton ne sort jamais du runner :
-il est passé à git par des variables GIT_CONFIG_* (pas dans l'URL, pas dans .git/config), et seulement quand l'agent
-ne tourne pas.
+"""Git providers: Forgejo, GitLab and GitHub, same interface. The token never leaves the runner: it is passed to git
+through GIT_CONFIG_* variables (not in the URL, not in .git/config), and only while the agent is not running.
 
-Interface : clone_url, git_env, pr_url, open_pr, pr (-> {"head": {"sha"}, "merge_commit_sha"}), upsert_comment, merge.
-Le jeton du runner peut pousser des branches fabrique/*, ouvrir des PR/MR et les fusionner ; la branche principale est
-protégée contre la poussée directe (Forgejo : règle de branche ; GitLab : « push » Maintainers, « merge » Developers ;
-GitHub : règle de branche ou ruleset, indisponibles sur un dépôt privé en offre gratuite — le runner ne pousse de toute
-façon que fabrique/*)."""
+Interface: clone_url, git_env, pr_url, open_pr, pr (-> {"head": {"sha"}, "merge_commit_sha"}), upsert_comment, merge.
+The runner's token can push fabrique/* branches, open PRs/MRs and merge them; the main branch is protected against
+direct pushes (Forgejo: branch rule; GitLab: "push" Maintainers, "merge" Developers; GitHub: branch rule or ruleset,
+unavailable on a private repo on the free plan — the runner only ever pushes fabrique/* anyway)."""
+try:
+    from .texts import M
+except ImportError:
+    try:
+        from texts import M
+    except ImportError:
+        def M(t, **p):
+            return t.format(**p) if p else t
 import base64, time
 from urllib.parse import quote
 import httpx
@@ -21,7 +27,7 @@ class Forgejo:
                                 headers={"Authorization": f"token {self.token}", "Accept": "application/json"})
 
     def me(self):
-        """Compte du runner (en minuscules), lu une fois : le runner ne met à jour que SES commentaires."""
+        """Runner account (in lowercase), read once: the runner only updates ITS comments."""
         if not getattr(self, "_me", ""):
             self._me = (self.account() or "").lower()
         return self._me
@@ -30,7 +36,7 @@ class Forgejo:
         return f"{self.base}/{slug}.git"
 
     def git_env(self):
-        """Variables qui donnent l'en-tête d'authentification à git le temps d'une commande."""
+        """Variables that provide the authentication header to git during a command."""
         return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"http.{self.base}/.extraheader",
                 "GIT_CONFIG_VALUE_0": f"Authorization: token {self.token}"}
 
@@ -38,14 +44,14 @@ class Forgejo:
         return f"{self.base}/{slug}/pulls/{n}"
 
     def account(self):
-        """Nom du compte du runner chez le fournisseur (pour dire à qui donner l'accès)."""
+        """Account name of the runner at the Git provider (to specify to whom access should be granted)."""
         return self.api.get("/user").json().get("login") or ""
 
     def open_pr(self, slug, head, base, title, body):
         r = self.api.post(f"/repos/{slug}/pulls", json={"head": head, "base": base, "title": title, "body": body})
         if r.status_code == 409 or (r.status_code == 422 and "exist" in r.text):
             for p in self.api.get(f"/repos/{slug}/pulls", params={"state": "open", "limit": 50}).json():
-                # seulement une PR de CE dépôt (pas celle d'un fork qui porterait le même nom de branche)
+                # only a PR from THIS repo (not one from a fork with the same branch name)
                 if p["head"]["ref"] == head and ((p["head"].get("repo") or {}).get("full_name") or "").lower() == slug.lower():
                     self.api.patch(f"/repos/{slug}/pulls/{p['number']}", json={"title": title, "body": body})
                     return p["number"]
@@ -58,13 +64,13 @@ class Forgejo:
         return r.json()
 
     def create_repo(self, namespace, name, description=""):
-        """Dépôt privé et vide dans l'organisation dédiée ; « existe déjà » n'est pas une erreur s'il est vide."""
+        """Private and empty repo in the dedicated organization; "already exists" is not an error if it is empty."""
         r = self.api.post(f"/orgs/{namespace}/repos", json={"name": name, "description": description, "private": True,
                                                             "auto_init": False, "default_branch": "main"})
         if r.status_code == 409:
-            return "existe"
+            return "exists"
         r.raise_for_status()
-        return "créé"
+        return M("created")
 
     def open_prs(self, slug):
         r = self.api.get(f"/repos/{slug}/pulls", params={"state": "open", "limit": 20})
@@ -74,7 +80,7 @@ class Forgejo:
     MARK = "<!-- fabrique:decision -->"
 
     def upsert_comment(self, slug, n, body):
-        """Un seul commentaire de décision par PR, mis à jour sur place."""
+        """Only one decision comment per PR, updated in place."""
         body = self.MARK + "\n" + body
         r = self.api.get(f"/repos/{slug}/issues/{n}/comments")
         r.raise_for_status()
@@ -86,18 +92,18 @@ class Forgejo:
         self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": body}).raise_for_status()
 
     def merge(self, slug, n, sha, title, message=""):
-        """Fusion « squash » épinglée au sha vérifié : refusée par Forgejo si la tête de la PR a bougé. message : corps du
-        commit de fusion (ligne « Fabrique-Job: … »)."""
+        """Squash merge pinned to the verified sha: refused by Forgejo if the PR head has moved. message: merge
+        commit body (line "Fabrique-Job: ...")."""
         r = self.api.post(f"/repos/{slug}/pulls/{n}/merge", json={"Do": "squash", "head_commit_id": sha, "MergeTitleField": title,
                                                                   "delete_branch_after_merge": True,
                                                                   **({"MergeMessageField": message} if message else {})})
         if r.status_code not in (200, 204):
-            raise RuntimeError(f"fusion refusée par Forgejo ({r.status_code}) : {r.text[:200]}")
+            raise RuntimeError(M("merge refused by Forgejo ({status_code}): {p}", status_code=r.status_code, p=r.text[:200]))
         return self.pr(slug, n).get("merge_commit_sha") or ""
 
 
 class GitLab:
-    """GitLab (API v4). Le slug est le chemin complet du projet (groupe/sous-groupe/projet) ; le numéro est l'iid de la MR."""
+    """GitLab (API v4). The slug is the full project path (group/sub-group/project); the number is the MR iid."""
     MARK = Forgejo.MARK
 
     def __init__(self, base=None, token=None, transport=None):
@@ -111,7 +117,7 @@ class GitLab:
         return "/projects/" + quote(slug, safe="")
 
     def me(self):
-        """Compte du runner (en minuscules), lu une fois : le runner ne met à jour que SES commentaires."""
+        """Runner account (in lowercase), read once: the runner only updates ITS comments."""
         if not getattr(self, "_me", ""):
             self._me = (self.account() or "").lower()
         return self._me
@@ -133,9 +139,9 @@ class GitLab:
     def open_pr(self, slug, head, base, title, body):
         r = self.api.post(f"{self._p(slug)}/merge_requests", json={"source_branch": head, "target_branch": base, "title": title,
                                                                     "description": body, "remove_source_branch": True})
-        if r.status_code == 409:   # une MR ouverte existe déjà pour cette branche : on la met à jour
+        if r.status_code == 409:   # an open MR already exists for this branch: we update it
             for m in self.api.get(f"{self._p(slug)}/merge_requests", params={"state": "opened", "source_branch": head}).json():
-                if m.get("source_project_id") != m.get("target_project_id"):   # MR venue d'un fork : pas la nôtre
+                if m.get("source_project_id") != m.get("target_project_id"):   # MR coming from a fork: not ours
                     continue
                 self.api.put(f"{self._p(slug)}/merge_requests/{m['iid']}", json={"title": title, "description": body}).raise_for_status()
                 return m["iid"]
@@ -155,9 +161,9 @@ class GitLab:
         r = self.api.post("/projects", json={"name": name, "path": name, "namespace_id": g.json()["id"], "visibility": "private",
                                              "description": description, "initialize_with_readme": False, "default_branch": "main"})
         if r.status_code == 400 and "has already been taken" in r.text:
-            return "existe"
+            return "exists"
         r.raise_for_status()
-        return "créé"
+        return M("created")
 
     def open_prs(self, slug):
         r = self.api.get(f"{self._p(slug)}/merge_requests", params={"state": "opened", "per_page": 20})
@@ -176,7 +182,7 @@ class GitLab:
         self.api.post(f"{self._p(slug)}/merge_requests/{n}/notes", json={"body": body}).raise_for_status()
 
     def merge(self, slug, n, sha, title, wait=2.0, message=""):
-        """Fusion « squash » épinglée au sha vérifié (paramètre sha : GitLab refuse si la tête a bougé)."""
+        """"Squash" merge pinned to the verified sha (sha parameter: GitLab refuses if the head has moved)."""
         full = title + (f"\n\n{message}" if message else "")
         for attempt in range(4):
             r = self.api.put(f"{self._p(slug)}/merge_requests/{n}/merge",
@@ -184,14 +190,14 @@ class GitLab:
             if r.status_code == 200:
                 m = r.json()
                 return m.get("merge_commit_sha") or m.get("squash_commit_sha") or ""
-            if r.status_code in (405, 422) and attempt < 3:   # mergeabilité encore en calcul juste après une poussée
+            if r.status_code in (405, 422) and attempt < 3:   # mergeability still being calculated right after a push
                 time.sleep(wait)
                 continue
-            raise RuntimeError(f"fusion refusée par GitLab ({r.status_code}) : {r.text[:200]}")
+            raise RuntimeError(M("merge refused by GitLab ({status_code}): {p}", status_code=r.status_code, p=r.text[:200]))
 
 
 class GitHub:
-    """GitHub (API REST v3, ou GitHub Enterprise via GITHUB_API_URL). Le numéro est celui de la PR."""
+    """GitHub (REST API v3, or GitHub Enterprise via GITHUB_API_URL). The number is that of the PR."""
     MARK = Forgejo.MARK
 
     def __init__(self, base=None, api=None, token=None, transport=None):
@@ -202,7 +208,7 @@ class GitHub:
                                          "X-GitHub-Api-Version": "2022-11-28"})
 
     def me(self):
-        """Compte du runner (en minuscules), lu une fois : le runner ne met à jour que SES commentaires."""
+        """Runner account (in lowercase), read once: the runner only updates ITS comments."""
         if not getattr(self, "_me", ""):
             self._me = (self.account() or "").lower()
         return self._me
@@ -223,7 +229,7 @@ class GitHub:
 
     def open_pr(self, slug, head, base, title, body):
         r = self.api.post(f"/repos/{slug}/pulls", json={"head": head, "base": base, "title": title, "body": body})
-        if r.status_code == 422 and "already exists" in r.text:   # une PR ouverte existe déjà pour cette branche
+        if r.status_code == 422 and "already exists" in r.text:   # an open PR already exists for this branch
             owner = slug.split("/")[0]
             for p in self.api.get(f"/repos/{slug}/pulls", params={"state": "open", "head": f"{owner}:{head}"}).json():
                 self.api.patch(f"/repos/{slug}/pulls/{p['number']}", json={"title": title, "body": body}).raise_for_status()
@@ -243,9 +249,9 @@ class GitHub:
         url = "/user/repos" if namespace == me else f"/orgs/{namespace}/repos"
         r = self.api.post(url, json={"name": name, "description": description, "private": True, "auto_init": False})
         if r.status_code == 422 and "already exists" in r.text:
-            return "existe"
+            return "exists"
         r.raise_for_status()
-        return "créé"
+        return M("created")
 
     def open_prs(self, slug):
         r = self.api.get(f"/repos/{slug}/pulls", params={"state": "open", "per_page": 20})
@@ -264,7 +270,7 @@ class GitHub:
         self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": body}).raise_for_status()
 
     def merge(self, slug, n, sha, title, wait=2.0, message=""):
-        """Fusion « squash » épinglée au sha vérifié (GitHub refuse avec 409 si la tête a bougé), puis branche supprimée."""
+        """Squash merge pinned to the verified sha (GitHub refuses with 409 if the head has moved), then branch deleted."""
         for attempt in range(4):
             r = self.api.put(f"/repos/{slug}/pulls/{n}/merge", json={"sha": sha, "merge_method": "squash", "commit_title": title,
                                                                      **({"commit_message": message} if message else {})})
@@ -277,23 +283,23 @@ class GitHub:
                 except Exception:
                     pass
                 return merged
-            if r.status_code == 405 and attempt < 3 and "not mergeable" not in r.text.lower():   # mergeabilité en calcul
+            if r.status_code == 405 and attempt < 3 and "not mergeable" not in r.text.lower():   # mergeability being calculated
                 time.sleep(wait)
                 continue
-            raise RuntimeError(f"fusion refusée par GitHub ({r.status_code}) : {r.text[:200]}")
+            raise RuntimeError(M("merge refused by GitHub ({status_code}): {p}", status_code=r.status_code, p=r.text[:200]))
 
 
 def make(provider, base=None, token=None):
-    """Client d'un fournisseur. Adresse et jeton : ceux du panneau s'ils sont donnés, sinon les variables du runner."""
+    """Client of a Git provider. Address and token: those from the dashboard if provided, otherwise the runner's variables."""
     if provider == "gitlab":
         g = GitLab(base=base, token=token)
     elif provider == "github":
         api = None
-        if base and base.rstrip("/") != "https://github.com":   # GitHub Enterprise : API sous /api/v3
+        if base and base.rstrip("/") != "https://github.com":   # GitHub Enterprise: API under /api/v3
             api = base.rstrip("/") + "/api/v3"
         g = GitHub(base=base, api=api, token=token)
-    elif provider in ("forgejo", "gitea"):   # Gitea : même API que Forgejo
+    elif provider in ("forgejo", "gitea"):   # Gitea: same API as Forgejo
         g = Forgejo(base=base, token=token)
     else:
-        raise RuntimeError(f"fournisseur Git non pris en charge par ce runner : {provider}")
+        raise RuntimeError(M("Git provider not supported by this runner: {provider}", provider=provider))
     return g
