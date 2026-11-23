@@ -132,7 +132,8 @@ class FakeSMTP:
         self.log.append(("login", u, p))
 
     def send_message(self, m):
-        self.log.append(("send", m["To"], m["Subject"], m.get_content()))
+        body = m.get_body(preferencelist=("plain",)) or m
+        self.log.append(("send", m["To"], m["Subject"], body.get_content()))
 
     def quit(self):
         pass

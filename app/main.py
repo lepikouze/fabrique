@@ -188,15 +188,16 @@ def start_steps():
         models = db.get_setting(c, "models")[0] or []
         model_ok = bool(models) and not providers.default_problem(c)
         git = db.get_setting(c, "git")[0] or []
-        repos = db.rows(c, select(db.repos.c.onboarding, db.repos.c.recipe))
+        repos = db.rows(c, select(db.repos.c.onboarding, db.repos.c.recipe, db.repos.c.settings))
+    real = [r for r in repos if not jobs.is_demo_repo(r)]  # demo data never counts as real setup
     live = [r for r in runners if r["token_hash"]]
     return [
         (M("Administrator account"), True, "/settings?tab=users", M("Created at first start; it is also the fallback account.")),
         (M("A runner online"), any(r["online"] for r in live), "/runners", M("The built-in runner registers itself; it shows up online in less than a minute.")),
         (M("A default model"), bool(provs) and model_ok, "/settings?tab=agents",
          M("Add a provider (Anthropic, OpenAI or local server), its key, tick the models to offer, then choose the default agent and model.")),
-        (M("A Git provider"), any(g.get("token") for g in git) or bool(repos), "/settings?tab=git", M("Git host address and the token of a dedicated bot account.")),
-        (M("A first repo"), any(r["onboarding"] in ("ready", "blank") or r["recipe"] is not None for r in repos), "/repos", M("Add a repo: its onboarding starts on its own; then merge the recipe PR.")),
+        (M("A Git provider"), any(g.get("token") for g in git), "/settings?tab=git", M("Git host address and the token of a dedicated bot account.")),
+        (M("A first repo"), any(r["onboarding"] in ("ready", "blank") or r["recipe"] is not None for r in real), "/repos", M("Add a repo: its onboarding starts on its own; then merge the recipe PR.")),
     ]
 
 

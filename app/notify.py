@@ -138,6 +138,34 @@ def jira_text(t):
     return "{noformat}\n" + str(t or "").replace("{noformat}", "{ noformat }") + "\n{noformat}"
 
 
+def email_html(p):
+    """Sober HTML body for an e-mail notification; the plain-text part stays the fallback."""
+    import html as _h
+    lang = p.get("lang") or i18n.DEFAULT
+    tr = lambda m: i18n.tr(m, lang)
+    title = _h.escape(p.get("title") or "")
+    text = _h.escape(p.get("text") or "").replace("\n", "<br>")
+    url = _h.escape(p.get("url") or config.PUBLIC_URL or "")
+    pr = ""
+    if p.get("pr_url"):
+        pr = ('<p style="margin:16px 0 0;font-size:13px;">'
+              '<a href="%s" style="color:#c2410c;">%s</a></p>' % (_h.escape(p["pr_url"]), _h.escape(tr(M("View the pull request")))))
+    return (
+        '<!doctype html><html lang="%s"><body style="margin:0;background:#f6f5f3;">'
+        '<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background:#f6f5f3;padding:24px 12px;"><tr><td align="center">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%%;max-width:480px;background:#ffffff;border:1px solid #e6e1da;border-radius:10px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">'
+        '<tr><td style="padding:16px 24px;border-bottom:1px solid #efe9e1;font-size:17px;font-weight:700;color:#1a1a1a;letter-spacing:-0.02em;">Fabrique</td></tr>'
+        '<tr><td style="padding:24px;">'
+        '<h1 style="margin:0 0 12px;font-size:16px;font-weight:600;color:#1a1a1a;">%s</h1>'
+        '<p style="margin:0 0 20px;font-size:14px;line-height:1.55;color:#55555c;">%s</p>'
+        '<a href="%s" style="display:inline-block;background:#c2410c;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:10px 18px;border-radius:7px;">%s</a>'
+        '%s'
+        '</td></tr>'
+        '<tr><td style="padding:14px 24px;border-top:1px solid #efe9e1;font-size:12px;color:#8c887f;">%s</td></tr>'
+        '</table></td></tr></table></body></html>'
+    ) % (_h.escape(lang), title, text, url, _h.escape(tr(M("Open in Fabrique"))), pr, _h.escape(tr(M("You receive this message because you are subscribed to Fabrique notifications."))))
+
+
 def emit(c, event, job=None, repo=None, detail=""):
     """Queues the event for each active channel subscribed to it (within the caller's transaction)."""
     if event not in EVENTS:
@@ -201,6 +229,7 @@ def deliver(ch, p):
         msg = EmailMessage()
         msg["Subject"], msg["From"], msg["To"] = f"[Fabrique] {p['title']}", cfg["sender"], ", ".join(to)
         msg.set_content(f"{p['title']}\n\n{p['text']}\n\n{p['url']}" + (f"\nPR : {p['pr_url']}" if p.get("pr_url") else ""))
+        msg.add_alternative(email_html(p), subtype="html")
         port, sec_mode = int(cfg.get("port") or 587), cfg.get("security", "starttls")
         ctx = ssl.create_default_context()
         if sec_mode == "ssl":

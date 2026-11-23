@@ -1970,6 +1970,8 @@
   "Simultaneous jobs": "Jobs simultanés",
   "no limit": "pas de limite",
   "the Git host refused the merge after {n} attempts: {why}. The pull request is unchanged: approve the merge again to retry": "la forge a refusé le merge après {n} essais : {why}. La pull request est inchangée : approuve de nouveau le merge pour réessayer",
-  "the Git host refused the merge for now: new attempt in {wait} s ({why})": "la forge a refusé le merge pour l'instant : nouvel essai dans {wait} s ({why})"
+  "the Git host refused the merge for now: new attempt in {wait} s ({why})": "la forge a refusé le merge pour l'instant : nouvel essai dans {wait} s ({why})",
+  "View the pull request": "Voir la pull request",
+  "You receive this message because you are subscribed to Fabrique notifications.": "Vous recevez ce message car vous êtes abonné aux notifications de la Fabrique."
  }
 }

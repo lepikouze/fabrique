@@ -6,6 +6,20 @@ Notable changes to Fabrique, most recent first. The format follows
 
 Interface labels are quoted in French, as they appear on a French screen.
 
+## [0.8.4] - 2026-11-23
+
+### Fixed
+- **Demo mode no longer interferes with real setup.** The setup checklist counted demo data as real configuration: the
+  "Git provider" step passed as soon as any repo existed (demo included), and the "first repo" step counted demo repos.
+  It now counts only real objects, so on a demonstration install the Git, repo and model steps stay red until something
+  real is configured.
+- **The demo repo `team/link-notebook` is now flagged as demo**, like the others. It was created without the flag, so it
+  stayed visible even when the Demonstration toggle (Settings) was off and was not hidden with the rest of the demo data.
+
+### Changed
+- **E-mail notifications have a clean HTML body** (sober card, Fabrique wordmark, the accent colour, a link to the job
+  and to the pull request), with the plain-text version kept as the fallback. Texts follow the notifications language.
+
 ## [0.8.3] - 2026-11-23
 
 Three things real jobs asked for. No migration. Chart 0.5.3.

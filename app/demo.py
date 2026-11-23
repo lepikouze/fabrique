@@ -134,7 +134,7 @@ def seed():
         t = time.time()
         base = {"merge_policy": "confident", "size_limit": 300}
         r1 = c.execute(insert(db.repos).values(provider="forgejo", slug="team/link-notebook", name=M("Link notebook (trial)"), is_default=True,
-                       onboarding="ready", settings=dict(base), created_at=t - 86400 * 3, last_activity=t,
+                       onboarding="ready", settings=dict(base, demo=True), created_at=t - 86400 * 3, last_activity=t,
                        recipe={"setup": ["pip install -r requirements.txt"], "checks": {k.lower(): cmd for k, cmd, _ in CHECKS}})).inserted_primary_key[0]
         r2 = c.execute(insert(db.repos).values(provider="forgejo", slug="team/watch", name=M("Watch"), onboarding="ready",
                        settings={"merge_policy": "trial", "demo": True}, created_at=t - 86400 * 2, last_activity=t - 7200,
