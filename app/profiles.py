@@ -20,6 +20,10 @@ EXAMPLES = {"agent": M("Claude Opus 5.5 · local: Qwen3.8 27B. The longest and m
             "review": M("Claude Sonnet 5.5 · local: Gemma 4 26B. Ideally another family than the agent's: a second opinion."),
             "study": M("Claude Sonnet 5.5, or Opus for a hard study · local: Qwen3.8 27B."),
             "onboarding": M("Claude Haiku 5.5 · local: Gemma 4 26B. A simple task, checked by the runner.")}
+# Optional model per reviewer: empty = the "Reviewers" model. A stronger model where it counts (code, security), a local one
+# elsewhere: a weak reviewer approves everything (FAB-28), and its reviews cost little since each is a single request.
+REVIEWERS = {"code": M("Code reviewer"), "security": M("Security reviewer"), "architecture": M("Architecture reviewer"),
+             "infra": M("Infrastructure reviewer")}
 INHERIT = "provider"   # effort: provider setting (the level defined on the compatible provider)
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
@@ -80,6 +84,12 @@ def save(c, by, pid, name, roles, new=False):
         if model and model not in known:
             raise Invalid(M("{p}: unknown model ({model}).", p=ROLES[role][0], model=model))
         clean[role] = {"model": model, "effort": INHERIT}
+    for rv in REVIEWERS:
+        model = str((roles.get(f"review_{rv}") or {}).get("model") or "")
+        if model and model not in known:
+            raise Invalid(M("{p}: unknown model ({model}).", p=REVIEWERS[rv], model=model))
+        if model:
+            clean[f"review_{rv}"] = {"model": model, "effort": INHERIT}
     missing = [ROLES[r][0] for r in ROLES if not clean[r]["model"]]
     if missing:
         raise Invalid(M("Choose a model for each role (missing: ") + ", ".join(missing) + ").")
@@ -147,7 +157,10 @@ def resolve(c, repo_settings, source, job_model="", job_profile=""):
     effort = INHERIT                                     # the effort is that of the model provider (set on the provider)
     rv = roles.get("review") or {}
     review = rv.get("model") or ""
-    return model, {"profile": prof["name"], "effort": INHERIT, "review_model": review if review != model else "", "review_effort": INHERIT}
+    per = {k: (roles.get(f"review_{k}") or {}).get("model") for k in REVIEWERS}
+    per = {k: v for k, v in per.items() if v and v != (review or model)}
+    return model, {"profile": prof["name"], "effort": INHERIT, "review_model": review if review != model else "", "review_effort": INHERIT,
+                   **({"review_models": per} if per else {})}
 
 
 def apply_effort(runtime, effort):

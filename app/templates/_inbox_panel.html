@@ -34,14 +34,15 @@
   <p class="verdict {{ 'ok' if d.confident else 'amber' }}">{{ ic('check' if d.confident else 'x') }}{{ d.verdict }}</p>{% endif %}
   {% set checks = TO_CHECK(j) %}{% set chg = CHANGES_URL(j) %}
   {% if checks %}<div class="callout c-amber"><b class="ct">To check before approving</b>
-   <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b>{{ COLON() }}{{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
+   <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b>{{ COLON() }}{% for x in k.parts or [] %}{% if not loop.first %} ; {% endif %}{{ x }}{% endfor %}{% if k.parts and k.text %} {% endif %}{{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
   {{ changes(j) }}
   <p class="links">{% if chg %}<a class="link" href="{{ chg }}" target="_blank" rel="noopener noreferrer">See the changes {{ ic('ext') }}</a>{% endif %}
    {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="link" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Review PR #{{ j.pr_number }} {{ ic('ext') }}</a>{% endif %}</p>
   <form method="post" action="/jobs/{{j.ref}}/decide" class="decide">
-   <input name="note" maxlength="300" placeholder="Comment for the audit log (optional)" aria-label="Comment">
+   <input name="note" maxlength="1000" placeholder="Comment for the audit log, or what to change (optional)" aria-label="Comment">
    <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approve the merge</button>
-   <button class="btn danger" name="verdict" value="refuse">Refuse</button>
+   <button class="btn" name="verdict" value="changes" title="The agent resumes on the same branch with the reviews and your comment, then the checks and reviews run again on the same PR">Ask for changes</button>
+   <button class="btn danger" name="verdict" value="refuse" title="The PR is closed on the Git host, without merging">Refuse</button>
   </form>
   {% if j.source != 'onboarding' %}<form method="post" action="/jobs/{{j.ref}}/reviews" class="inline"><button class="btn" title="The runner reviews the same sha again, without restarting the agent">Rerun the review</button></form>{% endif %}
  {% elif cur.kind == 'spec' %}

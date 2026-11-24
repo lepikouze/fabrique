@@ -72,10 +72,22 @@ class Run:
         # The instructions are in English; they tell the model in which language to write for people (the job language).
         self.system = (system or PLAYBOOK).replace("@LANGUAGE@", messages.language((getattr(ctx, "repo", None) or {}).get("lang")))
         self.session_id, self.cost, self.tokens, self.error, self.result = resume, 0.0, 0, None, ""
+        self._by_msg = {}   # model response id -> its usage (deduplicated count)
+        self._shown = 0.0   # cost last shown: the live figure never goes down
         self.subagents = []
         self.stalled = self.cancelled = False
         self.proc = None
         self.last = time.time()
+
+    def context_env(self):
+        """Claude Code does not know the context window of a local model: it then never summarizes the conversation,
+        which grows until the server refuses or cuts the responses (FAB-22: 125,000 tokens out of 131,072). The window
+        read from the model server is given to it, so that it summarizes in time."""
+        if not self.local or getattr(self.ctx.model, "get", None) is None:
+            return {}
+        from .gateway import context_size
+        n = context_size(self.ctx.model)
+        return {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(n)} if n else {}
 
     def command(self):
         cmd = [config.CLAUDE_BIN, "-p", self.prompt, "--output-format", "stream-json", "--verbose",
@@ -92,15 +104,18 @@ class Run:
     def _price(self, u):
         if self.local:
             return 0.0
-        pin, pout, pcache = config.price(self.ctx.model["id"])
+        pin, pout, pcache = config.price(self.ctx.model["id"], self.ctx.model)
         return (u.get("input_tokens", 0) * pin + u.get("output_tokens", 0) * pout
                 + u.get("cache_read_input_tokens", 0) * pcache + u.get("cache_creation_input_tokens", 0) * pin * 1.25) / 1e6
 
     def _usage(self, final=False):
-        self.panel.event(self.ctx.ref, type="usage", cost=round(self.ctx.base_cost + self.cost, 4), tokens=self.ctx.base_tokens + self.tokens,
+        # Live, the cost is an estimate that the provider's own total corrects at the end of the run: the figure shown never
+        # goes down during the run (the final figure is set by the runner once the run is over).
+        self._shown = max(self._shown, round(self.ctx.base_cost + self.cost, 4))
+        self.panel.event(self.ctx.ref, type="usage", cost=self._shown, tokens=self.ctx.base_tokens + self.tokens,
                          session_id=self.session_id or "",
                          agents=[{"name": M("main session"), "task": self.ctx.title, "model": self.ctx.model["id"],
-                                  "tokens": self.ctx.base_tokens + self.tokens, "cost": round(self.ctx.base_cost + self.cost, 4), "running": not final}]
+                                  "tokens": self.ctx.base_tokens + self.tokens, "cost": self._shown, "running": not final}]
                          + [{"name": s["name"], "task": s["task"], "model": self.ctx.model["id"], "tokens": 0, "cost": 0, "running": not final}
                             for s in self.subagents])
 
@@ -139,9 +154,12 @@ class Run:
         elif t == "assistant":
             msg = m.get("message") or {}
             u = msg.get("usage") or {}
-            self.tokens += (u.get("input_tokens", 0) + u.get("output_tokens", 0) + u.get("cache_read_input_tokens", 0)
-                            + u.get("cache_creation_input_tokens", 0))
-            self.cost += self._price(u)
+            # Claude Code sends one line per content block (thinking, text, tool call), each repeating the usage of the
+            # same model response: counted once per response (its latest usage), never added up line by line.
+            self._by_msg[msg.get("id") or f"line-{len(self._by_msg)}"] = u
+            self.tokens = sum(x.get("input_tokens", 0) + x.get("output_tokens", 0) + x.get("cache_read_input_tokens", 0)
+                              + x.get("cache_creation_input_tokens", 0) for x in self._by_msg.values())
+            self.cost = sum(self._price(x) for x in self._by_msg.values())
             for blk in msg.get("content") or []:
                 if blk.get("type") == "tool_use":
                     self._infer_stage(blk.get("name", ""))
@@ -165,6 +183,7 @@ class Run:
     def run(self):
         ex = self.ctx.ex
         menv, self.local = model_env(self.ctx.model, ex.gateway_url(), self.ctx.fab_token)
+        menv.update(self.context_env())
         env = base_env(self.ctx.home, {"FAB_RELAY": ex.relay_url(), "FAB_TOKEN": self.ctx.fab_token,
                                        # Network volume (NFS) that presents files under a different owner than
                                        # the job user: git would refuse the repo ("dubious ownership"). The job Pod
@@ -181,7 +200,11 @@ class Run:
         def watchdog():   # watchdog: no line from the stream for idle_max seconds -> stop, the runner restarts it once
             while not self.done:
                 time.sleep(1 if config.WATCHDOG_SECONDS else 5)
-                if not self.done and time.time() - self.last > idle_max:
+                # A model still answering (a request in progress at the key gateway) is not a silent agent: a local model
+                # can take more than the threshold for one long response. Up to three thresholds without a byte, though.
+                busy = getattr(self.ctx, "gw_busy", 0) > 0
+                last = max(self.last, getattr(self.ctx, "gw_seen", 0) or 0)
+                if not self.done and time.time() - last > (idle_max * 3 if busy else idle_max):
                     self.stalled = True
                     self._kill(M("no activity for {max} min", max=max(1, idle_max // 60)))
                     return
@@ -243,7 +266,7 @@ class CodexRun(Run):
     def _price(self, u):
         if self.local:
             return 0.0
-        pin, pout, pcache = config.price(self.ctx.model["id"])
+        pin, pout, pcache = config.price(self.ctx.model["id"], self.ctx.model)
         cached = u.get("cached_input_tokens", 0)
         return ((u.get("input_tokens", 0) - cached) * pin + cached * pcache + u.get("output_tokens", 0) * pout) / 1e6
 

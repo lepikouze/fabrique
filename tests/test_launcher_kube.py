@@ -108,7 +108,7 @@ def test_exec_sets_environment_and_workdir_and_stays_in_the_job_space(L):
 
 def test_stop_and_kill(L):
     L.start("FAB-5")
-    assert L.kill("FAB-5") == {"killed": True} and L.calls[-1][2] == ["kill", "-9", "-1"]
+    assert L.kill("FAB-5") == {"killed": True} and L.calls[-1][2] == ["sh", "-c", "kill -9 -1"]
     assert L.stop("FAB-5") == {"stopped": True} and "fabrique-job-fab-5" not in L.core.pods
     assert L.stop("FAB-5") == {"stopped": True} and L.kill("FAB-5") == {"killed": True}    # already sent: without error
 

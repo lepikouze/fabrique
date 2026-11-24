@@ -167,7 +167,7 @@ class KubeLauncher:
         p = self._mine(ref)
         if p is not None and p.status.phase == "Running":
             try:
-                self.execer(self.core, name_of(ref), self.ns, ["kill", "-9", "-1"], lambda o: None)
+                self.execer(self.core, name_of(ref), self.ns, base.KILL_ALL, lambda o: None)
             except Exception as e:
                 log.warning("%s: stopping the processes: %s", ref, e)
         return {"killed": True}

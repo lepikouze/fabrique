@@ -7,7 +7,7 @@ the mention "machine translation", and the original stays one click away. Nothin
 only when someone asks.
 """
 from .i18n import M
-import hashlib, logging, time
+import hashlib, logging, threading, time
 from sqlalchemy import insert, select
 from . import db, i18n, providers
 
@@ -63,12 +63,67 @@ def prose(j):
     return texts[:MAX_TEXTS]
 
 
+_running = {}            # (job id, language) -> start time: one translation at a time per job and language
+_failed = {}             # (job id, language) -> (time, reason) of the last failed translation, shown for a while
+_lock = threading.Lock()
+SYNC = False             # tests: the translation runs in the request instead of a thread
+FAILED_SHOWN = 600       # seconds a failure stays shown on the job page
+
+
+def running(job_id, lang):
+    with _lock:
+        t = _running.get((job_id, lang))
+        if t and time.time() - t > DEADLINE + 60:   # a thread that died without saying so does not block for ever
+            _running.pop((job_id, lang), None)
+            t = None
+        return bool(t)
+
+
+def start(user, j, lang, done=None):
+    """Starts the translation in the background (the page does not wait for the model). False if one is already running."""
+    key = (j["id"], lang)
+    with _lock:
+        if key in _running and time.time() - _running[key] <= DEADLINE + 60:
+            return False
+        _running[key] = time.time()
+
+    def work():
+        try:
+            with db.tx() as c:
+                res = translate(c, user, j, lang)
+            with _lock:
+                _failed.pop(key, None)
+            if done:
+                done(res, None)
+        except Exception as e:
+            log.warning("%s: background translation failed (%s)", j.get("ref"), type(e).__name__)
+            with _lock:
+                _failed[key] = (time.time(), str(e) if isinstance(e, Unavailable) else M("the translation model did not answer"))
+            if done:
+                done(None, e)
+        finally:
+            with _lock:
+                _running.pop(key, None)
+    if SYNC:
+        work()
+    else:
+        threading.Thread(target=work, name=f"translate-{j.get('ref')}", daemon=True).start()
+    return True
+
+
+def failure(job_id, lang):
+    """Reason of the last failed translation of this job into this language, if recent; otherwise empty."""
+    with _lock:
+        f = _failed.get((job_id, lang))
+    return f[1] if f and time.time() - f[0] <= FAILED_SHOWN else ""
+
+
 def attach(c, j, show=True):
     """Adds j["translation"]: what the job page needs to offer, show or hide a translation for the current reader.
     When translations exist and are to be shown, the page prints them in place of the original texts."""
     reader, source = i18n.current(), job_language(c, j)
     state = {"needed": False, "source": source, "reader": reader, "available": False, "done": 0, "total": 0, "showing": False,
-             "model": "", "cost": 0.0}
+             "model": "", "cost": 0.0, "running": running(j.get("id"), reader), "failed": failure(j.get("id"), reader)}
     j["translation"] = state
     if reader == source:
         return state

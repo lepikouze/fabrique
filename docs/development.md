@@ -34,6 +34,21 @@ simulated, and a full cycle (request, question, checks, review, PR, merge) runs 
 repo. `tests/test_audit.py` keeps one regression test per flaw fixed after an audit, and `tests/test_playbook.py`
 checks that the agent instructions keep their essential rules.
 
+## Before publishing a version
+
+Unit tests are not enough: a version is published only once the reference requests pass on a real instance, with a real
+runner, on a test repo already onboarded. Inside the dashboard container:
+
+```
+python -m app.reference --repo team/test-repo --user alice --changes                       # local model, free
+python -m app.reference --repo team/test-repo --user alice --module --profile economy      # one paid module, optional
+```
+
+It files a small change (expects a PR ready for review with green checks), stops a job while the agent works (expects it
+stopped within a minute, and no job container left), asks for changes on the small PR (expects the same PR back, ready,
+after a second attempt) and, with `--module`, a small module. The exit code is 0 only if every request passes. Afterwards,
+refuse the PRs it opened (the runner closes them) and archive the jobs.
+
 ## Database
 
 SQLAlchemy Core, with no engine-specific SQL. Alembic migrations (`app/migrations`) are applied at start-up. Creating

@@ -50,20 +50,20 @@ TAIL = 1024 * 1024
 MAX_BODY = 64 * 1024 * 1024   # body of an agent request: beyond this, it is refused (the runner does not put it in memory)
 
 
-def estimate(model_id, sent, received):
+def estimate(model_id, sent, received, model=None):
     """Estimated cost of a paid call whose response carries no usage counter (usage-less stream, truncated response...):
     about four bytes per token. A call accepted by a paid provider never counts as zero."""
-    pin, pout, _ = config.price(model_id or "")
+    pin, pout, _ = config.price(model_id or "", model)
     return (sent / 4 * pin + received / 4 * pout) / 1e6
 
 
-def cost_of(model_id, data):
+def cost_of(model_id, data, model=None):
     """Cost of a provider response, based on the usage counters it contains (JSON or SSE stream; counters
     are cumulative, we keep the largest of each)."""
     u = {}
     for k, v in USAGE.findall(data):
         u[k.decode()] = max(u.get(k.decode(), 0), int(v))
-    pin, pout, pcache = config.price(model_id or "")
+    pin, pout, pcache = config.price(model_id or "", model)
     inp = u.get("input_tokens", u.get("prompt_tokens", 0))
     cached = u.get("cache_read_input_tokens", 0) + u.get("cached_tokens", 0)
     if "cached_tokens" in u:   # OpenAI: cached tokens are included in input_tokens
@@ -79,10 +79,12 @@ def cost_of(model_id, data):
 ANTHROPIC_ONLY = ("thinking", "context_management")
 
 
-def for_compatible(body, effort=""):
+def for_compatible(body, effort="", thinking_budget=0):
     """Agent request body, adapted for a compatible server. The Claude Code effort level is replaced by
-    the one set on the provider ("effort"), or removed if there is none. Returns the original body if there is nothing to
-    change or if it is not JSON."""
+    the one set on the provider ("effort"), or removed if there is none. With a thinking budget, the Anthropic
+    "thinking" setting is replaced by an explicit budget that llama.cpp applies (the thinking stops, the model answers):
+    without it, a small model may think until its output limit and never answer. Returns the original body if there is
+    nothing to change or if it is not JSON."""
     try:
         d = json.loads(body)
     except (ValueError, TypeError):
@@ -93,6 +95,11 @@ def for_compatible(body, effort=""):
     for k in ANTHROPIC_ONLY:
         if k in d:
             d.pop(k); changed = True
+    if hoist_system(d):
+        changed = True
+    budget = thinking_budget_for(d.get("max_tokens"), thinking_budget)
+    if budget:
+        d["thinking"] = {"type": "enabled", "budget_tokens": budget}; changed = True
     oc = d.get("output_config")
     if effort:
         oc = oc if isinstance(oc, dict) else {}
@@ -105,6 +112,94 @@ def for_compatible(body, effort=""):
     return json.dumps(d, ensure_ascii=False).encode() if changed else body
 
 
+def hoist_system(d):
+    """Moves the "system" messages found inside the conversation to the system prompt, at the beginning. Claude Code
+    places one in the middle (its environment block); many chat templates refuse it (Qwen: "System message must be at the
+    beginning", HTTP 500 on the first request). True if something moved."""
+    msgs = d.get("messages")
+    if not isinstance(msgs, list) or not any(isinstance(m, dict) and m.get("role") == "system" for m in msgs):
+        return False
+    moved = []
+    for m in msgs:
+        if isinstance(m, dict) and m.get("role") == "system":
+            c = m.get("content")
+            if isinstance(c, str):
+                moved.append({"type": "text", "text": c})
+            elif isinstance(c, list):
+                moved += [b for b in c if isinstance(b, dict) and b.get("type") == "text"]
+    sysp = d.get("system")
+    blocks = ([{"type": "text", "text": sysp}] if isinstance(sysp, str) and sysp else list(sysp) if isinstance(sysp, list) else [])
+    d["system"] = blocks + moved
+    d["messages"] = [m for m in msgs if not (isinstance(m, dict) and m.get("role") == "system")]
+    return True
+
+
+MIN_THINKING = 1024   # below, no budget is sent (short internal requests: titles, summaries)
+
+
+def thinking_budget_for(max_tokens, budget):
+    """Thinking budget to send, kept below the response limit so that the model has room to answer; 0: none."""
+    if not budget or not isinstance(max_tokens, int) or isinstance(max_tokens, bool):
+        return 0
+    b = min(int(budget), max_tokens - MIN_THINKING)
+    return b if b >= MIN_THINKING else 0
+
+
+CUT = re.compile(rb'"(stop_reason"\s*:\s*"max_tokens|finish_reason"\s*:\s*"length)"')
+
+
+def cut_at_limit(data):
+    """True if a model response (JSON or SSE stream) stopped at its output limit instead of finishing."""
+    return bool(CUT.search(data))
+
+
+_ctx_cache = {}
+
+
+def context_size(model, client=None, ttl=600):
+    """Context size of a local model server WITHOUT a key: llama.cpp (directly or behind llama-swap) publishes it in
+    /props, vLLM in /v1/models (max_model_len). None if unknown (another server, unreachable). Claude Code does not know the window of a model it does not
+    know: without it, it never summarizes the conversation and the server ends up refusing or cutting the responses."""
+    root, auth = upstream(model)
+    if not root or auth or model.get("provider") == "anthropic":
+        return None
+    key = (root, model.get("id"))
+    hit = _ctx_cache.get(key)
+    if hit and time.time() - hit[1] < ttl:
+        return hit[0]
+    n = None
+    c = client or httpx.Client(timeout=5)
+    try:
+        for url in (f"{root}/upstream/{model.get('id')}/props", f"{root}/props"):
+            try:
+                r = c.get(url)
+                if r.status_code != 200:
+                    continue
+                d = r.json()
+                v = (d.get("default_generation_settings") or {}).get("n_ctx") or d.get("n_ctx")
+                if isinstance(v, int) and v > 0:
+                    n = v
+                    break
+            except (httpx.HTTPError, ValueError, AttributeError):
+                continue
+        if n is None:   # vLLM
+            try:
+                r = c.get(f"{root}/v1/models")
+                if r.status_code == 200:
+                    for m in r.json().get("data") or []:
+                        v = m.get("max_model_len") if isinstance(m, dict) else None
+                        if m.get("id") == model.get("id") and isinstance(v, int) and v > 0:
+                            n = v
+                            break
+            except (httpx.HTTPError, ValueError, AttributeError):
+                pass
+    finally:
+        if client is None:
+            c.close()
+    _ctx_cache[key] = (n, time.time())
+    return n
+
+
 def uses_gateway(model):
     return upstream(model)[0] is not None
 
@@ -113,7 +208,8 @@ def pick(ctx, model_id):
     """Model of the job targeted by a request: that of the agent, or that of the reviewers (profile) when the request
     specifies it. An undeclared Claude model name (Claude Code small internal model) goes to the job's Anthropic model.
     Never a model other than those of the job: the received name only chooses between them."""
-    models = [ctx.model] + [m for m in [getattr(ctx, "review_model", None)] if m and m is not ctx.model]
+    models = [ctx.model] + [m for m in [getattr(ctx, "review_model", None), *(getattr(ctx, "review_models", None) or {}).values()]
+                            if m and m is not ctx.model]
     exact = next((m for m in models if m.get("id") == model_id), None)
     if exact:
         return exact
@@ -137,11 +233,25 @@ def slow_message(seconds, size, model_id):
 
 
 class Gateway:
-    def __init__(self, lookup, port, host="127.0.0.1", transport=None, on_slow=None):
+    def __init__(self, lookup, port, host="127.0.0.1", transport=None, on_slow=None, on_runaway=None):
         self.lookup, self.port, self.host = lookup, port, host
         self.on_slow = on_slow   # called with (ctx, message) when a response is abnormally long
+        self.on_runaway = on_runaway   # called with (ctx, streak) when responses keep stopping at the output limit
+        self.no_budget = set()   # compatible servers that refused the thinking budget: relayed without it
         self.client = httpx.Client(timeout=httpx.Timeout(30, read=config.JOB_TIMEOUT), transport=transport)
         self.lock = threading.Lock()   # budget: test, reservation and counting of a job are done in one go
+
+    def runaway(self, ctx, cut):
+        """Counts the agent responses cut at the output limit in a row; beyond config.RUNAWAY_STREAK, on_runaway stops
+        the run. A response that finishes normally resets the count."""
+        with self.lock:
+            ctx.gw_cut = getattr(ctx, "gw_cut", 0) + 1 if cut else 0
+            streak = ctx.gw_cut
+        if cut and self.on_runaway and config.RUNAWAY_STREAK and streak >= config.RUNAWAY_STREAK:
+            try:
+                self.on_runaway(ctx, streak)
+            except Exception as e:
+                log.warning("cannot stop a looping run (%s)", type(e).__name__)
 
     def serve(self):
         gw = self
@@ -197,17 +307,42 @@ class Gateway:
                     with gw.lock:
                         ctx.gw_reserved = max(0.0, getattr(ctx, "gw_reserved", 0.0) - hold)
                         if paid and 200 <= status < 300:
-                            cost = cost_of(model_id, bytes(seen) + bytes(tail)) or estimate(model_id, len(body or b""), total)
+                            # The dashboard's price applies to the job model; another model asked by name (Claude Code's small internal
+                            # model) is priced by its own name.
+                            pm = m if model_id == m.get("id") else None
+                            cost = cost_of(model_id, bytes(seen) + bytes(tail), pm) or estimate(model_id, len(body or b""), total, pm)
                             ctx.gw_spent = getattr(ctx, "gw_spent", 0.0) + cost
                             ctx.gw_last = cost
                 model_id = asked or m.get("id")
+                plain = body
+                budgeted = False
                 if not paid and body and path.startswith("/v1/messages"):
-                    body = for_compatible(body, m.get("effort") or "")
+                    plain = for_compatible(body, m.get("effort") or "")
+                    body = plain
+                    # The provider's own budget (Settings → model providers), otherwise the runner's.
+                    tb = m.get("thinking_budget") if m.get("thinking_budget") is not None else config.THINKING_BUDGET
+                    if root not in gw.no_budget and tb:
+                        body = for_compatible(plain, m.get("effort") or "", tb)
+                        budgeted = body is not plain
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
                 headers.update(auth)
                 started = time.time()
+                with gw.lock:   # activity seen by the watchdog: a model still answering is not a silent agent
+                    ctx.gw_busy = getattr(ctx, "gw_busy", 0) + 1
+                    ctx.gw_seen = started
                 try:
-                    with gw.client.stream("POST", root + path, params=query or None, headers=headers, content=body) as r:
+                    r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None, headers=headers,
+                                                               content=body), stream=True)
+                    if budgeted and r.status_code in (400, 422):
+                        # A compatible server that does not take the thinking budget (400, or 422 for vLLM's validation):
+                        # asked again without it,
+                        # and remembered for the following requests.
+                        r.read(); r.close()
+                        gw.no_budget.add(root)
+                        log.info("%s: thinking budget refused by the model server, relayed without it", ctx.ref)
+                        r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None,
+                                                                   headers=headers, content=plain), stream=True)
+                    try:
                         status = r.status_code
                         self.send_response(r.status_code)
                         for k, v in r.headers.items():
@@ -219,6 +354,7 @@ class Gateway:
                             for chunk in r.iter_bytes():
                                 if chunk:
                                     total += len(chunk)
+                                    ctx.gw_seen = time.time()
                                     if len(seen) < MAX_SCAN:
                                         seen += chunk
                                     else:   # beyond: we keep the end, where a long stream places its final counters
@@ -228,6 +364,8 @@ class Gateway:
                                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                                     self.wfile.flush()
                             count()   # before the end of the response: the following job call already sees this expense
+                            if 200 <= status < 300 and path.startswith("/v1/messages") and not path.endswith("/count_tokens"):
+                                gw.runaway(ctx, cut_at_limit(bytes(seen[-TAIL:]) + bytes(tail)))
                             msg = slow_message(time.time() - started, total, model_id) if gw.on_slow else None
                             if msg:
                                 try:
@@ -237,11 +375,16 @@ class Gateway:
                             self.wfile.write(b"0\r\n\r\n")
                         finally:
                             count()   # interrupted response: what was received is still counted
+                    finally:
+                        r.close()
                 except httpx.HTTPError as e:
                     log.warning("%s: provider unreachable (%s)", ctx.ref, type(e).__name__)
                     self._plain(502, "provider unreachable")
                 finally:
                     count()
+                    with gw.lock:
+                        ctx.gw_busy = max(0, getattr(ctx, "gw_busy", 0) - 1)
+                        ctx.gw_seen = time.time()
 
             def _plain(self, code, msg):
                 data = msg.encode()

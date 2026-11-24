@@ -24,6 +24,8 @@ settings.
 | `FABRIQUE_DEMO`, `FABRIQUE_DEMO_TICK` | `0`, `6` | Demonstration mode and pace of the simulator (seconds) |
 | `FABRIQUE_LANG` | `en` | Interface language of last resort (`en` or `fr`), when neither the person nor the browser decides |
 | `FABRIQUE_NOTIFY` | `1` | `0` turns off notification delivery |
+| `FABRIQUE_PRICES_URL` | LiteLLM's public list | Address of the model price list fetched every week (prices per token, LiteLLM format). Empty: nothing is fetched; the built-in table and the prices entered by hand on the models remain |
+| `FABRIQUE_PRICES` | `1` | `0` turns off the weekly fetch of the price list |
 | **`OIDC_CLIENT_SECRET`** | — | OIDC client secret; otherwise entered in Settings → Sign-in (encrypted) |
 | **`SESSION_SECRET`** | generated | Signs sessions, at least 32 characters |
 | **`FABRIQUE_SECRET_KEY`** | generated | Encrypts model keys and channel secrets |
@@ -56,9 +58,12 @@ rather than opening up.
 | `MODEL_WAITS` | `30,60,120,240,480` | Seconds waited before each new attempt when the model server is saturated, loading or unreachable; the job fails after the last one |
 | `MERGE_RETRY_WAITS` | `5,15,30` | Seconds waited before each new attempt when the Git host refuses a merge for a moment |
 | `MAX_TURNS`, `FIX_ATTEMPTS` | `60`, `2` | Agent turns; new attempts if the checks fail |
+| `MAX_TURN_RESUMES` | `2` | Resumes of the agent's session after its turn limit (work kept) before the job fails |
 | `REVIEW_MODE` | `direct` | `direct`: one request to the model per reviewer; `agent`: read-only agent, on an export of the verified commit |
 | `CLAUDE_BIN`, `CODEX_BIN` | `/usr/local/bin/claude`, `/usr/local/bin/codex` | Agent programs, by absolute path (never looked up in a job's `PATH`) |
 | `REVIEW_MAX_DIFF`, `REVIEW_MAX_TOKENS` | `60000`, `8000` | Size of the diff sent and of the reviewers' answer |
+| `THINKING_BUDGET` | `8000` | Local model (compatible server without key): thinking tokens allowed per agent response, sent as the Anthropic `thinking.budget_tokens` (applied by llama.cpp; a server that does not take it, vLLM for example, gets the request without it after a 400 or 422). Without it, a small model can think until its output limit and never answer. `0`: no budget |
+| `RUNAWAY_STREAK` | `3` | Agent responses cut at the output limit in a row before the run is stopped with that cause (the model loops, or its context is full). `0`: never |
 | `FABRIQUE_DIFF_MAX` | `400000` | Characters of diff sent to the dashboard for human reading, with the pull request. `0`: nothing is sent (the reviewer reads the diff on the Git host) |
 | `ANTHROPIC_API_URL`, **`ANTHROPIC_API_KEY`** | api.anthropic.com, — | Optional: key on the runner rather than in the dashboard. An API key is required: a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`) is not supported, since no credential of the runner is handed to a job |
 | `PRICE_IN`, `PRICE_OUT`, `PRICE_CACHE_READ` | `5`, `25`, `0.5` | Default prices ($ per million tokens) for a model with no known pricing |

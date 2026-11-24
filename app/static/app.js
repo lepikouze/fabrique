@@ -270,6 +270,21 @@ function T(s) { return I18N[s] || s; }
     $$("[data-cmd-enter] textarea", root).forEach(function (t) { if (t.hasAttribute("autofocus")) t.focus(); });
   }
   if (panel) wire(panel);
+  // A translation running in the background: the panel (or the page) is refreshed every few seconds until it is over.
+  // A form marked data-once cannot be sent twice (its button is disabled on the first click).
+  setInterval(function () {
+    var running = document.querySelector("[data-tx-running]");
+    if (!running) return;
+    if (panel && panel.contains(running) && openRef) loadPanel(openRef, false);
+    else if (!panel || !panel.contains(running)) location.reload();
+  }, 5000);
+  document.addEventListener("submit", function (e) {
+    var f = e.target.closest && e.target.closest("form[data-once]");
+    if (!f) return;
+    if (f.dataset.sent) { e.preventDefault(); return; }
+    f.dataset.sent = "1";
+    setTimeout(function () { $$("button", f).forEach(function (b) { b.disabled = true; }); }, 0);
+  }, true);
   // Machine translation of a job's texts: one click shows the originals, another the translations.
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest("[data-mt-toggle]");

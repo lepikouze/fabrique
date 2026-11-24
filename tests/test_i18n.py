@@ -361,6 +361,7 @@ def test_translation_is_stored_shown_as_such_and_only_prose_is_sent(repo, monkey
     from app import providers, translate
     ref = _job_in_french(repo, monkeypatch)
     seen = []
+    monkeypatch.setattr(translate, "SYNC", True)        # the translation runs in the request (a thread in production)
     monkeypatch.setattr(providers, "TRANSPORT", _fake_model(seen))
     cl = web()
     r = cl.post(f"/jobs/{ref}/translate", headers={"origin": "http://testserver", "accept-language": "en", "referer": f"http://testserver/jobs/{ref}"})
@@ -388,14 +389,16 @@ def test_translation_is_stored_shown_as_such_and_only_prose_is_sent(repo, monkey
 
 def test_translation_failure_says_so_and_keeps_nothing(repo, monkeypatch):
     from sqlalchemy import select
-    from app import providers
+    from app import providers, translate
     ref = _job_in_french(repo, monkeypatch)
+    monkeypatch.setattr(translate, "SYNC", True)
     monkeypatch.setattr(providers, "TRANSPORT", _fake_model([], fail=True))
     cl = web()
     r = cl.post(f"/jobs/{ref}/translate", headers={"origin": "http://testserver", "accept-language": "en"})
     assert r.status_code == 303 and "fabrique_flash" in r.headers.get("set-cookie", "")
     with db.tx() as c:
         assert db.rows(c, select(db.translations)) == []
+    assert "The last translation failed" in cl.get(f"/jobs/{ref}", headers={"accept-language": "en"}).text   # said on the page
 
 
 def test_long_texts_are_cut_at_paragraphs_and_bounded():

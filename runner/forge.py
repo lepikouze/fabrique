@@ -1,7 +1,7 @@
 """Git providers: Forgejo, GitLab and GitHub, same interface. The token never leaves the runner: it is passed to git
 through GIT_CONFIG_* variables (not in the URL, not in .git/config), and only while the agent is not running.
 
-Interface: clone_url, git_env, pr_url, open_pr, pr (-> {"head": {"sha"}, "merge_commit_sha"}), upsert_comment, merge.
+Interface: clone_url, git_env, pr_url, open_pr, pr (-> {"head": {"sha"}, "merge_commit_sha"}), upsert_comment, merge, close_pr.
 The runner's token can push fabrique/* branches, open PRs/MRs and merge them; the main branch is protected against
 direct pushes (Forgejo: branch rule; GitLab: "push" Maintainers, "merge" Developers; GitHub: branch rule or ruleset,
 unavailable on a private repo on the free plan — the runner only ever pushes fabrique/* anyway)."""
@@ -90,6 +90,12 @@ class Forgejo:
                 self.api.patch(f"/repos/{slug}/issues/comments/{cm['id']}", json={"body": body}).raise_for_status()
                 return
         self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": body}).raise_for_status()
+
+    def close_pr(self, slug, n, comment=""):
+        """Closes a PR without merging it (merge refused in the dashboard), with a comment saying why."""
+        if comment:
+            self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": comment}).raise_for_status()
+        self.api.patch(f"/repos/{slug}/pulls/{n}", json={"state": "closed"}).raise_for_status()
 
     def merge(self, slug, n, sha, title, message=""):
         """Squash merge pinned to the verified sha: refused by Forgejo if the PR head has moved. message: merge
@@ -181,6 +187,12 @@ class GitLab:
                 return
         self.api.post(f"{self._p(slug)}/merge_requests/{n}/notes", json={"body": body}).raise_for_status()
 
+    def close_pr(self, slug, n, comment=""):
+        """Closes an MR without merging it (merge refused in the dashboard), with a note saying why."""
+        if comment:
+            self.api.post(f"{self._p(slug)}/merge_requests/{n}/notes", json={"body": comment}).raise_for_status()
+        self.api.put(f"{self._p(slug)}/merge_requests/{n}", json={"state_event": "close"}).raise_for_status()
+
     def merge(self, slug, n, sha, title, wait=2.0, message=""):
         """"Squash" merge pinned to the verified sha (sha parameter: GitLab refuses if the head has moved)."""
         full = title + (f"\n\n{message}" if message else "")
@@ -268,6 +280,12 @@ class GitHub:
                 self.api.patch(f"/repos/{slug}/issues/comments/{cm['id']}", json={"body": body}).raise_for_status()
                 return
         self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": body}).raise_for_status()
+
+    def close_pr(self, slug, n, comment=""):
+        """Closes a PR without merging it (merge refused in the dashboard), with a comment saying why."""
+        if comment:
+            self.api.post(f"/repos/{slug}/issues/{n}/comments", json={"body": comment}).raise_for_status()
+        self.api.patch(f"/repos/{slug}/pulls/{n}", json={"state": "closed"}).raise_for_status()
 
     def merge(self, slug, n, sha, title, wait=2.0, message=""):
         """Squash merge pinned to the verified sha (GitHub refuses with 409 if the head has moved), then branch deleted."""

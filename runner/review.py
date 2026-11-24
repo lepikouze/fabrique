@@ -66,12 +66,21 @@ def parse(text):
         v = str(found.get("verdict", "")).strip().lower().replace(" ", "_")
         v = VERDICTS.get(v, v)          # the model's value, once normalised, is the stored one
         if v in ("ok", "needs_changes", "blocking"):
-            return (v, str(found.get("summary") or "")[:2000], [str(p)[:400] for p in (found.get("points") or [])][:12],
+            points = [str(p)[:400] for p in (found.get("points") or [])][:12]
+            # The verdict follows the labels of the points: "to review again" only when something must be fixed before merging.
+            must = any(MUST.match(p) for p in points)
+            if v == "needs_changes" and not must and any(LATER.match(p) for p in points):
+                v = "ok"
+            elif v == "ok" and must:
+                v = "needs_changes"
+            return (v, str(found.get("summary") or "")[:2000], points,
                     str(found.get("evidence") or "").strip()[:1000] if v == "blocking" else "")
     return "undetermined", "Unreadable reviewer answer: to be reviewed by a human.", [], ""
 
 
 VERDICTS = {"needs_changes": "needs_changes", "blocking": "blocking"}
+MUST = re.compile(r"^\s*\**\s*must\s+fix\s*\**\s*:", re.I)
+LATER = re.compile(r"^\s*\**\s*later\s*\**\s*:", re.I)
 TOOLS = {"direct": "You have no tool: everything you can review is in the diff below. If it is truncated, say so in "
                     "your summary; do not guess the rest.",
          "agent": "The diff is provided below: read a file only if the diff is not enough, and answer quickly."}
@@ -103,6 +112,12 @@ def prompts(ctx, role, diff, how):
         extra = ("Start your points with one point per \"Done when\" criterion (or, if it is not specified, per requirement of the "
                  "request), in this exact form, with these English words whatever the language of the rest: \"Criterion met: …\", "
                  "\"Criterion not met: …\" or \"Criterion unclear: …\", followed by a short explanation drawn from the diff.\n\n")
+    changed = getattr(ctx, "tests_changed", None) or []
+    if changed:
+        extra += ("These test files ALREADY existed before this change, and it modifies or deletes them: "
+                  + ", ".join(data(f) for f in changed[:20])
+                  + ". Weakening, rewriting or removing a test is the easiest way to make the checks pass: say in a point whether each "
+                  "change is justified by the request, or whether it hides a regression.\n\n")
     prompt = (f"<request>\nTitle: {data(ctx.title)}\n\n{data(ctx.job['request'])}\n\nDone when: {data(ctx.job.get('done_when')) or '(not specified)'}\n</request>\n\n"
               f"<diff>\n{data(diff)}\n</diff>\n\n{extra}Review for your role ({role_name}) and answer only with the requested JSON block.")
     return label, system, prompt
@@ -147,7 +162,7 @@ def ask(model, system, prompt, timeout, transport=None, think=True):
             r.raise_for_status()
             m = r.json()
         u = m.get("usage") or {}
-        pin, pout, _ = config.price(model["id"])
+        pin, pout, _ = config.price(model["id"], model)
         cost = (u.get("input_tokens", 0) * pin + u.get("output_tokens", 0) * pout) / 1e6
         cut = m.get("stop_reason") == "max_tokens"
         if cut:
@@ -171,7 +186,7 @@ def ask(model, system, prompt, timeout, transport=None, think=True):
     u = m.get("usage") or {}
     cost = 0.0
     if model.get("type") == "openai":
-        pin, pout, _ = config.price(model["id"])
+        pin, pout, _ = config.price(model["id"], model)
         cost = (u.get("prompt_tokens", 0) * pin + u.get("completion_tokens", 0) * pout) / 1e6
     cut = ch.get("finish_reason") == "length"   # the model's thinking exhausted the limit before the verdict
     if cut:
@@ -179,8 +194,13 @@ def ask(model, system, prompt, timeout, transport=None, think=True):
     return str((ch.get("message") or {}).get("content") or ""), cost, cut
 
 
+def reviewer(ctx, role):
+    """Model of a reviewer: the profile's model for this role, otherwise the reviewers' model, otherwise the agent's."""
+    return (getattr(ctx, "review_models", None) or {}).get(role) or getattr(ctx, "review_model", None) or ctx.model
+
+
 def run(ctx, role, diff, transport=None):
-    rm = getattr(ctx, "review_model", None) or ctx.model   # reviewers' model (profile), otherwise the agent's
+    rm = reviewer(ctx, role)
     how = mode(rm)
     label, system, prompt = prompts(ctx, role, diff, how)
     if how == "direct":

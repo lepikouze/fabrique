@@ -121,7 +121,7 @@ def test_kill_spares_pid_one_and_stop_removes(lz):
     l, d = lz
     l.start("FAB-1")
     l.kill("FAB-1")
-    assert d.api.execs[-1][1] == ["kill", "-9", "-1"]
+    assert d.api.execs[-1][1] == ["sh", "-c", "kill -9 -1"]   # shell built-in: no kill program needed
     l.stop("FAB-1")
     assert d.store["fabrique-job-fab-1"].removed
 

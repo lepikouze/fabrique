@@ -286,12 +286,16 @@ def to_check(j):
         n = l.get("key")
         if n == "review":
             for r in sorted(cur, key=lambda r: r["role"]):
+                # The reviewers' own texts go apart ("parts"), each one as written: the page shows them one by one, so that a
+                # translation asked by the reader replaces them (a joined string would no longer match any translated text).
                 if r["verdict"] == "undetermined":
                     out.append({"title": M("No verdict from the {get} review", get=ROLES.get(r['role'], r['role'])),
-                                "text": (r["summary"] or M("No verdict given.")) + M(" Review {get} yourself in the changes, or rerun the review.", get=REVIEW_FOCUS.get(r['role'], ''))})
+                                "parts": [r["summary"]] if r["summary"] else [],
+                                "text": (M("No verdict given.") if not r["summary"] else "") + M(" Review {get} yourself in the changes, or rerun the review.", get=REVIEW_FOCUS.get(r['role'], ''))})
                 elif r["verdict"] != "ok":
-                    pts = " ; ".join(r["points"] or []) or r["summary"] or ""
-                    out.append({"title": M("{get} review: {p}", get=ROLES.get(r['role'], r['role']), p=VERDICTS[r['verdict']]), "text": pts})
+                    must = [p for p in r["points"] or [] if re.match(r"^\s*\**\s*must\s+fix", p, re.I)]
+                    out.append({"title": M("{get} review: {p}", get=ROLES.get(r['role'], r['role']), p=VERDICTS[r['verdict']]),
+                                "parts": must or list(r["points"] or []) or ([r["summary"]] if r["summary"] else []), "text": ""})
             if not cur or not {"code", "security"} <= {r["role"] for r in cur}:
                 out.append({"title": M("Review incomplete"), "text": M("Code and security are required on the verified sha: rerun the review.")})
         elif n == "checks":
@@ -303,6 +307,8 @@ def to_check(j):
             out.append({"title": M("Several attempts"), "text": M("{detail}: look at what the fix changed, and why.", detail=l['detail'])})
         elif n == "protected":
             out.append({"title": M("Protected files"), "text": l["detail"] + M(": these files need careful human review.")})
+        elif n == "tests":
+            out.append({"title": M("Existing tests modified"), "text": l["detail"] + M(": check that the change does not weaken or remove a test to make the checks pass.")})
         elif n == "size":
             out.append({"title": M("Large PR"), "text": l["detail"] + M(": beyond the limit, merging on its own is not allowed.")})
         elif n == "opinion":
@@ -711,7 +717,27 @@ def decide(user, ref, verdict, note=""):
         elif verdict == "refuse":
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(merge_state="refused", updated_at=t,
                                                                              status_text=M("Merge refused")))
+            if j["source"] != "demo" and j["pr_number"]:
+                from .work import enqueue
+                enqueue(c, j["id"], "close", {"note": note[:1000]})   # the PR is closed on the Git host, with the reason
             db.log_audit(c, user["user"], M("Merge refused"), j["id"], j["verified_sha"] or "", note[:300])
+        elif verdict == "changes":
+            # The agent resumes on the same branch with the reviews of the verified commit and the reviewer's note; checks,
+            # reviews and the same PR follow. Never on a demo job (no runner behind it).
+            if j["source"] in ("demo", "study"):
+                raise Refused(M("Changes cannot be requested on this job."))
+            rv = db.rows(c, select(db.reviews).where(db.reviews.c.job_id == j["id"], db.reviews.c.sha == (j["verified_sha"] or "")))
+            reviews = [{"role": r["role"], "verdict": r["verdict"], "summary": r["summary"] or "", "points": list(r["points"] or [])[:12]}
+                       for r in rv if r["verdict"] != "ok"]
+            if not reviews and not note.strip():
+                raise Refused(M("Say what to change: the reviews ask for nothing, write it in the comment."))
+            c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(merge_state="", stage="implementing", activity="idle", updated_at=t,
+                                                                             status_text=M("Changes requested · waiting for a runner")))
+            c.execute(insert(db.timeline).values(job_id=j["id"], stage="implementing", at=t,
+                                                 summary=M("Changes requested by {name}.", name=user["name"])))
+            from .work import enqueue
+            enqueue(c, j["id"], "fix", {"note": note[:1000], "reviews": reviews, "by": user["name"]})
+            db.log_audit(c, user["user"], M("Changes requested"), j["id"], j["verified_sha"] or "", note[:300])
         else:
             raise Refused(M("Unknown decision."))
 

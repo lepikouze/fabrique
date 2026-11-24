@@ -6,6 +6,97 @@ Notable changes to Fabrique, most recent first. The format follows
 
 Interface labels are quoted in French, as they appear on a French screen.
 
+## [0.8.7] - 2026-11-24
+
+Stabilization: what the first real jobs taught (FAB-22 to FAB-28: a whole module, on local models, then on Claude). No new
+feature for comfort, no migration. Chart 0.5.7.
+
+### Fixed
+- **Stopping a job really stops it, in a container or a Pod.** The launcher stopped the agent with the `kill` program,
+  which job images do not have (no procps in slim images): the call failed silently. The stop button, the maximum
+  duration of a run, the watchdog and the looping-model stop of 0.8.5 did not stop the agent, which went on talking to
+  the model. The launcher now uses the shell's built-in `kill`, and logs a stop that fails.
+- **A refused merge closes the PR on the Git host**, with a comment giving the reason. The PR used to stay open.
+- **The turn limit resumes instead of failing.** When the agent reaches its turn limit (`MAX_TURNS`), it resumes its own
+  session where it stopped, with its work kept, up to `MAX_TURN_RESUMES` (2) times; only then does the job fail, saying
+  to split the request or to use a stronger model. A whole module used to fail at turn 60 with its tests almost green.
+- **Costs are right.** The runner priced Claude Haiku 5.5 as Haiku 4.5 (ten times too much), Sonnet 5.5 and Opus 5.5 at
+  the previous generation's prices, and did not know Fable; and the job kept the higher of two figures, one of them
+  wrong. The dashboard now sends each model's price with the job: a price entered by hand, otherwise the public price list
+  fetched every week, otherwise a built-in table kept current. A model with no known price says so on the job page
+  ("price unknown, estimated cost") instead of showing an invented figure.
+- **The live cost no longer goes down.** Claude Code sends one line per content block of a response, each repeating its
+  usage, and the runner added them all up: the live figure was too high, then dropped at the end of the run (1.82 $ then
+  1.10 $). Usage is now counted once per model response, and the figure shown never goes down during a run. The token
+  counter is fixed the same way.
+- **"Translate" works in the background.** The page no longer waits for the model (spinner, refresh that ended in an error,
+  two translations started in a row): it comes back at once with "translation in progress", the button is disabled, the
+  texts appear as they are translated, and a failure is said on the page. The "To check before approving" box is
+  translated too.
+- **No more second scroll bar** on the page of a job ready for review: a label for screen readers in the decision form
+  escaped the panel and stretched the whole page.
+- **A provider identifier typed with capitals now leads to its model list.** The identifier is stored in lowercase, but
+  "Save and load the models" sent to the list with the identifier as typed ("Claude"): the page said "Cannot list —
+  Unknown provider" and showed no model, although the provider was saved.
+
+### Changed
+- **"Ask for changes" on a PR ready for review.** Next to Approve and Refuse: the agent resumes on the same branch with the
+  reviews that ask for something and the reviewer's comment, then the checks and the reviews run again and the same PR is
+  updated. It used to take a whole new request, started from scratch.
+- **Reviewers sort their points.** Each point starts with `Must fix:` (to fix before merging) or `Later:` (worth noting, not
+  blocking), and the verdict follows: "to review again" only when something must be fixed before merging. Four "to
+  review again" for details used to bury the real point. "To check before approving" lists only the points to fix.
+- **One model per reviewer in a profile.** A profile can give the code, security, architecture and infrastructure
+  reviewers their own model (optional; otherwise the "Reviewers" model): a strong model where it counts, a local one
+  elsewhere. A weak reviewer approved everything, including tests rewritten by the agent.
+- **Existing tests modified are flagged.** When a change modifies or deletes test files that already existed, a new gate
+  ("Existing tests") stays red, the files are listed in "To check before approving", and the reviewers are told to say
+  whether each change is justified or hides a regression.
+- **A thinking budget per model provider** (Settings → model providers, compatible servers), instead of one value for the
+  whole runner: a slow model wants a lower budget than a fast one. Empty: the runner's `THINKING_BUDGET`.
+
+### Added
+- **Reference requests before a version ships** (`python -m app.reference`, inside the dashboard container): a small change
+  on the local model, a stop while the agent works, "Ask for changes" on the resulting PR and, optionally, a module on a
+  paid profile. A version is published only if they pass (docs/development.md).
+
+## [0.8.6] - 2026-11-23
+
+No migration. Chart 0.5.6.
+
+### Fixed
+- **Local models with a strict chat template work with Claude Code.** Claude Code places a "system" message in the
+  middle of the conversation (its environment block). Gemma's template tolerates it; Qwen's refuses it ("System message
+  must be at the beginning") and every request failed with HTTP 500 from the first one. For a compatible server, the
+  key gateway now moves such messages into the system prompt at the beginning.
+- **vLLM gets the same care as llama.cpp.** The context window is also read from vLLM (`/v1/models`, `max_model_len`), so
+  Claude Code summarizes in time there too; and a thinking budget refused with a validation error (422) is dropped like
+  a 400, the request being sent again without it.
+
+## [0.8.5] - 2026-11-23
+
+Reliability of agent runs on a local model, after a real job (a new module, on Gemma 4 26B through llama.cpp) burned
+almost two hours without producing anything. No migration. Chart 0.5.5.
+
+### Fixed
+- **A local model can no longer think forever.** The key gateway removed the `thinking` setting of Claude Code before
+  relaying to a compatible server, so the model had no thinking budget: Gemma could think until its output limit
+  (20,000 to 32,000 tokens, 11 minutes) without ever writing an answer. The gateway now sends an explicit thinking
+  budget (`THINKING_BUDGET`, 8,000 tokens by default), which llama.cpp applies: the thinking stops and the model answers.
+  A server that refuses it receives the request without it, and the gateway remembers it.
+- **Claude Code now knows the context window of a local model.** Not knowing it, it never summarized the conversation,
+  which grew until the server cut every response (125,800 tokens used out of 131,072). The runner reads the window from
+  the llama.cpp server (directly or behind llama-swap) and gives it to Claude Code, which then summarizes in time.
+- **The watchdog no longer restarts an agent whose model is still answering.** A long model response (more than the
+  watchdog threshold) looked like a silent agent and got it restarted mid-answer. A request in progress at the key
+  gateway now counts as activity (up to three thresholds without a byte).
+
+### Added
+- **A looping model stops the run with its cause.** After `RUNAWAY_STREAK` (3) responses in a row cut at the output
+  limit, the run is stopped: "the model stopped 3 times in a row at its output limit without finishing…", with what to do
+  (a stronger model for the repo, or a smaller request), instead of asking again for an hour. The Claude Code error
+  "response exceeded the 32000 output token maximum" gets the same plain explanation.
+
 ## [0.8.4] - 2026-11-23
 
 ### Fixed

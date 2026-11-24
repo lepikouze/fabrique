@@ -56,6 +56,10 @@ MEM = os.environ.get("JOB_MEMORY", "4g")
 CPUS = float(os.environ.get("JOB_CPUS", "2"))
 PIDS = int(os.environ.get("JOB_PIDS", "512"))
 USER = "10002:10002"
+# Kills every process of the agent user except process 1 (which keeps the container alive) and the shell itself. Through the
+# shell's built-in kill: job images do not necessarily have a kill program (no procps in slim images), and a missing
+# program made every stop silently do nothing (stop button, maximum duration, watchdog).
+KILL_ALL = ["sh", "-c", "kill -9 -1"]
 LABEL = "fabrique.job"
 REF = re.compile(r"^[A-Z][A-Z0-9]{0,9}-[0-9]{1,7}$")
 ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -191,8 +195,11 @@ class Launcher:
         """Kills all agent processes in the container (except process 1 which keeps it alive)."""
         c = self._mine(ref)
         if c is not None and c.status == "running":
-            ex = self.api.exec_create(c.id, ["kill", "-9", "-1"], user=USER)
+            ex = self.api.exec_create(c.id, KILL_ALL, user=USER)
             self.api.exec_start(ex["Id"])
+            code = (self.api.exec_inspect(ex["Id"]) or {}).get("ExitCode")
+            if code not in (0, None):
+                log.warning("%s: stopping the processes failed (exit code %s)", ref, code)
         return {"killed": True}
 
     def exec_stream(self, ref, body, write):

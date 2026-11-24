@@ -36,6 +36,8 @@ class Ctx:
         self.intent, self.job, self.model, self.repo = item["intent"], j, item["model"], item["repo"]
         # Reviewers: profile model, otherwise the agent's model (new context in both cases: they only see the diff).
         self.review_model = item.get("review_model") or item["model"]
+        # Profile model per reviewer role (code, security…), when it differs from the reviewers' model.
+        self.review_models = {k: v for k, v in (item.get("review_models") or {}).items() if isinstance(v, dict) and v.get("id")}
         self.forge = item.get("forge")   # Git provider set in the dashboard (address and token), or None
         self.ref, self.title, self.branch = j["ref"], j["title"], j["branch"]
         self.budget = float(j.get("budget") or 0)
@@ -50,6 +52,8 @@ class Ctx:
         self.nudged = self.cancelled = False
         self.study = j.get("source") == "study"   # study: a report, neither branch nor PR
         self.model_waits = 0   # attempts already made while the model server was saturated
+        self.turn_resumes = 0   # resumes after the agent's turn limit
+        self.tests_changed = []   # existing test files the change modifies or deletes
         self.in_agent = self.paused = False   # an agent run is in progress; paused (daily budget)
         self.attempt = 1
         self.fab_token = ""
@@ -256,7 +260,8 @@ class Runner:
         self.ex = ex or executor.make()
         self.relay = Relay(self.panel, config.RELAY_PORT, config.RELAY_HOST)
         self.gateway = Gateway(self.relay.ctx_for, config.GATEWAY_PORT, config.RELAY_HOST,
-                               on_slow=lambda ctx, msg: self.panel.event(ctx.ref, type="log", kind=M("model"), message=msg))
+                               on_slow=lambda ctx, msg: self.panel.event(ctx.ref, type="log", kind=M("model"), message=msg),
+                               on_runaway=self.runaway)
         self.active, self.lock, self.stop = 0, threading.Lock(), threading.Event()
         self.running = {}   # ref -> Ctx, for stops requested from the dashboard
 
@@ -368,7 +373,7 @@ class Runner:
         self.running[ctx.ref] = ctx
         try:
             {"start": self.start, "resume": self.resume, "merge": self.merge, "review": self.rereview, "onboard": self.onboard,
-             "init": self.init_repo, "create": self.create_repo}[kind](ctx)
+             "init": self.init_repo, "create": self.create_repo, "fix": self.fix, "close": self.close_pr}[kind](ctx)
         except Waiting as w:
             self.close(ctx, kind)
             self.panel.event(ctx.ref, type="onboard_wait", reason=str(w))
@@ -511,8 +516,9 @@ class Runner:
     def prepare(self, ctx, fresh, onboarding=False, branch=False):
         # Without a relayable key, no point in cloning, starting a container, and replaying the installation.
         from .gateway import uses_gateway
-        for m in (ctx.model, ctx.review_model):
-            if m.get("provider") == "anthropic" and not uses_gateway(m) and not (m is ctx.review_model and review.mode(m) == "direct"):
+        reviewers = [ctx.review_model, *ctx.review_models.values()]
+        for m in (ctx.model, *reviewers):
+            if m.get("provider") == "anthropic" and not uses_gateway(m) and not (m is not ctx.model and review.mode(m) == "direct"):
                 raise Failed(M("no API key for the Anthropic model {id}: enter it in Settings → Agents and models (or ANTHROPIC_API_KEY on the runner)", id=m.get('id')))
         if fresh and os.path.isdir(ctx.dir):
             self.wipe(ctx)
@@ -634,6 +640,23 @@ class Runner:
             if trouble == "too_large":
                 raise Failed(M("this conversation no longer fits in the model's context, waiting would not help: raise the "
                                "context on the model server, or split the request into smaller ones ({why})", why=str(run.error)[:200]))
+            if "error_max_turns" in str(run.error) and not ctx.onboarding:
+                # Turn limit of the agent run: the work done so far is kept (files, commits, session), the agent picks up where
+                # it stopped. A failure only after config.MAX_TURN_RESUMES resumes: a model that keeps turning without
+                # finishing is not given an endless run (FAB-25: a whole module stopped at turn 60, its tests nearly green).
+                if ctx.turn_resumes < config.MAX_TURN_RESUMES and ctx.job.get("session_id"):
+                    ctx.turn_resumes += 1
+                    self.report_usage(ctx)
+                    self.panel.event(ctx.ref, type="log", kind="runner",
+                                     message=M("turn limit of the agent reached ({turns} turns): the agent resumes where it stopped "
+                                               "({n}/{max})", turns=config.MAX_TURNS, n=ctx.turn_resumes, max=config.MAX_TURN_RESUMES))
+                    return self.agent(ctx, messages.more_turns(ctx.job), resume=ctx.job.get("session_id"), system=system)
+                raise Failed(M("the agent did not finish after {n} runs of {turns} turns: split the request into smaller ones, or "
+                               "give this repo a stronger model", n=ctx.turn_resumes + 1, turns=config.MAX_TURNS))
+            if trouble == "cut":
+                raise Failed(M("the model stopped at its output limit without finishing: it loops in its thinking or its "
+                               "context is full. Give this repo a stronger model (Settings → Agents and models) or split "
+                               "the request into smaller ones ({why})", why=str(run.error)[:200]))
             if trouble == "busy" and not ctx.onboarding:
                 waits = config.MODEL_WAITS
                 if ctx.model_waits >= len(waits):
@@ -655,6 +678,16 @@ class Runner:
             raise Failed(run.error)
         ctx.model_waits = 0   # a run that ended normally: the next saturation starts its attempts again
         return True
+
+    def runaway(self, ctx, streak):
+        """Agent responses keep stopping at the output limit: the model loops in its thinking, or the conversation fills
+        its context. The run is stopped with the cause rather than left asking again for an hour."""
+        run = getattr(ctx, "run", None)
+        if run is None or getattr(run, "done", True):
+            return
+        run._kill(M("the model stopped {n} times in a row at its output limit without finishing: it loops in its thinking "
+                    "or its context is full. Asking again would not help: give this repo a stronger model (Settings → "
+                    "Agents and models) or split the request into smaller ones", n=streak))
 
     def close(self, ctx, kind):
         """End of an order, regardless of the outcome: the job container is destroyed (no more calls possible with
@@ -854,6 +887,31 @@ class Runner:
         if self.agent(ctx, prompt, resume=sid):
             self.finish(ctx)
 
+    def fix(self, ctx):
+        """Changes requested by a reviewer on a PR ready for review: the agent resumes on the same branch (its session if it
+        still exists), with the reviews and the reviewer's note; then checks, reviews and the same PR, updated."""
+        p = ctx.intent["payload"] or {}
+        prompt = messages.fix_requested(p.get("reviews") or [], p.get("note") or "", p.get("by") or "")
+        ctx.attempt = int(ctx.job.get("attempts") or 1) + 1
+        self.prepare(ctx, fresh=False, branch=True)
+        sid = ctx.job.get("session_id")
+        if not sid or not os.path.isdir(ctx.home):
+            sid, prompt = None, messages.launch(ctx.job, ctx.repo) + "\n\n" + prompt
+        self.panel.event(ctx.ref, type="stage", stage="implementing", summary=M("Changes requested: the agent resumes on the same branch."),
+                         status=M("Changes requested"))
+        if self.agent(ctx, prompt, resume=sid):
+            self.finish(ctx)
+
+    def close_pr(self, ctx):
+        """Merge refused in the dashboard: the PR is closed on the Git host, with the reason; nothing is merged."""
+        n = ctx.job.get("pr_number")
+        if n:
+            note = (ctx.intent["payload"] or {}).get("note") or ""
+            text = W(ctx, "Closed without merging: the merge was refused in Fabrique.") + (
+                "\n\n" + W(ctx, "Reason") + ": " + messages.inert(note, 1000) if note else "")
+            self.git(ctx).close_pr(ctx.repo["slug"], n, text)
+        self.panel.event(ctx.ref, type="intent_done", note=M("PR closed on the Git host") if n else M("no PR to close"))
+
     def checks(self, ctx):
         """Recipe checks on the head commit; the sha is the one imported into the mirror, and it must not change
         during the checks (otherwise the evidence would not be valid for the pushed commit)."""
@@ -919,6 +977,7 @@ class Runner:
         if truncated:
             diff = diff[:config.REVIEW_MAX_DIFF] + M("\n[… diff truncated at {review_max_diff} characters]", review_max_diff=config.REVIEW_MAX_DIFF)
         roles = review.roles_for(files)
+        ctx.tests_changed = tests_changed(ctx, base, sha)
         self.panel.event(ctx.ref, type="stage", stage="review", summary=M("Read-only review: ") + ", ".join(review.ROLES[r][0] for r in roles) + ".",
                          status=M("Review in progress"))
         # No more job processes (a check may have left one) during the review. In agent mode, the reviewer
@@ -927,7 +986,7 @@ class Runner:
         self.ex.kill(ctx)
         ctx.review_dir = ctx.review_home = None
         try:
-            if review.mode(ctx.review_model) == "agent":
+            if any(review.mode(review.reviewer(ctx, r)) == "agent" for r in roles):
                 tag = os.urandom(8).hex()
                 ctx.review_dir, ctx.review_home = os.path.join(ctx.dir, f".review-{tag}"), os.path.join(ctx.dir, f".review-home-{tag}")
                 # Export via a temporary index (not "git archive", which would obey the export-ignore attributes of the
@@ -970,7 +1029,7 @@ class Runner:
                 r["verdict"] = "undetermined"
                 r["summary"] = (M("Diff too long ({review_max_diff} characters read): review incomplete, a human must review it. Opinion on the part read: {summary}", review_max_diff=config.REVIEW_MAX_DIFF, summary=r['summary']))[:2000]
             self.panel.event(ctx.ref, type="review", sha=sha, role=role, verdict=r["verdict"], summary=r["summary"], points=r["points"],
-                             model=ctx.review_model["id"])
+                             model=review.reviewer(ctx, role)["id"])
             self.report_usage(ctx)   # the cost of reviewers counts towards the job cost and the daily budget
             out.append(r)
             if ctx.budget > 0 and ctx.base_cost > ctx.budget:
@@ -1115,7 +1174,8 @@ class Runner:
             raise Cancelled
         n = self.git(ctx).open_pr(ctx.repo["slug"], ctx.branch, ctx.repo["default_branch"], f"[{ctx.ref}] {title}", body)
         res = self.panel.event(ctx.ref, type="pr", number=n, url=self.git(ctx).pr_url(ctx.repo["slug"], n), files=files, additions=add,
-                               deletions=rem, attempts=attempt, **({"recipe": ctx.recipe} if ctx.onboarding else {})) or {}
+                               deletions=rem, attempts=attempt, tests_changed=tests_changed(ctx, base, sha),
+                               **({"recipe": ctx.recipe} if ctx.onboarding else {})) or {}
         self.comment(ctx, n, res)
         self.panel.event(ctx.ref, type="intent_done", note=f"PR #{n}", attempts=attempt)
 
@@ -1160,6 +1220,7 @@ class Runner:
         self.send_diff(ctx, base, head)
         res = self.panel.event(ctx.ref, type="pr", number=n, url=ctx.job.get("pr_url") or self.git(ctx).pr_url(ctx.repo["slug"], n),
                                files=files, additions=add, deletions=rem, attempts=ctx.job.get("attempts") or 1,
+                               tests_changed=tests_changed(ctx, base, head),
                                summary=M("Review rerun on sha {want}; gates re-evaluated.", want=want)) or {}
         self.comment(ctx, n, res)
         self.panel.event(ctx.ref, type="intent_done", note=M("review rerun"))
@@ -1269,6 +1330,18 @@ def review_guide(ctx, base, sha, files, add, rem, verdicts):
         mark = {"ok": "✅", "needs_changes": W(ctx, "⚠️ to review again"), "blocking": W(ctx, "❌ blocking"), "undetermined": W(ctx, "❓ no verdict")}
         out.append(W(ctx, "**Reviews**: ") + " · ".join(f"{messages.inert(v.get('label'), 40)} {mark.get(v.get('verdict'), '')}" for v in verdicts))
     return "\n\n".join(out) + "\n\n"
+
+
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec|specs)/|(^|/)(test_[^/]+|[^/]+_test\.[a-z0-9]+|[^/]+\.(test|spec)\.[a-z0-9]+|"
+                       r"[^/]+Tests?\.(java|kt|cs))$", re.I)
+
+
+def tests_changed(ctx, base, sha):
+    """Test files that ALREADY existed on the main branch and that the change modifies, renames or deletes. Weakening a test
+    is the easiest way to make the checks pass: a human and the reviewers are told (FAB-28 rewrote four test files)."""
+    out = mgit(ctx, diff_args(base) + ["--name-status", "-z", "--no-renames", f"{base}...{sha}"], check=False).stdout.split("\0")
+    pairs = list(zip(out[0::2], out[1::2]))
+    return sorted({f for st, f in pairs if st[:1] in ("M", "D") and TEST_FILE.search(f)})[:50]
 
 
 def numstat(ctx, base, sha):

@@ -77,7 +77,8 @@ def test_anthropic_only_parameters_are_removed_for_a_compatible_server_only():
     url, gw = start(jobs.get, httpx.MockTransport(lambda req: seen.append(json.loads(req.content)) or httpx.Response(200, json={})))
     httpx.post(url + "/m/v1/messages?beta=true", headers={"x-api-key": "tok-local"}, json=CLAUDE_CODE_BODY)
     local = seen[-1]
-    assert "thinking" not in local and "context_management" not in local and "output_config" not in local   # vLLM: "Unexpected reasoning effort"
+    assert "context_management" not in local and "output_config" not in local   # vLLM: "Unexpected reasoning effort"
+    assert local["thinking"] == {"type": "enabled", "budget_tokens": config.THINKING_BUDGET}   # 0.8.5: explicit budget
     assert local["model"] == "qwen3-latest" and local["messages"] == CLAUDE_CODE_BODY["messages"] and local["stream"] is True
     httpx.post(url + "/m/v1/messages?beta=true", headers={"x-api-key": "tok-claude"}, json=CLAUDE_CODE_BODY)
     assert seen[-1] == CLAUDE_CODE_BODY                                                                    # Anthropic : intact

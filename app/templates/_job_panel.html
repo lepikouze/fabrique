@@ -10,7 +10,7 @@
  {% if mx.profile %}<span class="pill" title="Model profile selected when the job was created">profile {{ mx.profile }}</span>{% endif %}
  {% if j.repo %}<span class="pill mono">{{ j.repo.slug }}</span>{% endif %}
 </div>
-<p class="p-run">{{ j.harness_label }} · {{ _tf('runner {name}', '_job_panel.html', j.runner.name) if j.runner else 'no runner yet' }} <span class="mono">{{ j.cost|money }}</span> <span class="muted">out of a budget of</span> <span class="mono">{{ j.budget|money }}</span></p>
+<p class="p-run">{{ j.harness_label }} · {{ _tf('runner {name}', '_job_panel.html', j.runner.name) if j.runner else 'no runner yet' }} <span class="mono">{{ j.cost|money }}</span> <span class="muted">out of a budget of</span> <span class="mono">{{ j.budget|money }}</span>{% if j.model and not PRICE_KNOWN(j.model) %} <span class="muted small" title="No price is known for this model: the cost is estimated with default prices. Enter its price in Settings → Agents and models.">· price unknown, estimated cost</span>{% endif %}</p>
 {% if j.budget and j.cost %}{% set pct = (j.cost / j.budget * 100)|round|int %}<div class="meter {{ 'warn' if pct >= 80 }}" role="meter" aria-label="Budget used" aria-valuenow="{{ [pct, 100]|min }}" aria-valuemin="0" aria-valuemax="100"><i style="width:{{ [pct, 100]|min }}%"></i></div>{% endif %}
 <div class="p-actions">
  {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="btn" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Pull request{{ ic('ext') }}</a>{% endif %}
@@ -22,10 +22,12 @@
 </div>
 <p class="p-from muted">Requested by <b>{{ j.requester }}</b> on {{ j.created_at|long_date }} · source: {{ j.source }}</p>
 {% set tx = j.translation %}{% if tx and tx.needed and (tx.done or tx.available) %}
-<div class="tx-bar" data-tx>
+<div class="tx-bar" data-tx{% if tx.running %} data-tx-running{% endif %}>
  {% if tx.showing %}<span class="tx-note">Machine translation</span><span class="muted">{{ nb(tx.done, "{n} text translated", "{n} texts translated") }} · {{ tx.model }}{% if tx.cost %} · {{ tx.cost|money }}{% endif %}</span>
  <button type="button" class="btn sm" data-mt-toggle data-original="Show the original" data-translated="Show the translation">Show the original</button>{% endif %}
- {% if tx.available and tx.done < tx.total %}<form method="post" action="/jobs/{{ j.ref }}/translate"><button class="btn sm" title="Translates the texts written by the agents into your language, with the translation model">{{ 'Translate the rest' if tx.done else 'Translate' }}</button></form>{% endif %}
+ {% if tx.failed and not tx.running %}<span class="bad small" role="status">{{ _tf('The last translation failed: {why}', '_job_panel.html', tx.failed) }}</span>{% endif %}
+ {% if tx.running %}<span class="muted small" role="status">Translation in progress… the texts appear as they are translated.</span><button class="btn sm" disabled>Translating…</button>
+ {% elif tx.available and tx.done < tx.total %}<form method="post" action="/jobs/{{ j.ref }}/translate" data-once><button class="btn sm" title="Translates the texts written by the agents into your language, with the translation model">{{ 'Translate the rest' if tx.done else 'Translate' }}</button></form>{% endif %}
 </div>{% endif %}
 {% endmacro %}
 
@@ -85,14 +87,15 @@
  {% if j.merge_state == 'ready' and can(user, 'decide') %}
  {% set checks = TO_CHECK(j) %}{% set chg = CHANGES_URL(j) %}
  {% if checks %}<div class="callout c-amber"><b class="ct">To check before approving</b>
-  <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b>{{ COLON() }}{{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
+  <ul class="bul">{% for k in checks %}<li><b>{{ k.title }}</b>{{ COLON() }}{% for x in k.parts or [] %}{% if not loop.first %} ; {% endif %}{{ x }}{% endfor %}{% if k.parts and k.text %} {% endif %}{{ k.text }}</li>{% endfor %}</ul></div>{% endif %}
  <p class="links">{% if chg %}<a class="link" href="{{ chg }}" target="_blank" rel="noopener noreferrer">See the changes {{ ic('ext') }}</a>{% endif %}
   {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="link" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Review PR #{{ j.pr_number }} {{ ic('ext') }}</a>{% endif %}</p>
  <form method="post" action="/jobs/{{j.ref}}/decide" class="decide">
   <label class="sr" for="note-{{j.ref}}">Comment (optional)</label>
-  <input id="note-{{j.ref}}" name="note" maxlength="300" placeholder="Comment for the audit log (optional)">
+  <input id="note-{{j.ref}}" name="note" maxlength="1000" placeholder="Comment for the audit log, or what to change (optional)">
   <button class="btn primary" name="verdict" value="approve">{{ ic('check') }}Approve the merge</button>
-  <button class="btn danger" name="verdict" value="refuse">Refuse</button>
+  <button class="btn" name="verdict" value="changes" title="The agent resumes on the same branch with the reviews and your comment, then the checks and reviews run again on the same PR">Ask for changes</button>
+  <button class="btn danger" name="verdict" value="refuse" title="The PR is closed on the Git host, without merging">Refuse</button>
  </form>
  {% if j.source != 'onboarding' %}<form method="post" action="/jobs/{{j.ref}}/reviews" class="inline"><button class="btn" title="The runner reviews the same sha again, without restarting the agent">Rerun the review</button></form>{% endif %}
  {% endif %}

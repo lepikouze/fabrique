@@ -4,6 +4,7 @@ os.environ["FABRIQUE_DATA"] = tempfile.mkdtemp(prefix="fabrique-test-")
 os.environ["FABRIQUE_DEMO"] = "0"
 os.environ["FABRIQUE_SIMULATOR"] = "0"
 os.environ["FABRIQUE_NOTIFY"] = "0"
+os.environ["FABRIQUE_PRICES"] = "0"
 os.environ["FABRIQUE_OPEN"] = "1"   # open mode: most tests do not have to connect
 
 import pytest

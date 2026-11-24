@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import insert, select, update
-from . import auth, config, db, demo, forges, i18n, jobs, notify, profiles, providers, translate, work, challenge
+from . import auth, config, db, demo, forges, i18n, jobs, notify, profiles, providers, translate, work, challenge, prices
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 HERE = os.path.dirname(__file__)
@@ -28,9 +28,12 @@ async def lifespan(app):
             demo.start()
     if os.environ.get("FABRIQUE_NOTIFY", "1") == "1":
         notify.start()
+    if os.environ.get("FABRIQUE_PRICES", "1") == "1":
+        prices.start()
     yield
     demo.stop()
     notify.stop()
+    prices.stop()
 
 
 app = FastAPI(title="Fabrique", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -88,7 +91,7 @@ def _git_name(repo):
         return forges.label(c, dict(repo))
 
 
-templates.env.globals.update(DONE_WHEN=jobs.done_when_of, DEFAULT_DONE=jobs.DEFAULT_DONE, GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, PATCH=jobs.patch_info, DIFF_OFF=jobs.diff_off, REPORT_FORMATS=jobs.report_formats, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
+templates.env.globals.update(PRICE_KNOWN=prices.known, DONE_WHEN=jobs.done_when_of, DEFAULT_DONE=jobs.DEFAULT_DONE, GIT_NAME=_git_name, CAN_DECIDE_REPO=jobs.can_decide_repo, HARNESSES_FOR=providers.harnesses_for, READY=jobs.READY, TO_CHECK=jobs.to_check, SECURITY_WARN=jobs.security_warn, DELETE_PHRASE=jobs.delete_phrase, REVIEW_EFFORT=jobs.review_effort, PATCH=jobs.patch_info, DIFF_OFF=jobs.diff_off, REPORT_FORMATS=jobs.report_formats, CHANGES_URL=jobs.changes_url, VERSION=config.VERSION, REVIEW_ROLES=work.ROLES, REVIEW_VERDICTS=work.VERDICTS, STAGE=jobs.STAGE, HARNESSES=jobs.HARNESSES, POLICIES=jobs.POLICIES, ROLE_LABEL=auth.ROLE_LABEL,
                              can=auth.can, PROVIDERS={"forgejo": "Forgejo", "gitea": "Gitea", "gitlab": "GitLab", "github": "GitHub"},
                              ONB={"pending": ("Onboarding", "var(--blue)"), "analyzing": ("Onboarding", "var(--blue)"),
                                   "requested": (M("Creation to approve"), "var(--amber)"), "creating": (M("Creation"), "var(--blue)"),
@@ -332,26 +335,21 @@ def job_full(request: Request, ref: str, back: str = ""):
 @app.post("/jobs/{ref}/translate")
 async def job_translate(request: Request, ref: str):
     """Translates what the job's agents wrote into the reader's language, with the model chosen in the settings.
-    Never automatic: only when the reader asks. Anyone who can see the job can ask."""
+    Never automatic: only when the reader asks. Anyone who can see the job can ask. The translation runs in the background:
+    the page comes back at once, says "translation in progress", and shows the texts as they arrive; a second click
+    while it runs starts nothing."""
     u = user_of(request)
     here = _safe_back(request, f"/jobs/{ref}")
-
-    def run():
-        j = jobs.get(u, ref)
-        if not j:
-            return None
-        with db.tx() as c:
-            return translate.translate(c, u, j, i18n.current())
-    try:
-        res = await run_in_threadpool(run)
-    except translate.Unavailable as e:
-        return back(here, err=str(e))
-    if res is None:
+    j = jobs.get(u, ref)
+    if not j:
         return forbidden(request, M("this job"))
-    if not res["total"]:
-        return back(here, ok=M("Everything is already translated."))
-    note = M("{done} text(s) translated in {seconds} s", done=res['done'], seconds=res['seconds']) + (f" · {i18n.money(res['cost'])}" if res["cost"] else "")
-    return back(here, ok=note + (M(" · incomplete translation: run it again for the rest.") if res["partial"] else "."))
+    lang = i18n.current()
+    with db.tx() as c:
+        if not translate.model_id(c):
+            return back(here, err=M("No translation model is chosen (Settings → Agents and models)."))
+    if not translate.start(u, j, lang):
+        return back(here, ok=M("A translation of this job is already in progress."))
+    return back(here, ok=M("Translation started: the texts appear as soon as they are translated."))
 
 
 @app.get("/jobs/{ref}/panel", response_class=HTMLResponse)
@@ -470,7 +468,7 @@ def decide_post(request: Request, ref: str, verdict: str = Form(""), note: str =
         jobs.decide(u, ref, verdict, note)
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
-    return back(_safe_back(request, "/inbox"), ok=M("Merge approved.") if verdict == "approve" else M("Merge refused."))
+    return back(_safe_back(request, "/inbox"), ok={"approve": M("Merge approved."), "changes": M("Changes requested: the agent resumes on the same branch.")}.get(verdict, M("Merge refused: the PR will be closed on the Git host.")))
 
 
 @app.post("/jobs/{ref}/reviews")
@@ -920,21 +918,25 @@ def settings_page(request: Request, tab: str = "agents"):
         probes, _ = db.get_setting(c, "probes")
         loaded, load_err = None, ""
         lp = request.query_params.get("load", "")
+        model_prices, prices_info = {}, dict(prices.fetched(c), off=not prices.URL)
         if tab == "agents" and lp:
             try:
                 loaded = providers.fetch_models(c, lp)
             except providers.Invalid as e:
                 load_err = str(e)
+            pv = next((p for p in provs if p["id"] == lp), {})
+            for m in loaded or []:
+                model_prices[m["id"]] = prices.resolve(c, m["id"], None, local=(pv.get("type") == "compatible" and not pv.get("has_key")))
         users = db.rows(c, select(db.users).order_by(db.users.c.role.desc(), db.users.c.username))
         default_problem = providers.default_problem(c) if tab == "agents" else ""
         profs = profiles.listing(c)
         prof_usage = {p["id"]: profiles.usage(c, p["id"]) for p in profs} if tab == "agents" else {}
     return render(request, "settings.html", "settings", tab=tab, sections=sections, data=data, users=users, provs=provs,
-                  ptypes=providers.TYPES, efforts=providers.EFFORTS, loaded=loaded, load_err=load_err, load_pid=lp, probes=probes or {},
+                  ptypes=providers.TYPES, efforts=providers.EFFORTS, model_prices=model_prices, prices_info=prices_info, loaded=loaded, load_err=load_err, load_pid=lp, probes=probes or {},
                   edit=next((p for p in provs if p["id"] == request.query_params.get("edit", "")), None),
                   git_edit=next((g for g in data["git"][0] if g["id"] == request.query_params.get("editgit", "")), None),
                   default_problem=default_problem, profs=profs, prof_usage=prof_usage, ROLES=profiles.ROLES, pefforts=profiles.efforts(),
-                  EXAMPLES=profiles.EXAMPLES,
+                  EXAMPLES=profiles.EXAMPLES, REVIEWERS=profiles.REVIEWERS,
                   prof_edit=next((p for p in profs if p["id"] == request.query_params.get("profile", "")), None),
                   chans=chans, ch_edit=next((x for x in chans if x["id"] == request.query_params.get("chan", "")), None),
                   notif_types=notify.TYPES, notif_events=notify.EVENTS, notif_recent=notify.recent() if tab == "notifications" else [],
@@ -994,7 +996,8 @@ async def settings_save(request: Request, section: str):
                     profiles.remove(c, u["user"], pid)
                     return back(url + "#profiles", ok=M("Profile removed."))
                 profiles.save(c, u["user"], pid if f.get("edit") == "1" else "", f.get("name", ""),
-                              {k: {"model": f.get(f"model:{k}", "")} for k in profiles.ROLES}, new=f.get("edit") != "1")
+                              {**{k: {"model": f.get(f"model:{k}", "")} for k in profiles.ROLES},
+                               **{f"review_{k}": {"model": f.get(f"model:review_{k}", "")} for k in profiles.REVIEWERS}}, new=f.get("edit") != "1")
             except profiles.Invalid as e:
                 return back(url + "#profile", err=str(e))
             return back(url + "#profiles", ok=M("Profile saved."))
@@ -1003,9 +1006,11 @@ async def settings_save(request: Request, section: str):
             url = "/settings?tab=agents"
             try:
                 if act == "save":
-                    existed = any(p["id"] == pid for p in providers.listing(c))
-                    providers.save(c, u["user"], pid, f.get("type", ""), f.get("name", ""), f.get("base_url", ""), f.get("key", ""),
-                                   clear_key=f.get("clear_key") == "1", effort=f.get("effort", ""))
+                    existed = any(p["id"] == pid.lower() for p in providers.listing(c))
+                    # The stored identifier (lowercase) leads to the model list: "Claude" typed, "claude" stored.
+                    pid = providers.save(c, u["user"], pid, f.get("type", ""), f.get("name", ""), f.get("base_url", ""), f.get("key", ""),
+                                         clear_key=f.get("clear_key") == "1", effort=f.get("effort", ""),
+                                         thinking=f.get("thinking"))
                     if existed:
                         return back(url, ok=M("Provider changed."))
                     return back(f"/settings?tab=agents&load={pid}", ok=M("Provider saved: tick the models to offer."))
@@ -1018,7 +1023,8 @@ async def settings_save(request: Request, section: str):
                     for mid in f.getlist("model")[:40]:
                         pr = ((probes or {}).get(pid) or {}).get(mid) or {}
                         apis = [a for a in ("anthropic", "openai") if pr.get(a)] if pr else []
-                        chosen.append({"id": mid, "name": f.get(f"name:{mid}") or mid, "apis": apis, "max_jobs": f.get(f"max:{mid}")})
+                        chosen.append({"id": mid, "name": f.get(f"name:{mid}") or mid, "apis": apis, "max_jobs": f.get(f"max:{mid}"),
+                                       "price": f.get(f"price:{mid}")})
                     providers.enable(c, u["user"], pid, chosen)
                     return back(url, ok=M("{count} model(s) offered for this provider.", count=len(chosen)))
                 if act == "probe":

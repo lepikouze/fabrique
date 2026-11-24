@@ -21,6 +21,15 @@ to translate: the code and the instructions given to the agents are in English.
 
 ## Under study
 
+### Live view of the model
+See what the model is writing while it writes: its thinking, its answer and the action it is preparing, live on the job
+page. Everything the model sends already goes through the runner's key gateway, so it works the same with llama.cpp,
+vLLM, Claude and Codex. Shown only to people who can read the job, limited to the end of the current response, never
+stored, and can be turned off in the settings. A model that loops shows it in the first minute instead of after the
+response.
+
+`Live` `Thinking` `Key gateway` `Any model server`
+
 ### Project mode
 Build a whole application from one request. A request of type "Project" has the agent write a specification, a
 technical plan and an ordered list of tasks into the repo (`specs/`), in the spirit of spec-driven development. A human
@@ -75,6 +84,15 @@ with end-to-end tests in a browser does not have the needs of a small service.
 `Memory` `Admission` `Queue` `OOM` `E2E tests`
 
 ## Ideas
+
+### Mistral
+Mistral's API (Mistral Large, Devstral, Codestral) as a provider. It speaks the Chat Completions API: declared as a
+compatible provider with its key, it can already serve the reviewers and the check of a request when it is filed. The
+agent is the missing part, since Claude Code needs the Messages API and Codex the Responses API. Two possible ways:
+translate Messages to Chat Completions in the key gateway, or add Mistral's own coding agent as a third agent. Devstral
+served locally (llama.cpp, vLLM) is already usable today.
+
+`Mistral` `Devstral` `Chat Completions` `Key gateway` `Agent`
 
 ### Stronger isolation
 Each job in a disposable virtual machine, on top of the container or the Pod.

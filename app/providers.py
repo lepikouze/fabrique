@@ -12,7 +12,7 @@ import base64, hashlib, re, time
 from urllib.parse import urlsplit
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from . import config, db
+from . import config, db, prices
 
 TYPES = {"anthropic": ("Anthropic", "https://api.anthropic.com"), "openai": ("OpenAI", "https://api.openai.com/v1"),
          "compatible": (M("OpenAI-compatible (llama.cpp, vLLM, Ollama)"), "")}
@@ -102,7 +102,10 @@ def runtime(c, model_id):
     typ = m.get("provider_type") or ("anthropic" if m.get("provider") == "anthropic" else "compatible")
     return {"id": m["id"], "provider": "anthropic" if typ == "anthropic" else "openai", "type": typ,
             "base_url": (p.get("base_url") or m.get("base_url") or "") if typ != "anthropic" else "",
-            "key": unseal(p.get("key", "")), "apis": m["apis"], "effort": p.get("effort", "medium") if typ == "compatible" else ""}
+            "key": unseal(p.get("key", "")), "apis": m["apis"], "effort": p.get("effort", "medium") if typ == "compatible" else "",
+            "thinking_budget": p.get("thinking") if typ == "compatible" else None,
+            # Price sent with the model, so that the runner counts the job cost right (None: unknown, the runner's table).
+            "price": prices.resolve(c, m["id"], m, local=(typ == "compatible" and not p.get("key")))}
 
 
 # ---------- modification ----------
@@ -110,7 +113,8 @@ def runtime(c, model_id):
 EFFORTS = {"": M("Server default"), "low": M("Low"), "medium": M("Medium"), "high": M("High"), "xhigh": M("Maximum")}
 
 
-def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, effort=None):
+def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, effort=None, thinking=None):
+    """Creates or changes a provider; returns its identifier as stored (lowercase)."""
     pid, name, base_url = pid.strip().lower(), name.strip()[:80], (base_url.strip() or TYPES.get(typ, ("", ""))[1]).rstrip("/")
     if typ not in TYPES or not _ID.match(pid) or not name:
         raise Invalid(M("Invalid provider: identifier (lowercase letters, digits, hyphens), type and name."))
@@ -130,10 +134,21 @@ def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, e
     else:
         eff = str(effort or "").strip().lower()
     eff = eff if typ == "compatible" and eff in EFFORTS else ""
-    provs = [p for p in provs if p["id"] != pid] + [{"id": pid, "type": typ, "name": name, "base_url": base_url, "key": sealed, "effort": eff}]
+    # Thinking budget (compatible servers only): tokens of thinking per agent response; empty = the runner's setting.
+    if thinking is None:   # field missing: keep the setting
+        think = (old or {}).get("thinking")
+    else:
+        t = str(thinking).strip()
+        if t and not (t.isdigit() and int(t) <= 64000):
+            raise Invalid(M("Thinking budget: a number of tokens between 0 and 64000, or empty."))
+        think = int(t) if t else None
+    think = think if typ == "compatible" else None
+    provs = [p for p in provs if p["id"] != pid] + [{"id": pid, "type": typ, "name": name, "base_url": base_url, "key": sealed, "effort": eff,
+                                                    "thinking": think}]
     db.set_setting(c, "providers", [{k: v for k, v in p.items() if k != "has_key"} for p in provs], by)
     db.log_audit(c, by, M("Settings: model provider"), target=pid,
                  detail=f"{TYPES[typ][0]} · {base_url}" + (M(" · key replaced") if key.strip() else M(" · key deleted") if clear_key else ""))
+    return pid
 
 
 def default_problem(c, harness=None, model=None):
@@ -187,6 +202,13 @@ def enable(c, by, pid, chosen):
         limit = max_jobs(m.get("max_jobs"))
         if limit:
             entry["max_jobs"] = limit   # jobs using this model at the same time; absent: no limit
+        if m.get("price") is not None:   # price entered by hand ($ per million tokens: input, output, cached input)
+            try:
+                p_ = prices.parse_manual(m.get("price"))
+            except ValueError:
+                raise Invalid(M("Price of {model}: three numbers, $ per million tokens: input / output / cached input (for example 2 / 10 / 0.1), or empty.", model=mid))
+            if p_:
+                entry["price"] = p_
         models.append(entry)
     agents, _ = db.get_setting(c, "agents")
     before = {m["id"] for m in models_with_provider(c)}

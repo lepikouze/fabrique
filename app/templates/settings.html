@@ -60,6 +60,11 @@
       <td><span class="m-lbl muted small">Model</span><select id="pf-m-{{k}}" name="model:{{k}}" required><option value="" {{ 'selected' if not r.model }} disabled>Choose a model</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
 </tr>
     {% endfor %}
+    {% for k, lbl in REVIEWERS.items() %}{% set r = (prof_edit.roles.get('review_' ~ k) if prof_edit else none) or {'model': ''} %}
+     <tr><td><label for="pf-m-review_{{k}}"><b>{{ lbl }}</b></label><br><small class="muted">Optional: another model for this reviewer only. A stronger model for code and security reviews pays off: each review is a single request.</small></td>
+      <td><span class="m-lbl muted small">Model</span><select id="pf-m-review_{{k}}" name="model:review_{{k}}"><option value="" {{ 'selected' if not r.model }}>Same as Reviewers</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
+</tr>
+    {% endfor %}
     </tbody></table>
     <p class="muted small">The agent keeps a single model for its whole session: nothing is lost between triage and implementation. Reviewers always start from a fresh context (the diff and the request): another model gives them a second opinion. A local model's effort level is set on its provider, further down.</p>
     <div class="row-end">{% if prof_edit %}<a class="btn" href="/settings?tab=agents#profiles">Cancel</a>{% endif %}<button class="btn primary">Save the profile</button></div>
@@ -89,16 +94,18 @@
      <input type="hidden" name="pid" value="{{ load_pid }}">
      <p class="muted small">Tick the models to offer in Fabrique. For a compatible server, “Test” makes a real tool call through each API and says which agent will be able to use it.</p>
      <p class="muted small">“Simultaneous jobs” limits how many jobs use a model at the same time, for a local server that cannot serve several: the others wait in the queue. Leave it empty for no limit.</p>
-     <table class="tbl"><thead><tr><th></th><th>Model</th><th>Compatible agents</th><th title="Jobs that may use this model as their agent's model at the same time. Empty: no limit. The others wait in the queue.">Simultaneous jobs</th><th></th></tr></thead><tbody>
+     <table class="tbl"><thead><tr><th></th><th>Model</th><th>Compatible agents</th><th title="Jobs that may use this model as their agent's model at the same time. Empty: no limit. The others wait in the queue.">Simultaneous jobs</th><th title="$ per million tokens: input / output / cached input. Empty: the automatic price shown in grey.">Price</th><th></th></tr></thead><tbody>
      {% set on = models|selectattr('provider_id', 'equalto', load_pid)|map(attribute='id')|list %}
      {% for m in loaded %}{% set pr = (probes.get(load_pid) or {}).get(m.id) %}
       <tr><td><input type="checkbox" name="model" value="{{ m.id }}" id="mm-{{loop.index}}" {{ 'checked' if m.id in on }}><input type="hidden" name="name:{{ m.id }}" value="{{ m.name }}"></td>
        <td><label for="mm-{{loop.index}}" class="mono">{{ m.id }}</label>{% if m.name != m.id %} <span class="muted">{{ m.name }}</span>{% endif %}</td>
        <td>{% if lp.type == 'anthropic' %}Claude Code{% elif lp.type == 'openai' %}Codex{% elif pr %}{{ 'Claude Code ✓' if pr.anthropic else 'Claude Code ✗ (tool call failed)' }}{% else %}<span class="muted">Claude Code (not tested)</span>{% endif %}</td>
        <td>{% set cur = models|selectattr('id', 'equalto', m.id)|list %}<input type="number" min="1" max="99" step="1" name="max:{{ m.id }}" value="{{ (cur[0].max_jobs if cur and cur[0].max_jobs else '') }}" placeholder="no limit" aria-label="Simultaneous jobs" style="max-width:110px"></td>
+       <td>{% set auto = model_prices.get(m.id) %}<input name="price:{{ m.id }}" class="mono" style="max-width:150px" aria-label="Price" value="{{ (cur[0].price|join(' / ')) if cur and cur[0].price else '' }}" placeholder="{{ (auto|join(' / ')) if auto else 'unknown' }}"></td>
        <td>{% if lp.type == 'compatible' %}<button class="btn sm" name="probe" value="{{ m.id }}" title="Loads the model on the server: may take a minute">Test</button>{% endif %}</td></tr>
-     {% else %}<tr><td colspan="5" class="muted">The provider lists no model.</td></tr>{% endfor %}
+     {% else %}<tr><td colspan="6" class="muted">The provider lists no model.</td></tr>{% endfor %}
      </tbody></table>
+     <p class="muted small">Price: $ per million tokens, input / output / cached input, used to count the cost of each job. Leave it empty to use the automatic price (in grey): {% if prices_info.at %}public price list updated on {{ prices_info.at|long_date }} ({{ prices_info.count }} models), then the built-in table{% elif prices_info.off %}the built-in table (public price list disabled){% else %}the built-in table (public price list not fetched yet){% endif %}. Enter it for a negotiated price or a model missing from the list. A local server without a key costs nothing.</p>
      <div class="row-end"><button class="btn primary" name="action" value="enable">Offer the ticked models</button></div>
     </form>
     {% endif %}
@@ -120,6 +127,9 @@
      <label for="p-effort">Effort level <small class="muted">local servers only: how long the model thinks before each action</small></label>
      <select id="p-effort" name="effort">{% for k, v in efforts.items() %}<option value="{{k}}" {{ 'selected' if (edit.effort if edit and 'effort' in edit else 'medium') == k }}>{{ v }}</option>{% endfor %}</select>
      <p class="muted small">The lower the effort, the faster the agent answers. Accepted values depend on the server (vLLM with Qwen3: low, medium, xhigh). Default: medium. With “Server default”, Fabrique sends no level.</p>
+     <label for="p-thinking">Thinking budget <small class="muted">tokens of thinking per agent response</small></label>
+     <input id="p-thinking" name="thinking" type="number" min="0" max="64000" step="500" class="mono" style="max-width:160px" placeholder="8000" value="{{ edit.thinking if edit and edit.thinking is not none else '' }}">
+     <p class="muted small">Beyond it, the model stops thinking and answers: a small model can otherwise think until its output limit without answering. A slow model wants a lower budget (each thousand tokens is time). Empty: the runner's setting. 0: no budget. A server that does not take it (vLLM, for example) gets the request without it.</p>
     </div>
     <div class="row-end">{% if edit %}<a class="btn" href="/settings?tab=agents">Cancel</a>{% endif %}<button class="btn primary">{{ 'Save' if edit else 'Save and load the models' }}</button></div>
    </form>

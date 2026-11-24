@@ -188,7 +188,7 @@ def heartbeat(runner, info):
         over = []
         if float(limits.get("budget_day") or 0) > 0 and spent_today(c) >= float(limits["budget_day"]):
             working = select(db.intents.c.job_id).where(db.intents.c.runner_id == runner["id"], db.intents.c.state == "leased",
-                                                        db.intents.c.kind.in_(("start", "resume", "onboard")))
+                                                        db.intents.c.kind.in_(("start", "resume", "onboard", "fix")))
             over = [r["ref"] for r in db.rows(c, select(db.jobs.c.ref).where(db.jobs.c.id.in_(working)))]
     # Cleanup: the runner occasionally announces its working directories; we tell it which ones are no longer needed (job
     # deleted, or finished for more than an hour). And automatic archiving occurs at most once per hour.
@@ -242,7 +242,7 @@ def reconcile(c):
             db.log_event(c, it["job_id"], "runner", M("lease expired: order put back in the queue"))
 
 
-MODEL_KINDS = ("start", "resume", "onboard", "review")   # orders that make a model work
+MODEL_KINDS = ("start", "resume", "onboard", "review", "fix")   # orders that make a model work
 
 
 def model_caps(c):
@@ -270,10 +270,10 @@ def claim(runner):
         q = select(db.intents).where(db.intents.c.state == "pending").order_by(db.intents.c.id)
         if spent_today(c) >= float(limits["budget_day"]):
             # Daily budget reached: only already decided merges pass; the rest waits until tomorrow.
-            for r in db.rows(c, select(db.intents.c.job_id).where(db.intents.c.state == "pending", db.intents.c.kind != "merge")):
+            for r in db.rows(c, select(db.intents.c.job_id).where(db.intents.c.state == "pending", db.intents.c.kind.not_in(("merge", "close")))):
                 c.execute(update(db.jobs).where(db.jobs.c.id == r["job_id"], db.jobs.c.status_text != PAUSED)
                           .values(status_text=PAUSED))
-            q = q.where(db.intents.c.kind == "merge")
+            q = q.where(db.intents.c.kind.in_(("merge", "close")))   # neither costs anything
         me = db.one(c, select(db.runners).where(db.runners.c.id == runner["id"]))
         it = None
         caps, busy = model_caps(c), None
@@ -311,6 +311,7 @@ def claim(runner):
         review_model = (profiles.apply_effort(providers.runtime(c, mx["review_model"]), mx.get("review_effort")) if mx.get("review_model")
                         else profiles.apply_effort(model, mx.get("review_effort")) if mx.get("review_effort") not in (None, profiles.INHERIT, mx.get("effort"))
                         else None)
+        review_models = {k: providers.runtime(c, v) for k, v in (mx.get("review_models") or {}).items() if isinstance(v, str) and v}
         # Git provider of the repo, if its token is set in the dashboard (otherwise the runner uses its variables).
         from . import forges   # the provider OF THIS repo (never another provider of the same type), if it has a token
         g = forges.for_repo(c, repo)
@@ -322,7 +323,7 @@ def claim(runner):
         if it["kind"] == "resume" and (it["payload"] or {}).get("pause"):
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(updated_at=t, activity="active",
                                                                              status_text=M("Resumed after the pause by ") + runner["name"]))
-        if it["kind"] in ("start", "onboard", "init", "create"):
+        if it["kind"] in ("start", "onboard", "init", "create", "fix"):
             c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(runner_id=runner["id"], updated_at=t, activity="active",
                                                                              status_text=M("Picked up by ") + runner["name"]))
         db.log_event(c, j["id"], "runner", M("{name} takes the order “{kind}”", name=runner['name'], kind=it['kind']))
@@ -336,6 +337,7 @@ def claim(runner):
                         done_when=str(done), done_when_default=default_done),
             "model": model,
             "review_model": review_model,
+            "review_models": review_models,
             "forge": forge,
             "repo": {"provider": repo["provider"], "slug": repo["slug"], "default_branch": repo["default_branch"],
                      "description": str(rs.get("description") or "")[:300],
@@ -419,6 +421,8 @@ def evaluate(c, j, repo):
         *reviews,
         {"key": "first_attempt", "name": M("First attempt"), "ok": (j["attempts"] or 0) <= 1, "detail": M("no new attempt") if (j["attempts"] or 0) <= 1 else M("{n} attempts", n=j['attempts'])},
         {"key": "protected", "name": M("Protected paths"), "ok": not hits, "detail": M("no protected file touched") if not hits else M("touches {files}", files=", ".join(hits[:4]))},
+        {"key": "tests", "name": M("Existing tests"), "ok": not diff.get("tests_changed"),
+         "detail": M("none modified") if not diff.get("tests_changed") else M("modifies {files}", files=", ".join((diff.get("tests_changed") or [])[:4]))},
         {"key": "size", "name": M("Size"), "ok": size <= size_limit, "detail": M("{size} lines out of {size_limit}", size=size, size_limit=size_limit)},
         {"key": "opinion", "name": M("Agent's opinion"), "ok": bool(d and d["confident"]), "detail": M("confident") if d and d["confident"] else M("not confident or no opinion")},
     ]
@@ -570,8 +574,10 @@ def report(runner, ref, ev):
             if not isinstance(raw, list):
                 raise Denied("invalid PR")
             # Paths kept as git provides them (neither cleaned nor silently discarded); anything extra is reported.
+            tc = ev.get("tests_changed") if isinstance(ev.get("tests_changed"), list) else []
             diff = {"files": [str(f)[:MAX_PATH] for f in raw[:MAX_FILES]], "truncated": len(raw) > MAX_FILES,
-                    "additions": int(ev.get("additions") or 0), "deletions": int(ev.get("deletions") or 0)}
+                    "additions": int(ev.get("additions") or 0), "deletions": int(ev.get("deletions") or 0),
+                    "tests_changed": [str(f)[:MAX_PATH] for f in tc[:50]]}
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(pr_number=n, pr_url=url, diff=diff, updated_at=t,
                                                                          attempts=max(1, int(ev.get("attempts") or 1))))
             j = db.one(c, select(db.jobs).where(db.jobs.c.id == jid))

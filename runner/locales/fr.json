@@ -24,5 +24,7 @@
  "❌ not met": "❌ non traité",
  "❓ no verdict": "❓ sans verdict",
  "❓ unclear": "❓ pas clair",
- "\n\n_Default criterion: none was given with the request._": "\n\n_Critère par défaut : aucun n'a été donné avec la demande._"
+ "\n\n_Default criterion: none was given with the request._": "\n\n_Critère par défaut : aucun n'a été donné avec la demande._",
+ "Closed without merging: the merge was refused in Fabrique.": "Fermée sans merge : le merge a été refusé dans la Fabrique.",
+ "Reason": "Raison"
 }
