@@ -25,6 +25,14 @@ if "--output-format" in args and args[args.index("--output-format") + 1] == "jso
 
 sid = resume or "sess-42"
 out({"type": "system", "subtype": "init", "session_id": sid})
+if prompt.startswith("The runner refused your recipe"):   # 0.8.9: the onboarding agent fixes a refused recipe
+    with open(".fabrique/setup.json", "w") as f:
+        json.dump({"setup": ["true"], "checks": {"tests": ["true", "python3 -c 'import notebook'"]}}, f)
+    subprocess.run(["git", "add", ".fabrique/setup.json"], check=True)
+    subprocess.run(["git", "commit", "-qm", "Fabrique recipe"], check=True, capture_output=True)
+    fab("decision", "--confident", "yes", "--verdict", "recette corrigée", "--interpretation", "liste de commandes")
+    out({"type": "result", "subtype": "success", "session_id": sid, "result": "corrigé"})
+    sys.exit(0)
 if prompt.startswith("Onboarding of repository"):          # onboarding agent: only writes the recipe (except for "touch" cases)
     fab("step", "triage", "lecture du dépôt")
     if os.path.exists("NOTHING_TO_CHECK"):              # project without tests or build: the agent gives up
@@ -33,7 +41,8 @@ if prompt.startswith("Onboarding of repository"):          # onboarding agent: o
         sys.exit(0)
     os.makedirs(".fabrique", exist_ok=True)
     with open(".fabrique/setup.json", "w") as f:
-        json.dump({"setup": [] if "sanscheck" in prompt else ["true"], "checks": {} if "sanscheck" in prompt else {"tests": "python3 -c 'import notebook'"},
+        json.dump({"setup": [] if "sanscheck" in prompt else ["true"], "checks": {} if "sanscheck" in prompt else
+                   {"tests": "python3 -c 'import notebook' && " + "true && " * 400 + "true"} if "longcheck" in prompt else {"tests": "python3 -c 'import notebook'"},
                    "env": [{"name": "API_KEY", "purpose": "appel externe des tests d'intégration", "required": False}]}, f)
     if "touche" in prompt:
         with open("notebook.py", "a") as f:

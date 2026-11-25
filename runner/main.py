@@ -578,7 +578,7 @@ class Runner:
     def snapshot_setup(self, ctx):
         """What the recipe's installation created or changed in the repo (a package-lock.json written by npm install, for
         example), with the content of each file: such a file is never committed by the runner unless the agent changed it
-        (FAB-15: a 1,431-line lock file nobody asked for made the PR too large)."""
+        (seen: a 1,431-line lock file nobody asked for made the PR too large)."""
         try:
             files, dirs = workspace_changes(ctx)
             hashes = file_hashes(ctx, files)
@@ -810,6 +810,23 @@ class Runner:
             raise Waiting("empty")   # a README, a license: no project to analyze. Same process as for an empty repo.
         if not self.agent(ctx, messages.onboard(ctx.job, ctx.repo)):
             return
+        # The recipe is checked in the workspace first: an invalid one goes back to the agent with the exact reason, up to
+        # config.RECIPE_FIXES times, instead of failing the whole onboarding (seen: a startup check of 560 characters).
+        for attempt in range(config.RECIPE_FIXES + 1):
+            path = os.path.join(ctx.repo_dir, ".fabrique", "setup.json")
+            if not appeared(path):
+                break
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    normalize_recipe(json.loads(fh.read()))
+                break
+            except (ValueError, OSError) as e:
+                if attempt == config.RECIPE_FIXES:
+                    break   # the validation below fails with the reason
+                self.panel.event(ctx.ref, type="log", kind="onboarding",
+                                 message=M("recipe refused ({why}): sent back to the agent to fix it", why=str(e)[:300]))
+                if not self.agent(ctx, messages.fix_recipe(str(e)), resume=ctx.job.get("session_id")):
+                    return
         base = ctx.base_sha
         # Only the recipe is sent in the PR, regardless of what the agent committed or left (environment .venv, test files):
         # we start from the main branch with this single file; the rest is discarded and reported.
@@ -835,9 +852,11 @@ class Runner:
         if parents != [base] or names != [".fabrique/setup.json"]:
             raise Failed(M("the onboarding commit contains more than the recipe"))
         try:
-            ctx.recipe = validate_recipe(json.loads(mgit(ctx, ["show", f"{sanitized}:.fabrique/setup.json"]).stdout))
+            ctx.recipe, notes = normalize_recipe(json.loads(mgit(ctx, ["show", f"{sanitized}:.fabrique/setup.json"]).stdout))
         except ValueError as e:
             raise Failed(M("invalid recipe: {why}", why=str(e)))
+        for n in notes:
+            self.panel.event(ctx.ref, type="log", kind="onboarding", message=M("recipe repaired: {note}", note=n))
         # Independent evidence: installation and checks replayed by the runner in a new container (recipe image).
         ctx.image = ctx.recipe.get("image") or ctx.image
         self.ex.stop(ctx)
@@ -861,8 +880,11 @@ class Runner:
         ns, _, name = ctx.repo["slug"].rpartition("/")
         try:
             res = self.git(ctx).create_repo(ns, name, ctx.repo.get("description") or "")
+        except forges.CreateRefused as e:
+            raise Failed(M("creation of {slug} refused: {why}", slug=ctx.repo['slug'], why=str(e)))
         except Exception as e:
-            raise Failed(M("creation of {slug} refused by the provider ({name}): the runner's token must be allowed to create repos in “{ns}”.", slug=ctx.repo['slug'], name=type(e).__name__, ns=ns))
+            raise Failed(M("creation of {slug} refused by the provider ({name}: {why}): the runner's token must be allowed to create repos in “{ns}”.",
+                           slug=ctx.repo['slug'], name=type(e).__name__, why=str(e)[:200], ns=ns))
         self.panel.event(ctx.ref, type="log", kind=M("creation"), message=f"{ctx.repo['slug']} : {res}")
         self.init_repo(ctx)
 
@@ -1317,26 +1339,83 @@ def detect_image(repo_dir):
     return "python"
 
 
-def validate_recipe(r):
-    """Fabrique recipe: image (language), setup (commands), checks (name -> command), env (names and usages, without value)."""
-    if not isinstance(r, dict) or set(r) - {"image", "setup", "checks", "env"}:
-        raise ValueError(M("allowed sections: image, setup, checks, env"))
+RECIPE_MAX = {"setup": 30, "checks": 12, "env": 30, "command": 2000, "parts": 20}
+
+
+def _check_name(raw, taken):
+    """A check name as the runner stores it: lowercase, no accent, letters, digits, "-" and "_" ("Startup!" -> "startup")."""
+    import unicodedata
+    n = unicodedata.normalize("NFKD", str(raw)).encode("ascii", "ignore").decode().lower()
+    n = re.sub(r"[^a-z0-9_-]+", "-", n).strip("-_")[:20] or "check"
+    if not n[0].isalpha():
+        n = ("c-" + n)[:20]
+    out, i = n, 2
+    while out in taken:
+        out, i = f"{n[:17]}-{i}", i + 1
+    return out
+
+
+def normalize_recipe(r):
+    """(recipe, notes). Tolerant: what can be repaired safely is repaired and said in the notes (a check name with capitals
+    or accents, an unknown section, a check written as a list of commands, which the runner chains with &&). What cannot is
+    refused with a precise reason, naming the section, the check and the limit (the agent then gets a round to fix it)."""
+    if not isinstance(r, dict):
+        raise ValueError(M("the recipe must be a JSON object with the sections image, setup, checks, env"))
+    notes = []
+    unknown = sorted(set(r) - {"image", "setup", "checks", "env"})
+    if unknown:
+        notes.append(M("unknown section(s) ignored: {names}", names=", ".join(unknown)))
     if "image" in r and r["image"] not in JOB_IMAGES:
-        raise ValueError(M("image: one of ") + ", ".join(JOB_IMAGES))
+        raise ValueError(M("image: “{image}” is not one of ", image=str(r["image"])[:20]) + ", ".join(JOB_IMAGES))
     setup, checks, env = r.get("setup") or [], r.get("checks") or {}, r.get("env") or []
-    if not isinstance(setup, list) or len(setup) > 20 or not all(isinstance(c, str) and 0 < len(c) <= 500 for c in setup):
-        raise ValueError(M("setup: a list of at most 20 commands"))
-    if not isinstance(checks, dict) or len(checks) > 8 or not all(
-            isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,19}", k) and isinstance(v, str) and 0 < len(v) <= 500 for k, v in checks.items()):
-        raise ValueError(M("checks: at most 8 checks name -> command"))
-    if not isinstance(env, list) or len(env) > 30 or not all(
-            isinstance(e, dict) and set(e) <= {"name", "purpose", "required"} and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", str(e.get("name", "")))
-            for e in env):
-        raise ValueError(M("env: names and purposes, no value"))
-    out = {"setup": setup, "checks": checks, "env": env}
+    if isinstance(setup, str):
+        setup = [setup]
+    if not isinstance(setup, list):
+        raise ValueError(M("setup: a list of commands"))
+    if len(setup) > RECIPE_MAX["setup"]:
+        raise ValueError(M("setup: {n} commands, {max} at most", n=len(setup), max=RECIPE_MAX["setup"]))
+    for i, c in enumerate(setup, 1):
+        if not isinstance(c, str) or not c.strip():
+            raise ValueError(M("setup: command {i} is empty or not text", i=i))
+        if len(c) > RECIPE_MAX["command"]:
+            raise ValueError(M("setup: command {i} has {n} characters, {max} at most: split it into several commands", i=i, n=len(c), max=RECIPE_MAX["command"]))
+    if not isinstance(checks, dict):
+        raise ValueError(M("checks: an object, check name -> command (or list of commands)"))
+    if len(checks) > RECIPE_MAX["checks"]:
+        raise ValueError(M("checks: {n} checks, {max} at most", n=len(checks), max=RECIPE_MAX["checks"]))
+    out_checks, taken = {}, set()
+    for raw, v in checks.items():
+        name = _check_name(raw, taken)
+        taken.add(name)
+        if name != raw:
+            notes.append(M("check “{raw}” renamed “{name}”", raw=str(raw)[:40], name=name))
+        parts = v if isinstance(v, list) else [v]
+        if not parts or len(parts) > RECIPE_MAX["parts"] or not all(isinstance(x, str) and x.strip() for x in parts):
+            raise ValueError(M("check “{name}”: a command, or a list of at most {max} commands, none empty", name=name, max=RECIPE_MAX["parts"]))
+        for x in parts:
+            if len(x) > RECIPE_MAX["command"]:
+                raise ValueError(M("check “{name}”: a command of {n} characters, {max} at most: write it as a list of shorter commands, or call a script of the repository", name=name, n=len(x), max=RECIPE_MAX["command"]))
+        out_checks[name] = " && ".join(f"{{ {x.strip()}; }}" if len(parts) > 1 else x.strip() for x in parts)
+    if not isinstance(env, list) or len(env) > RECIPE_MAX["env"]:
+        raise ValueError(M("env: a list of at most {max} variables", max=RECIPE_MAX["env"]))
+    clean_env = []
+    for e in env:
+        if not isinstance(e, dict) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", str(e.get("name", ""))):
+            raise ValueError(M("env: each variable needs a valid name (letters, digits, _), and never a value"))
+        extra = set(e) - {"name", "purpose", "required"}
+        if extra:
+            notes.append(M("env {name}: field(s) ignored: {fields}", name=e["name"], fields=", ".join(sorted(extra))))
+        clean_env.append({k: e[k] for k in ("name", "purpose", "required") if k in e})
+    out = {"setup": setup, "checks": out_checks, "env": clean_env}
     if r.get("image"):
         out["image"] = r["image"]
-    return out
+    return out, notes
+
+
+def validate_recipe(r):
+    """Fabrique recipe: image (language), setup (commands), checks (name -> command, or list of commands chained by the
+    runner), env (names and usages, without value). Tolerant (see normalize_recipe)."""
+    return normalize_recipe(r)[0]
 
 
 def diff_args(base):

@@ -156,7 +156,7 @@ def test_create_repo_per_forge():
 
     def h(req):
         seen.append((req.method, req.url.path, json.loads(req.content) if req.content else None))
-        if req.url.path == "/api/v4/groups/fabrique":
+        if req.url.path == "/api/v4/namespaces/fabrique":
             return httpx.Response(200, json={"id": 39})
         if req.url.path == "/user":
             return httpx.Response(200, json={"login": "moi"})

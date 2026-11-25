@@ -41,8 +41,9 @@
   <label for="r-prov">Provider</label>
   <select id="r-prov" name="provider">{% if git %}{% for g in git %}<option value="{{ g.id }}">{{ g.name }} ({{ PROVIDERS[g.type] }})</option>{% endfor %}{% else %}{% for k, v in PROVIDERS.items() %}<option value="{{k}}">{{v}}</option>{% endfor %}{% endif %}</select>
   <label for="r-slug">Path <small>group/project: type a few letters, the repos the bot can see are suggested</small></label>
-  <input id="r-slug" name="slug" required maxlength="200" placeholder="team/project" class="mono" list="r-slug-list" autocomplete="off" data-repo-search>
-  <datalist id="r-slug-list"></datalist>
+  <div class="sugg-wrap"><input id="r-slug" name="slug" required maxlength="200" placeholder="team/project" class="mono" autocomplete="off" data-repo-search
+   role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="r-slug-list">
+  <div class="sugg" id="r-slug-list" role="listbox" hidden></div></div>
   <p class="muted small" data-repo-search-note aria-live="polite"></p>
   <label for="r-name">Display name</label>
   <input id="r-name" name="name" maxlength="120" placeholder="Link notebook">

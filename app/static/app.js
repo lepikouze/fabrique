@@ -620,32 +620,57 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
 })();
 
 
-// Adding a repo: the repos the provider's bot can see are suggested while typing (the token stays on the server). A path
-// typed in full is still accepted: the bot may not see the repo yet, the onboarding then waits for its access.
+// Adding a repo: the repos the provider's bot can see are suggested while typing (the token stays on the server), in a list
+// drawn under the field (arrows, Enter, Escape, click). A path typed in full is still accepted: the bot may not see the repo
+// yet, the onboarding then waits for its access.
 (function () {
   const input = document.querySelector("[data-repo-search]");
   if (!input) return;
-  const form = input.form, list = document.getElementById(input.getAttribute("list"));
+  const form = input.form, box = document.getElementById(input.getAttribute("aria-controls"));
   const note = form.querySelector("[data-repo-search-note]"), prov = form.querySelector("[name=provider]");
-  let timer = null, seen = [];
+  let timer = null, items = [], active = -1;
   const say = (t) => { if (note) note.textContent = t || ""; };
+  function close() { box.hidden = true; box.innerHTML = ""; input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); active = -1; }
+  function mark(i) {
+    active = i;
+    [...box.children].forEach((el, k) => { el.classList.toggle("on", k === i); el.setAttribute("aria-selected", k === i ? "true" : "false"); });
+    if (i >= 0) { const el = box.children[i]; input.setAttribute("aria-activedescendant", el.id); el.scrollIntoView({ block: "nearest" }); }
+  }
+  function pick(i) { if (items[i]) { input.value = items[i].slug; close(); say(""); input.focus(); } }
+  function show(list) {
+    items = list; box.innerHTML = "";
+    list.forEach((x, i) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "opt"; b.id = "r-slug-opt-" + i;
+      b.setAttribute("role", "option"); b.tabIndex = -1;
+      const s = document.createElement("span"); s.className = "s"; s.textContent = x.slug;
+      const d = document.createElement("span"); d.className = "d";
+      d.textContent = [x.private ? T("private") : T("public"), x.branch, x.description].filter(Boolean).join(" · ");
+      b.append(s, d);
+      b.addEventListener("mousedown", (e) => { e.preventDefault(); pick(i); });
+      box.appendChild(b);
+    });
+    box.hidden = !list.length; input.setAttribute("aria-expanded", list.length ? "true" : "false"); active = -1;
+  }
   function search() {
     const q = input.value.trim();
-    if (q.length < 2) { list.innerHTML = ""; say(""); return; }
+    if (q.length < 2) { close(); say(""); return; }
     fetch("/repos/search?provider=" + encodeURIComponent(prov ? prov.value : "") + "&q=" + encodeURIComponent(q),
           { headers: { "Accept": "application/json" }, credentials: "same-origin" })
       .then((r) => r.json()).then((d) => {
-        list.innerHTML = ""; seen = (d.items || []).map((x) => x.slug);
-        (d.items || []).forEach((x) => {
-          const o = document.createElement("option"); o.value = x.slug;
-          o.label = [x.private ? T("private") : T("public"), x.branch, x.description].filter(Boolean).join(" · ");
-          list.appendChild(o);
-        });
+        show(d.items || []);
         if (d.msg) say(d.msg);
-        else if (!seen.length) say(T("The bot sees no repo matching this path: it is still accepted, the onboarding will wait for its access."));
+        else if (!(d.items || []).length) say(T("The bot sees no repo matching this path: it is still accepted, the onboarding will wait for its access."));
         else say("");
       }).catch(() => say(""));
   }
   input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 300); });
-  if (prov) prov.addEventListener("change", () => { list.innerHTML = ""; if (input.value.trim().length >= 2) search(); });
+  input.addEventListener("keydown", (e) => {
+    if (box.hidden) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); mark(Math.min(items.length - 1, active + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); mark(Math.max(0, active - 1)); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); pick(active); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+  });
+  input.addEventListener("blur", () => setTimeout(close, 150));
+  if (prov) prov.addEventListener("change", () => { close(); if (input.value.trim().length >= 2) search(); });
 })();

@@ -59,6 +59,7 @@ rather than opening up.
 | `MERGE_RETRY_WAITS` | `5,15,30` | Seconds waited before each new attempt when the Git host refuses a merge for a moment |
 | `MAX_TURNS`, `FIX_ATTEMPTS` | `60`, `2` | Agent turns; new attempts if the checks fail |
 | `MAX_TURN_RESUMES` | `2` | Resumes of the agent's session after its turn limit (work kept) before the job fails |
+| `RECIPE_FIXES` | `2` | Rounds given to the onboarding agent to fix a recipe the runner refused, before the job fails |
 | `REVIEW_MODE` | `direct` | `direct`: one request to the model per reviewer; `agent`: read-only agent, on an export of the verified commit |
 | `CLAUDE_BIN`, `CODEX_BIN` | `/usr/local/bin/claude`, `/usr/local/bin/codex` | Agent programs, by absolute path (never looked up in a job's `PATH`) |
 | `REVIEW_MAX_DIFF`, `REVIEW_MAX_TOKENS` | `60000`, `8000` | Size of the diff sent and of the reviewers' answer |

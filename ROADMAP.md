@@ -38,6 +38,16 @@ spec and the plan first. A project page shows progress, and a budget caps the wh
 
 `Specification` `Plan` `Task list` `Chained jobs` `Human approval`
 
+### Security audit of a repo
+A request of type "Security audit": read-only, like a study, nothing pushed. The agents follow a structured audit
+method: reconnaissance of the code and its trust boundaries, hunting waves by area, each candidate finding checked again
+by a fresh verifier, then a report with confirmed findings, findings to validate and rejected ones, each with the file,
+the proof and the smallest fix. Runs in the job's disposable container, without network. Two depths: quick (one agent,
+the main risks) and full (several agents, capped by a budget). From the report, a human can file a fix request per
+finding in one click.
+
+`Security` `Read-only` `Verified findings` `Report` `Fix requests`
+
 ### Requests from an issue
 A `fabrique` label on a GitHub, GitLab or Forgejo issue creates an incoming request in the inbox. Nothing starts
 without a reviewer's approval. Fabrique then comments on the issue: job created, PR opened, merge.

@@ -2,8 +2,8 @@ apiVersion: v2
 name: fabrique
 description: Fabrique, a self-hosted agentic software factory (dashboard and built-in runner)
 type: application
-version: 0.5.8          # chart version
-appVersion: "0.8.8"     # the Fabrique version that this chart installs by default
+version: 0.5.9          # chart version
+appVersion: "0.8.9"     # the Fabrique version that this chart installs by default
 home: https://github.com/lepikouze/fabrique
 sources:
   - https://github.com/lepikouze/fabrique

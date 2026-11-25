@@ -481,8 +481,8 @@ def onboard_wait_text(repo, reason):
 def _recipe(r):
     """Bounded copy of the recipe reported by the runner (display only: the runner always reads the main branch again)."""
     return {**({"image": _txt(r["image"], 20)} if r.get("image") else {}),
-            "setup": [_txt(x, 500) for x in (r.get("setup") or [])[:20]],
-            "checks": {_txt(k, 20): _txt(v, 500) for k, v in list((r.get("checks") or {}).items())[:8]},
+            "setup": [_txt(x, 2000) for x in (r.get("setup") or [])[:30]],
+            "checks": {_txt(k, 20): _txt(v, 8000) for k, v in list((r.get("checks") or {}).items())[:12]},
             "env": [{"name": _txt(e.get("name"), 64), "purpose": _txt(e.get("purpose"), 200), "required": bool(e.get("required"))}
                     for e in (r.get("env") or [])[:30] if isinstance(e, dict)]}
 

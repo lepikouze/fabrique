@@ -189,6 +189,13 @@ def fix_requested(reviews, note, by=""):
             f"dispute. {FAB}")
 
 
+def fix_recipe(why):
+    return ("The runner refused your recipe .fabrique/setup.json: " + _quote(why) + "\n\nFix the recipe (and only it): a long "
+            "check can be written as a list of commands that the runner chains, or can call a script that already exists in "
+            "the repository. Then rerun what changed, commit the recipe alone, and give your opinion again with `fab decision`. "
+            + FAB)
+
+
 def more_turns(job):
     return (f"Your run on {job['ref']} reached its turn limit; the runner gives you a new run. Your workspace is intact: same "
             "files, same branch, same commits. Check where you were (`git status`, `git log`), then finish the work: run the "

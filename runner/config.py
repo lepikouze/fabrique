@@ -69,6 +69,7 @@ ANTHROPIC_API_URL = _env("ANTHROPIC_API_URL", "https://api.anthropic.com")
 MAX_TURNS = int(_env("MAX_TURNS", "60"))
 MAX_TURN_RESUMES = int(_env("MAX_TURN_RESUMES", "2"))   # resumes of the agent session after its turn limit, before failing
 FIX_ATTEMPTS = int(_env("FIX_ATTEMPTS", "2"))
+RECIPE_FIXES = int(_env("RECIPE_FIXES", "2"))   # rounds given to the onboarding agent to fix a refused recipe
 WATCHDOG_SECONDS = int(_env("WATCHDOG_SECONDS", "0"))   # 0: dashboard threshold (minutes); forced in seconds for tests   # new runs if checks fail
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 HOST = _env("RUNNER_HOST", socket.gethostname())

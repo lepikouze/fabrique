@@ -397,6 +397,23 @@ def test_a_recipe_without_checks_can_still_be_merged_after_human_approval(setup,
         assert db.one(c, select(db.repos).where(db.repos.c.id == rid))["onboarding"] == "ready"
 
 
+def test_a_refused_recipe_goes_back_to_the_agent_instead_of_failing(setup, tmp_path):
+    """0.8.9: a check command over the limit is sent back to the agent with the reason; its fixed recipe
+    (a list of commands) is replayed and proposed."""
+    r, forge, panel = setup
+    _drop_recipe(forge, tmp_path)
+    rid = _new_repo("alice/longcheck")
+    ref = jobs.onboard(ADMIN, rid)
+    step(r, panel)
+    j = jobs.get(ADMIN, ref)
+    assert j["stage"] == "pr", j["status_text"]
+    logs = [e["message"] for e in j["events"] if e["kind"] == "onboarding"]
+    assert any("recipe refused" in m and "2000 at most" in m for m in logs)
+    with db.tx() as c:
+        rec = db.one(c, select(db.repos).where(db.repos.c.id == rid))["recipe"]
+    assert rec["checks"]["tests"] == "{ true; } && { python3 -c 'import notebook'; }"
+
+
 def test_onboarding_keeps_only_the_recipe(setup, tmp_path):
     r, forge, panel = setup
     _drop_recipe(forge, tmp_path)
@@ -440,9 +457,12 @@ def test_onboarding_with_existing_recipe_is_immediate(setup):
 def test_recipe_validation():
     ok = rmain.validate_recipe({"setup": ["pip install -r r.txt"], "checks": {"tests": "pytest"}, "env": [{"name": "X", "purpose": "p"}]})
     assert ok["checks"] == {"tests": "pytest"}
-    for bad in ({"setup": "pip"}, {"checks": {"Tests!": "x"}}, {"env": [{"name": "X", "value": "secret"}]}, {"system": ["libpq"]},
-                {"checks": {f"c{i}": "x" for i in range(9)}}):
-        with pytest.raises(ValueError):
+    # 0.8.9: repaired, and said, rather than refused
+    rec, notes = rmain.normalize_recipe({"setup": "pip", "checks": {"Tests!": "x"}, "env": [{"name": "X", "value": "secret"}], "system": ["libpq"]})
+    assert rec["setup"] == ["pip"] and rec["checks"] == {"tests": "x"} and rec["env"] == [{"name": "X"}] and len(notes) == 3
+    for bad, why in (({"checks": {f"c{i}": "x" for i in range(13)}}, "13 checks"), ({"checks": {"t": "x" * 2001}}, "2001 characters"),
+                     ({"setup": ["y" * 2001]}, "command 1 has 2001"), ({"env": [{"name": "1BAD"}]}, "valid name"), ("text", "JSON object")):
+        with pytest.raises(ValueError, match=why):
             rmain.validate_recipe(bad)
 
 

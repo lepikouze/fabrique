@@ -6,9 +6,35 @@ Notable changes to Fabrique, most recent first. The format follows
 
 Interface labels are quoted in French, as they appear on a French screen.
 
+## [0.8.9] - 2026-11-25
+
+A tolerant onboarding, after a real repository whose recipe was refused twice for a single long check. No migration. Chart 0.5.9.
+
+### Fixed
+- **A refused recipe no longer fails the onboarding.** The runner refused a recipe whose startup check was a 560-character
+  command (limit: 500), after the agent had proven all four checks green. Now:
+  - the limits are wider: 2,000 characters per command, 12 checks, 30 installation commands;
+  - a check can be a list of commands, which the runner chains in one shell (variables exported by one are seen by the next);
+  - what can be repaired safely is repaired and said in the job log (a check name with capitals or accents, an unknown
+    section, an extra field on a variable) instead of refused;
+  - a recipe that must still be refused goes back to the agent with the exact reason (which section, which check, which
+    limit), up to `RECIPE_FIXES` (2) times, before the job fails;
+  - the onboarding agent is told the limits, and to reuse the scripts and Makefile targets the repository already has
+    rather than copying them into one long line.
+- **A refused repo creation says why.** The message gives the step that failed (finding the group or organization, or
+  creating the repo), the HTTP status and the Git host's own reason, with what to change: for GitLab, the Maintainer role
+  in the group or allowing Developers to create projects. It used to say only "HTTPStatusError".
+- **GitLab: repos can be created in a personal namespace**, not only in a group.
+
+### Changed
+- **Repo suggestions are drawn by Fabrique**, right under the path field, aligned with it and in the app's style, with the
+  keyboard (arrows, Enter, Escape). The browser's own list appeared shifted outside the dialog.
+- **Drop-down lists follow the theme when open** (Chromium and Edge): dark surface, the chosen item marked, the app's font.
+  Other browsers keep their native list.
+
 ## [0.8.8] - 2026-11-25
 
-What the first install at work taught (vLLM, a fresh 0.8.7, a real repo). No migration. Chart 0.5.8.
+What a first real install taught (vLLM, a fresh 0.8.7, a real repo). No migration. Chart 0.5.8.
 
 ### Fixed
 - **Files produced by the recipe's installation are no longer committed by the runner.** A `package-lock.json` written by

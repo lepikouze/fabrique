@@ -1,4 +1,4 @@
-"""0.8.8: what the first install at work taught — repos suggested while adding one, the provider form filled from the start,
+"""0.8.8: what a first real install taught — repos suggested while adding one, the provider form filled from the start,
 ticked models kept through "Test", "Setup" shown in demo mode, files produced by the installation never committed by the
 runner, a reviewers' limit per provider, information lines that are not checks, a board that no longer crushes its cards."""
 import json, os, subprocess, time
@@ -48,7 +48,7 @@ def test_the_search_route_needs_a_token_and_a_query(repo):
     assert cl.get("/repos/search?provider=forgejo&q=a").json() == {"items": []}            # one letter: nothing asked
     r = cl.get("/repos/search?provider=nothing&q=abc").json()
     assert r["items"] == [] and "type the full path" in r["msg"]
-    assert "data-repo-search" in cl.get("/repos").text
+    assert "data-repo-search" in cl.get("/repos").text and "role=\"listbox\"" in cl.get("/repos").text
 
 
 # ---------- settings page ----------

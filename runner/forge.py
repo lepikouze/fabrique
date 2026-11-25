@@ -19,6 +19,22 @@ import httpx
 from . import config
 
 
+class CreateRefused(RuntimeError):
+    """A repo creation refused by the Git host, with the step, the HTTP status and the host's own reason."""
+
+
+def host_reason(r):
+    """The Git host's own words in an error response (JSON "message"/"error", or the start of the text)."""
+    try:
+        d = r.json()
+        m = d.get("message") or d.get("error") or d.get("errors") if isinstance(d, dict) else d
+        if isinstance(m, (dict, list)):
+            m = str(m)
+        return " ".join(str(m or "").split())[:200]
+    except ValueError:
+        return " ".join((r.text or "").split())[:200]
+
+
 class Forgejo:
     def __init__(self, base=None, token=None, transport=None):
         self.base = (base or config.GIT_BASE_URL).rstrip("/")
@@ -69,7 +85,15 @@ class Forgejo:
                                                             "auto_init": False, "default_branch": "main"})
         if r.status_code == 409:
             return "exists"
-        r.raise_for_status()
+        if r.status_code == 404:
+            raise CreateRefused(M("the organization “{ns}” cannot be found, or the bot account cannot see it ({status}): {why}",
+                                  ns=namespace, status=r.status_code, why=host_reason(r)))
+        if r.status_code in (401, 403):
+            raise CreateRefused(M("the Git host refuses ({status}): the bot account may not create repos in “{ns}” (it needs the right to "
+                                  "create repositories in this organization, and a token with write:organization): {why}",
+                                  status=r.status_code, ns=namespace, why=host_reason(r)))
+        if r.status_code >= 400:
+            raise CreateRefused(M("the Git host refused the creation ({status}): {why}", status=r.status_code, why=host_reason(r)))
         return M("created")
 
     def open_prs(self, slug):
@@ -162,13 +186,21 @@ class GitLab:
                 "merge_commit_sha": m.get("merge_commit_sha") or m.get("squash_commit_sha") or ""}
 
     def create_repo(self, namespace, name, description=""):
-        g = self.api.get("/groups/" + quote(namespace, safe=""))
-        g.raise_for_status()
+        # A group (or sub-group) or a personal namespace: /namespaces knows both.
+        g = self.api.get("/namespaces/" + quote(namespace, safe=""))
+        if g.status_code != 200:
+            raise CreateRefused(M("GitLab cannot find the group “{ns}”, or the bot account is not a member of it ({status}): {why}",
+                                  ns=namespace, status=g.status_code, why=host_reason(g)))
         r = self.api.post("/projects", json={"name": name, "path": name, "namespace_id": g.json()["id"], "visibility": "private",
                                              "description": description, "initialize_with_readme": False, "default_branch": "main"})
         if r.status_code == 400 and "has already been taken" in r.text:
             return "exists"
-        r.raise_for_status()
+        if r.status_code in (401, 403):
+            raise CreateRefused(M("GitLab refuses ({status}): the bot account may not create projects in “{ns}”. Give it the Maintainer role "
+                                  "in this group, or allow Developers to create projects (group Settings → General → Permissions → "
+                                  "Roles allowed to create projects): {why}", status=r.status_code, ns=namespace, why=host_reason(r)))
+        if r.status_code >= 400:
+            raise CreateRefused(M("GitLab refused the creation ({status}): {why}", status=r.status_code, why=host_reason(r)))
         return M("created")
 
     def open_prs(self, slug):
@@ -262,6 +294,9 @@ class GitHub:
         r = self.api.post(url, json={"name": name, "description": description, "private": True, "auto_init": False})
         if r.status_code == 422 and "already exists" in r.text:
             return "exists"
+        if r.status_code in (401, 403, 404):
+            raise CreateRefused(M("GitHub refuses ({status}): the token may not create repos in “{ns}” (fine-grained token: Administration "
+                                  "write on the account or the organization): {why}", status=r.status_code, ns=namespace, why=host_reason(r)))
         r.raise_for_status()
         return M("created")
 

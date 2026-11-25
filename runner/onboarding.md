@@ -70,6 +70,17 @@ checks; mark one `required` only if a check fails without it.
 - `env`: names and purposes, never a value. Leave the section out if nothing is needed.
 - Nothing else in the file.
 
+Limits the runner enforces: at most 30 `setup` commands and 12 checks; a check name in lowercase letters, digits, `-`
+or `_` (20 characters); **no single command longer than 2000 characters**. A long check is written as a list of
+commands, which the runner chains with `&&` in one shell (variables exported by one are seen by the next):
+```json
+"checks": { "startup": ["export APP_SECRET=throwaway-for-the-check", ".venv/bin/python manage.py migrate --noinput",
+                        ".venv/bin/python tools/smoke.py"] }
+```
+**Reuse what the repository already has**: if a script (`scripts/`, `tools/`, `bin/`, or a folder of the same kind), a `Makefile` target or
+a CI job already runs a check, call it (`bash tools/check-startup.sh`, `make test`) instead of copying its content into
+one long line.
+
 ## 3. Prove it
 Run each `setup` command, then each check, once. Fix the recipe only if one of them fails because of
 it, and then rerun what changed. A check that fails for a reason outside the recipe (broken test on the main branch,
