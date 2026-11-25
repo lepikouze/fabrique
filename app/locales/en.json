@@ -59,7 +59,10 @@
    "last change {n} s ago",
    "no change received yet",
    "Live updates",
-   "{n} update(s) on this page"
+   "{n} update(s) on this page",
+   "private",
+   "public",
+   "The bot sees no repo matching this path: it is still accepted, the onboarding will wait for its access."
   ]
  },
  "messages": {}

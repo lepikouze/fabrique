@@ -3,7 +3,7 @@ new request, runners, repos, settings, activity. Real-time via SSE (/events/stre
 from .i18n import M
 import asyncio, datetime as dt, json, logging, os, re, time
 from contextlib import asynccontextmanager
-from urllib.parse import parse_qs, urlencode, quote, urlsplit
+from urllib.parse import unquote, parse_qs, urlencode, quote, urlsplit
 from fastapi import FastAPI, Form, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -207,7 +207,7 @@ def start_steps():
 def render(request, name, page, status=200, **kw):
     u = user_of(request)
     todo = 0
-    if u.get("role") == "admin" and not config.DEMO:
+    if u.get("role") == "admin":   # demo data never counts as real setup (start_steps): shown in demo mode too
         todo = sum(1 for s in start_steps() if not s[1])
     access_request = None
     if u.get("role") not in ("admin", None) and auth.mode() == "on":   # role request in progress, for the menu window
@@ -759,6 +759,28 @@ def repos_page(request: Request, repo: int = 0):
                   git=git, sel=repo, onb=onb, profs=profs)
 
 
+@app.get("/repos/search")
+async def repo_search(request: Request, provider: str = "", q: str = ""):
+    """Suggestions while adding a repo: the repos the provider's bot account can see. The token stays on the server; a
+    provider without a token in the dashboard gets no suggestion (the path is then typed in full)."""
+    u = user_of(request)
+    if not auth.can(u, "repos_edit"):
+        return JSONResponse({"items": [], "msg": M("Only admins add a repo.")}, status_code=403)
+    q = q.strip()
+    with db.tx() as c:
+        g = forges.resolve(c, provider)
+    if len(q) < 2:
+        return JSONResponse({"items": []}, headers={"Cache-Control": "no-store"})
+    if not g or not g.get("token"):
+        return JSONResponse({"items": [], "msg": M("No bot token for this provider in the dashboard: type the full path.")},
+                            headers={"Cache-Control": "no-store"})
+    try:
+        items = await run_in_threadpool(providers.git_repo_search, g["type"], g["base_url"], providers.unseal(g["token"]), q)
+    except providers.Invalid as e:
+        return JSONResponse({"items": [], "msg": str(e)}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"items": items}, headers={"Cache-Control": "no-store"})
+
+
 @app.post("/repos")
 def repo_add(request: Request, provider: str = Form(""), slug: str = Form(""), name: str = Form("")):
     u = user_of(request)
@@ -932,7 +954,8 @@ def settings_page(request: Request, tab: str = "agents"):
         profs = profiles.listing(c)
         prof_usage = {p["id"]: profiles.usage(c, p["id"]) for p in profs} if tab == "agents" else {}
     return render(request, "settings.html", "settings", tab=tab, sections=sections, data=data, users=users, provs=provs,
-                  ptypes=providers.TYPES, efforts=providers.EFFORTS, model_prices=model_prices, prices_info=prices_info, loaded=loaded, load_err=load_err, load_pid=lp, probes=probes or {},
+                  ptypes=providers.TYPES, efforts=providers.EFFORTS, model_prices=model_prices, prices_info=prices_info, loaded=loaded,
+                  ticked=[unquote(x) for x in request.query_params.get("tick", "").split(",") if x][:40], load_err=load_err, load_pid=lp, probes=probes or {},
                   edit=next((p for p in provs if p["id"] == request.query_params.get("edit", "")), None),
                   git_edit=next((g for g in data["git"][0] if g["id"] == request.query_params.get("editgit", "")), None),
                   default_problem=default_problem, profs=profs, prof_usage=prof_usage, ROLES=profiles.ROLES, pefforts=profiles.efforts(),
@@ -1010,7 +1033,7 @@ async def settings_save(request: Request, section: str):
                     # The stored identifier (lowercase) leads to the model list: "Claude" typed, "claude" stored.
                     pid = providers.save(c, u["user"], pid, f.get("type", ""), f.get("name", ""), f.get("base_url", ""), f.get("key", ""),
                                          clear_key=f.get("clear_key") == "1", effort=f.get("effort", ""),
-                                         thinking=f.get("thinking"))
+                                         thinking=f.get("thinking"), review_tokens=f.get("review_tokens"))
                     if existed:
                         return back(url, ok=M("Provider changed."))
                     return back(f"/settings?tab=agents&load={pid}", ok=M("Provider saved: tick the models to offer."))
@@ -1035,7 +1058,10 @@ async def settings_save(request: Request, section: str):
                     probes.setdefault(pid, {})[mid] = dict(res, at=time.time())
                     db.set_setting(c, "probes", probes, u["user"])
                     ok = [lbl for api, lbl in (("anthropic", "Claude Code"), ("openai", "Codex")) if res[api]]
-                    return back(f"/settings?tab=agents&load={pid}", ok=f"{mid} : " + (", ".join(ok) + " ✓" if ok else M("no tool call succeeded")))
+                    # The models ticked in the form (not offered yet) stay ticked when the page comes back.
+                    ticked = ",".join(quote(str(x)[:120], safe="") for x in f.getlist("model")[:40])
+                    return back(f"/settings?tab=agents&load={pid}" + (f"&tick={ticked}" if ticked else "") + "#models",
+                                ok=f"{mid} : " + (", ".join(ok) + " ✓" if ok else M("no tool call succeeded")))
             except providers.Invalid as e:
                 return back(url, err=str(e))
             return back(url, err=M("Unknown action."))

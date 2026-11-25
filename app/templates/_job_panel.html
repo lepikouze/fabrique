@@ -10,7 +10,7 @@
  {% if mx.profile %}<span class="pill" title="Model profile selected when the job was created">profile {{ mx.profile }}</span>{% endif %}
  {% if j.repo %}<span class="pill mono">{{ j.repo.slug }}</span>{% endif %}
 </div>
-<p class="p-run">{{ j.harness_label }} · {{ _tf('runner {name}', '_job_panel.html', j.runner.name) if j.runner else 'no runner yet' }} <span class="mono">{{ j.cost|money }}</span> <span class="muted">out of a budget of</span> <span class="mono">{{ j.budget|money }}</span>{% if j.model and not PRICE_KNOWN(j.model) %} <span class="muted small" title="No price is known for this model: the cost is estimated with default prices. Enter its price in Settings → Agents and models.">· price unknown, estimated cost</span>{% endif %}</p>
+<p class="p-run">{{ j.harness_label }} · {{ _tf('runner {name}', '_job_panel.html', j.runner.name) if j.runner else 'no runner yet' }} <span class="mono">{{ j.cost|money }}</span> <span class="muted">out of a budget of</span> <span class="mono">{{ j.budget|money }}</span>{% if j.model and j.source != 'demo' and not PRICE_KNOWN(j.model) %} <span class="muted small" title="No price is known for this model: the cost is estimated with default prices. Enter its price in Settings → Agents and models.">· price unknown, estimated cost</span>{% endif %}</p>
 {% if j.budget and j.cost %}{% set pct = (j.cost / j.budget * 100)|round|int %}<div class="meter {{ 'warn' if pct >= 80 }}" role="meter" aria-label="Budget used" aria-valuenow="{{ [pct, 100]|min }}" aria-valuemin="0" aria-valuemax="100"><i style="width:{{ [pct, 100]|min }}%"></i></div>{% endif %}
 <div class="p-actions">
  {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="btn" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Pull request{{ ic('ext') }}</a>{% endif %}
@@ -133,8 +133,9 @@
 {% if j.evidence %}
 <section class="sec">
  <h3>Evidence</h3>
- {% set ok = j.evidence|selectattr('ok')|list|length %}
- <p class="{{ 'ok' if ok == j.evidence|length else 'bad' }} ver">{{ ic('shield') }}Verified at <span class="mono">{{ j.verified_sha }}</span> · {{ ok }}/{{ j.evidence|length }} checks</p>
+ {% set real = j.evidence|rejectattr('kind', 'in', ['security', 'network'])|list %}{% set ok = real|selectattr('ok')|list|length %}
+ {% if real %}<p class="{{ 'ok' if ok == real|length else 'bad' }} ver">{{ ic('shield') }}Verified at <span class="mono">{{ j.verified_sha }}</span> · {{ ok }}/{{ real|length }} checks</p>
+ {% else %}<p class="bad ver">{{ ic('shield') }}No check at <span class="mono">{{ j.verified_sha }}</span>: the repo's recipe has none, only information lines below. A human reviews.</p>{% endif %}
  <p class="muted small">Rerun by the runner on the exact commit · the repo's recipe was frozen at onboarding</p>
  {% for e in j.evidence %}
  <details class="check">

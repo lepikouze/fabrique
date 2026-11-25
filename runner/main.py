@@ -317,6 +317,10 @@ class Runner:
                            cwd=config.WORK_DIR, env={"PATH": SYS_PATH}, capture_output=True, timeout=300)
             for p in paths:   # possible leftover created by the runner itself (not by the agent user)
                 shutil.rmtree(p, ignore_errors=True)
+            try:
+                os.remove(os.path.join(config.WORK_DIR, ".mirrors", f"{ref}.setup.json"))
+            except OSError:
+                pass
             log.info("%s: working directory removed (job finished or deleted)", ref)
         except Exception as e:
             log.warning("%s: cannot clean the working directory (%s)", ref, e)
@@ -563,7 +567,39 @@ class Runner:
             for cmd in ctx.recipe.get("setup") or []:
                 self.panel.event(ctx.ref, type="log", kind="installation", message=cmd[:200])
                 job(ctx, cmd, timeout=900)
+            if not onboarding:
+                self.snapshot_setup(ctx)
         ctx.fab_token = self.relay.register(ctx)
+
+    def setup_state_path(self, ctx):
+        """Where the state of the workspace after installation is kept: next to the runner's mirror, out of the agent's reach."""
+        return os.path.join(config.WORK_DIR, ".mirrors", f"{ctx.ref}.setup.json")
+
+    def snapshot_setup(self, ctx):
+        """What the recipe's installation created or changed in the repo (a package-lock.json written by npm install, for
+        example), with the content of each file: such a file is never committed by the runner unless the agent changed it
+        (FAB-15: a 1,431-line lock file nobody asked for made the PR too large)."""
+        try:
+            files, dirs = workspace_changes(ctx)
+            hashes = file_hashes(ctx, files)
+            with open(self.setup_state_path(ctx), "w") as fh:
+                json.dump({"files": hashes, "dirs": dirs}, fh)
+        except Exception as e:   # never blocking: at worst, the runner commits as before
+            log.warning("%s: state after installation not recorded (%s)", ctx.ref, e)
+
+    def setup_excludes(self, ctx):
+        """Pathspecs excluding, from the runner's own commit, what the installation produced and the agent left unchanged."""
+        try:
+            with open(self.setup_state_path(ctx)) as fh:
+                st = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        files, dirs = workspace_changes(ctx)
+        now = file_hashes(ctx, [f for f in files if f in st.get("files", {})])
+        keep_out = [f for f, h in now.items() if st["files"].get(f) == h]
+        keep_out += [d for d in dirs if d in st.get("dirs", [])]
+        keep_out += [f for f in files if any(f.startswith(d) for d in st.get("dirs", []))]
+        return [f":(exclude,literal){f.rstrip('/')}" for f in sorted(set(keep_out))]
 
     def reachable(self, ctx):
         """Onboarding: is the repo reachable by the runner token, and does it have its main branch? If not, the job
@@ -1112,7 +1148,7 @@ class Runner:
             if ctx.cancelled:
                 raise Cancelled
             if jgit(ctx, ["status", "--porcelain"]).stdout.strip():
-                jgit(ctx, ["add", "-A", "--", ".", *ENV_EXCLUDES])
+                jgit(ctx, ["add", "-A", "--", ".", *ENV_EXCLUDES, *self.setup_excludes(ctx)])
                 if jgit(ctx, ["diff", "--cached", "--name-only"]).stdout.strip():
                     jgit(ctx, ["commit", "-q", "-m", f"{ctx.ref}: the agent's remaining changes\n\nFabrique-Job: {ctx.ref}"])
             self.ensure_trailer(ctx, self.fork(ctx))
@@ -1260,6 +1296,10 @@ class Runner:
         self.panel.event(ctx.ref, type="intent_done", note=M("merged {p}", p=merged[:12]))
         sh(ctx, ["rm", "-rf", ctx.repo_dir, ctx.home], cwd=config.WORK_DIR, check=False)
         shutil.rmtree(ctx.mirror, ignore_errors=True)
+        try:
+            os.remove(self.setup_state_path(ctx))
+        except OSError:
+            pass
 
 
 JOB_IMAGES = ("python", "node", "go", "java")
@@ -1330,6 +1370,25 @@ def review_guide(ctx, base, sha, files, add, rem, verdicts):
         mark = {"ok": "✅", "needs_changes": W(ctx, "⚠️ to review again"), "blocking": W(ctx, "❌ blocking"), "undetermined": W(ctx, "❓ no verdict")}
         out.append(W(ctx, "**Reviews**: ") + " · ".join(f"{messages.inert(v.get('label'), 40)} {mark.get(v.get('verdict'), '')}" for v in verdicts))
     return "\n\n".join(out) + "\n\n"
+
+
+def workspace_changes(ctx):
+    """(files, directories) the repo's status reports as new or changed, raw paths (a whole new directory ends with "/")."""
+    out = jgit(ctx, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=normal"]).stdout
+    files, dirs = [], []
+    for entry in [e for e in out.split("\0") if len(e) > 3]:
+        path = entry[3:]
+        (dirs if path.endswith("/") else files).append(path)
+    return files, dirs
+
+
+def file_hashes(ctx, files):
+    """{path: git object id} of files that exist; a deleted file has no hash."""
+    present = [f for f in files if os.path.isfile(os.path.join(ctx.repo_dir, f))]
+    if not present:
+        return {}
+    ids = jgit(ctx, ["hash-object", "--no-filters", "--", *present]).stdout.split()
+    return dict(zip(present, ids))
 
 
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec|specs)/|(^|/)(test_[^/]+|[^/]+_test\.[a-z0-9]+|[^/]+\.(test|spec)\.[a-z0-9]+|"

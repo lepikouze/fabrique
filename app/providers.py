@@ -104,6 +104,7 @@ def runtime(c, model_id):
             "base_url": (p.get("base_url") or m.get("base_url") or "") if typ != "anthropic" else "",
             "key": unseal(p.get("key", "")), "apis": m["apis"], "effort": p.get("effort", "medium") if typ == "compatible" else "",
             "thinking_budget": p.get("thinking") if typ == "compatible" else None,
+            "review_max_tokens": p.get("review_tokens") if typ == "compatible" else None,
             # Price sent with the model, so that the runner counts the job cost right (None: unknown, the runner's table).
             "price": prices.resolve(c, m["id"], m, local=(typ == "compatible" and not p.get("key")))}
 
@@ -113,7 +114,7 @@ def runtime(c, model_id):
 EFFORTS = {"": M("Server default"), "low": M("Low"), "medium": M("Medium"), "high": M("High"), "xhigh": M("Maximum")}
 
 
-def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, effort=None, thinking=None):
+def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, effort=None, thinking=None, review_tokens=None):
     """Creates or changes a provider; returns its identifier as stored (lowercase)."""
     pid, name, base_url = pid.strip().lower(), name.strip()[:80], (base_url.strip() or TYPES.get(typ, ("", ""))[1]).rstrip("/")
     if typ not in TYPES or not _ID.match(pid) or not name:
@@ -143,8 +144,18 @@ def save(c, by, pid, typ, name, base_url, key, keep_key=True, clear_key=False, e
             raise Invalid(M("Thinking budget: a number of tokens between 0 and 64000, or empty."))
         think = int(t) if t else None
     think = think if typ == "compatible" else None
+    # Reviewers' answer limit, thinking included (compatible servers only): a model that thinks a lot (Qwen) needs more than
+    # the runner's REVIEW_MAX_TOKENS, or its verdict comes without thinking. Empty = the runner's setting.
+    if review_tokens is None:
+        rtok = (old or {}).get("review_tokens")
+    else:
+        t = str(review_tokens).strip()
+        if t and not (t.isdigit() and 1000 <= int(t) <= 64000):
+            raise Invalid(M("Reviewers' limit: a number of tokens between 1000 and 64000, or empty."))
+        rtok = int(t) if t else None
+    rtok = rtok if typ == "compatible" else None
     provs = [p for p in provs if p["id"] != pid] + [{"id": pid, "type": typ, "name": name, "base_url": base_url, "key": sealed, "effort": eff,
-                                                    "thinking": think}]
+                                                    "thinking": think, "review_tokens": rtok}]
     db.set_setting(c, "providers", [{k: v for k, v in p.items() if k != "has_key"} for p in provs], by)
     db.log_audit(c, by, M("Settings: model provider"), target=pid,
                  detail=f"{TYPES[typ][0]} · {base_url}" + (M(" · key replaced") if key.strip() else M(" · key deleted") if clear_key else ""))
@@ -362,6 +373,52 @@ def git_check(typ, base, token, org="", transport=None):
             return True, msg + M(" Write access is checked at the first onboarding.")
     except httpx.HTTPError as e:
         return False, M("Git host unreachable from the dashboard ({name}): check the address.", name=type(e).__name__)
+
+
+def git_repo_search(typ, base, token, q, transport=None, limit=20):
+    """Repos the bot account can see whose path contains q: [{slug, private, branch, description}]. Server side only: the
+    token never reaches the browser. Raises Invalid when the Git host refuses or cannot be reached."""
+    from urllib.parse import quote
+    q = (q or "").strip()[:100]
+    host = urlsplit(base).hostname or ""
+    if typ in ("forgejo", "gitea"):
+        api, headers = base + "/api/v1", {"Authorization": "token " + token}
+        url, params = api + "/repos/search", {"q": q, "limit": limit, "sort": "updated", "order": "desc"}
+    elif typ == "gitlab":
+        api, headers = base + "/api/v4", {"PRIVATE-TOKEN": token}
+        url, params = api + "/projects", {"membership": "true", "search": q, "search_namespaces": "true", "simple": "true",
+                                          "per_page": limit, "order_by": "last_activity_at"}
+    else:
+        api = "https://api.github.com" if host in ("github.com", "www.github.com") else base + "/api/v3"
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"}
+        url, params = api + "/user/repos", {"per_page": 100, "sort": "updated"}
+    try:
+        with httpx.Client(timeout=10, headers=headers, follow_redirects=False, transport=transport) as h:
+            r = h.get(url, params=params)
+    except httpx.HTTPError as e:
+        raise Invalid(M("Git host unreachable from the dashboard ({name}).", name=type(e).__name__))
+    if r.status_code in (401, 403):
+        raise Invalid(M("The Git host refuses the bot's token ({status_code}).", status_code=r.status_code))
+    if r.status_code != 200:
+        raise Invalid(M("Unexpected response from the Git host ({status_code}).", status_code=r.status_code))
+    try:
+        data = r.json()
+    except ValueError:
+        raise Invalid(M("The Git host did not answer in JSON."))
+    rows = data.get("data") if isinstance(data, dict) else data
+    out = []
+    for x in rows if isinstance(rows, list) else []:
+        if not isinstance(x, dict):
+            continue
+        slug = str(x.get("full_name") or x.get("path_with_namespace") or "")
+        if not slug or (q and q.lower() not in slug.lower() and q.lower() not in str(x.get("name") or "").lower()):
+            continue
+        private = bool(x.get("private")) if "private" in x else x.get("visibility") not in (None, "public")
+        out.append({"slug": slug[:200], "private": private, "branch": str(x.get("default_branch") or "")[:100],
+                    "description": " ".join(str(x.get("description") or "").split())[:120]})
+        if len(out) >= limit:
+            break
+    return out
 
 
 # ---------- a plain request to a model, from the dashboard (translation of a job's texts) ----------

@@ -2020,6 +2020,24 @@
   "no PR to close": "aucune PR à fermer",
   "PR closed on the Git host": "PR fermée sur le provider Git",
   "The last translation failed: {why}": "La dernière traduction a échoué : {why}",
-  "the translation model did not answer": "le modèle de traduction n'a pas répondu"
+  "the translation model did not answer": "le modèle de traduction n'a pas répondu",
+  "No bot token for this provider in the dashboard: type the full path.": "Pas de token de bot pour ce provider dans le dashboard : tape le chemin complet.",
+  "Reviewers' limit: a number of tokens between 1000 and 64000, or empty.": "Limite des relecteurs : un nombre de tokens entre 1000 et 64000, ou vide.",
+  "Git host unreachable from the dashboard ({name}).": "Provider Git injoignable depuis le dashboard ({name}).",
+  "The Git host refuses the bot's token ({status_code}).": "Le provider Git refuse le token du bot ({status_code}).",
+  "Unexpected response from the Git host ({status_code}).": "Réponse inattendue du provider Git ({status_code}).",
+  "The Git host did not answer in JSON.": "Le provider Git n'a pas répondu en JSON.",
+  "no check in the recipe on sha {p}: information lines only": "aucun contrôle dans la recipe au sha {p} : lignes d'information seulement",
+  "No check at": "Aucun contrôle au sha",
+  "· {ok}/{real} checks": "· {ok}/{real} checks",
+  ": the repo's recipe has none, only information lines below. A human reviews.": " : la recipe du repo n'en a aucun, seulement les lignes d'information ci-dessous. Un humain relit.",
+  "no check": "aucun contrôle",
+  "private": "privé",
+  "public": "public",
+  "group/project: type a few letters, the repos the bot can see are suggested": "groupe/projet : tape quelques lettres, les repos visibles par le bot sont proposés",
+  "A model that thinks a lot (Qwen, for example) can exceed it: its verdict is then given without thinking. Raise it for such a model (16000 to 24000). Empty: the runner's setting.": "Un modèle qui réfléchit beaucoup (Qwen, par exemple) peut la dépasser : son verdict est alors rendu sans réflexion. Monte-la pour un tel modèle (16000 à 24000). Vide : le réglage du runner.",
+  "Reviewers' limit": "Limite des relecteurs",
+  "tokens per review answer, thinking included": "tokens par réponse de relecture, réflexion comprise",
+  "The bot sees no repo matching this path: it is still accepted, the onboarding will wait for its access.": "Le bot ne voit aucun repo correspondant à ce chemin : il reste accepté, l'onboarding attendra son accès."
  }
 }

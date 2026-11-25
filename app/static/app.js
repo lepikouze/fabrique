@@ -501,6 +501,12 @@ document.addEventListener("change", (e) => {
   }
 });
 document.querySelectorAll("form").forEach((f) => { if (f.querySelector("[data-compat-harness]")) syncCompat(f); });
+// A new provider form starts on its first type (Anthropic): its address and fields are filled as if that type had been chosen,
+// instead of an empty, greyed out field. Never on the form that edits an existing provider.
+document.querySelectorAll("[data-provider-form] select[name=type]").forEach((sel) => {
+  const f = sel.form, b = f.querySelector("[name=base_url]");
+  if (b && !b.value && f.querySelector("input[name=pid]:not([type=hidden])")) sel.dispatchEvent(new Event("change", { bubbles: true }));
+});
 
 
 // Channel form: only display (and send) fields of the chosen type.
@@ -611,4 +617,35 @@ document.querySelectorAll("[data-channel-form]").forEach(syncChannel);
       if (refs.length) open("/archives/bulk", "Supprimer " + refs.length + " job(s) : " + refs.join(", ") + " ?", "supprimer " + refs.length + " jobs", refs, true);
     }
   });
+})();
+
+
+// Adding a repo: the repos the provider's bot can see are suggested while typing (the token stays on the server). A path
+// typed in full is still accepted: the bot may not see the repo yet, the onboarding then waits for its access.
+(function () {
+  const input = document.querySelector("[data-repo-search]");
+  if (!input) return;
+  const form = input.form, list = document.getElementById(input.getAttribute("list"));
+  const note = form.querySelector("[data-repo-search-note]"), prov = form.querySelector("[name=provider]");
+  let timer = null, seen = [];
+  const say = (t) => { if (note) note.textContent = t || ""; };
+  function search() {
+    const q = input.value.trim();
+    if (q.length < 2) { list.innerHTML = ""; say(""); return; }
+    fetch("/repos/search?provider=" + encodeURIComponent(prov ? prov.value : "") + "&q=" + encodeURIComponent(q),
+          { headers: { "Accept": "application/json" }, credentials: "same-origin" })
+      .then((r) => r.json()).then((d) => {
+        list.innerHTML = ""; seen = (d.items || []).map((x) => x.slug);
+        (d.items || []).forEach((x) => {
+          const o = document.createElement("option"); o.value = x.slug;
+          o.label = [x.private ? T("private") : T("public"), x.branch, x.description].filter(Boolean).join(" · ");
+          list.appendChild(o);
+        });
+        if (d.msg) say(d.msg);
+        else if (!seen.length) say(T("The bot sees no repo matching this path: it is still accepted, the onboarding will wait for its access."));
+        else say("");
+      }).catch(() => say(""));
+  }
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 300); });
+  if (prov) prov.addEventListener("change", () => { list.innerHTML = ""; if (input.value.trim().length >= 2) search(); });
 })();

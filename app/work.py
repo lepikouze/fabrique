@@ -384,6 +384,9 @@ def _glob_re(pat):
 MAX_FILES, MAX_PATH = 500, 300   # list of files in a PR kept by the dashboard: beyond that, the gate relies on nothing
 
 
+INFO_KINDS = ("security", "network")   # evidence lines that inform, never block, and never count as checks
+
+
 def protected_hits(files, patterns):
     """Protected files touched. A path that the gate cannot compare faithfully counts as touched, so
     a human can decide: path that is not raw (git quotes, renaming "a => b", braces, backslash),
@@ -407,6 +410,8 @@ def evaluate(c, j, repo):
         hits = [M("more than {max_files} files: incomplete list", max_files=MAX_FILES)] + hits
     ev = db.rows(c, select(db.evidence).where(db.evidence.c.job_id == j["id"], db.evidence.c.sha == (j["verified_sha"] or ""),
                                               db.evidence.c.ran_by == "runner"))
+    # The security and network lines are information, never checks: a recipe without checks must not show "2/2 green".
+    ev = [e for e in ev if e["kind"] not in INFO_KINDS]
     ok_checks = bool(ev) and all(e["ok"] for e in ev)
     d = db.one(c, select(db.decisions).where(db.decisions.c.job_id == j["id"]))
     rv = db.rows(c, select(db.reviews).where(db.reviews.c.job_id == j["id"], db.reviews.c.sha == (j["verified_sha"] or "")))
@@ -563,9 +568,11 @@ def report(runner, ref, ev):
                                                      ok=bool(ch.get("ok")), duration_ms=int(ch.get("duration_ms") or 0), warn=bool(ch.get("warn")),
                                                      kind=ch.get("kind") if ch.get("kind") in ("security", "network") else "check",
                                                      output=_txt(ch.get("output"), 20000), ran_by="runner", at=t))
-            ok = sum(1 for ch in checks if ch.get("ok"))
-            c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(verified_sha=sha[:12], checks_ok=ok, checks_total=len(checks), updated_at=t))
-            db.log_event(c, jid, M("evidence"), M("{ok}/{count} checks on sha {p}, rerun by the runner", ok=ok, count=len(checks), p=sha[:12]))
+            real = [ch for ch in checks if ch.get("kind") not in INFO_KINDS]   # security and network lines are information
+            ok = sum(1 for ch in real if ch.get("ok"))
+            c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(verified_sha=sha[:12], checks_ok=ok, checks_total=len(real), updated_at=t))
+            db.log_event(c, jid, M("evidence"), M("{ok}/{count} checks on sha {p}, rerun by the runner", ok=ok, count=len(real), p=sha[:12])
+                         if real else M("no check in the recipe on sha {p}: information lines only", p=sha[:12]))
         elif kind == "pr":
             n, url = int(ev.get("number") or 0), _txt(ev.get("url"), 300)
             if n <= 0 or not url.startswith(("https://", "http://")):

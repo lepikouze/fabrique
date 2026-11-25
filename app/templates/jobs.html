@@ -33,7 +33,7 @@
      {% if compact %}<span class="c-stage">{{ stage_pill(j.stage_info) }}</span>{% endif %}
      {% if j.open_question %}<span class="c-q">{{ j.open_question }}</span>
      {% elif j.status_text %}<span class="c-status {{ 'ok' if j.stage in ('merged', 'done') else 'bad' if j.stage == 'failed' }}">{{ j.status_text }}</span>{% endif %}
-     {% if j.verified_sha %}<span class="c-ver">{{ ic('shield') }}Verified at <span class="mono">{{ j.verified_sha }}</span> · {{ j.checks_ok }}/{{ j.checks_total }}</span>{% endif %}
+     {% if j.verified_sha %}<span class="c-ver" title="{{ j.verified_sha }}">{{ ic('shield') }}<span class="t">Verified at <span class="mono">{{ j.verified_sha[:7] }}</span> · {% if j.checks_total %}{{ j.checks_ok }}/{{ j.checks_total }}{% else %}no check{% endif %}</span></span>{% endif %}
      <span class="c-foot"><span>{{ j.harness_label }}</span>{% if j.agents_running > 1 %}<span>{{ j.agents_running }} agents</span>{% endif %}<span class="mono">{{ j.cost|money }}</span>{% if j.runner %}<span class="run {{ j.activity }}">{{ dot('var(--ok)' if j.activity == 'active' else 'var(--ink-3)') }}{{ j.runner.name }}</span>{% endif %}</span>
     </a>
    {% else %}<p class="none">None</p>{% endfor %}
@@ -47,7 +47,7 @@
     {{ dot(color) }}<span class="mono ref">{{ j.ref }}</span>
     <span class="r-title"><span class="t">{{ j.title }}</span>{% if j.activity == 'active' %}<i class="spin" aria-label="agent running"></i>{% endif %}</span>
     <span class="r-status {{ 'q' if j.open_question }} {{ 'ok' if j.stage in ('merged', 'done') }}">{% if pill %}{{ stage_pill(j.stage_info) }}<span class="st">{{ j.open_question or j.status_text }}</span>{% else %}{{ j.open_question or j.status_text }}{% endif %}</span>
-    <span class="r-ver">{% if j.verified_sha %}{{ ic('shield') }}<span class="mono">{{ j.verified_sha }}</span> · {{ j.checks_ok }}/{{ j.checks_total }}{% endif %}</span>
+    <span class="r-ver">{% if j.verified_sha %}{{ ic('shield') }}<span class="mono">{{ j.verified_sha[:7] }}</span> · {% if j.checks_total %}{{ j.checks_ok }}/{{ j.checks_total }}{% else %}no check{% endif %}{% endif %}</span>
     <span class="r-run hide-narrow">{{ j.runner.name if j.runner else '—' }}</span>
     <span class="r-h hide-narrow">{{ j.harness_label }}</span>
     <span class="mono r-cost">{{ j.cost|money }}</span>

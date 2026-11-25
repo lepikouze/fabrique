@@ -6,6 +6,33 @@ Notable changes to Fabrique, most recent first. The format follows
 
 Interface labels are quoted in French, as they appear on a French screen.
 
+## [0.8.8] - 2026-11-25
+
+What the first install at work taught (vLLM, a fresh 0.8.7, a real repo). No migration. Chart 0.5.8.
+
+### Fixed
+- **Files produced by the recipe's installation are no longer committed by the runner.** A `package-lock.json` written by
+  `npm install` during the installation ended up in the PR through the runner's own commit (1,431 lines nobody asked for,
+  and a "Size" gate in red). The runner now records the state of the repo right after the installation, and never commits
+  a file the installation created or changed unless the agent changed it.
+- **Information lines are no longer counted as checks.** On a repo whose recipe has no check, the security and network
+  lines showed as "2/2 checks green". The card, the job page and the gate now say "no check": a human reviews.
+- **"Setup" stays in the menu in demo mode.** With demonstration data enabled (`dashboard.demo: true`), the setup
+  checklist was hidden altogether, although demo data has not counted as real setup since 0.8.4.
+- **The provider form is filled from the start.** A new provider starts on Anthropic with its address and identifier
+  filled in, instead of an empty, greyed out address until another type was chosen.
+- **Ticked models stay ticked after "Test".** Testing a model reloaded the list and unticked the models not offered yet.
+- **The board no longer crushes its cards** on a narrow screen or with the job panel open: a column keeps a readable width
+  and the board scrolls sideways; the "Verified at" line stays on one line, with a short commit id.
+
+### Added
+- **Repos suggested while adding one.** Typing a few letters of the path lists the repos the provider's bot account can see
+  (Forgejo, Gitea, GitLab, GitHub), with their visibility and main branch; the token stays on the server. A path typed in
+  full is still accepted: the onboarding then waits for the bot's access, as before.
+- **A reviewers' limit per model provider** (compatible servers): tokens per review answer, thinking included. A model
+  that thinks a lot (Qwen) exceeded the runner's `REVIEW_MAX_TOKENS` and gave its verdict without thinking. Empty: the
+  runner's setting.
+
 ## [0.8.7] - 2026-11-24
 
 Stabilization: what the first real jobs taught (FAB-22 to FAB-28: a whole module, on local models, then on Claude). No new

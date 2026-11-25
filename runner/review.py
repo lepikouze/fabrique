@@ -154,10 +154,11 @@ CAUSE_NOJSON = "no JSON verdict in the model's answer"
 def ask(model, system, prompt, timeout, transport=None, think=True):
     """A request to the model; returns (text, cost in $, cut by the token limit?). think=False cuts the thinking
     of a local "thinking" model (llama.cpp, vLLM: chat_template_kwargs.enable_thinking)."""
+    limit = model.get("review_max_tokens") or config.REVIEW_MAX_TOKENS   # the provider's own limit, otherwise the runner's
     if model.get("provider") == "anthropic":
         with httpx.Client(base_url=config.ANTHROPIC_API_URL, timeout=timeout, transport=transport) as h:
             r = h.post("/v1/messages", headers={"x-api-key": model.get("key") or config.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
-                       json={"model": model["id"], "max_tokens": config.REVIEW_MAX_TOKENS, "system": system,
+                       json={"model": model["id"], "max_tokens": limit, "system": system,
                              "messages": [{"role": "user", "content": prompt}]})
             r.raise_for_status()
             m = r.json()
@@ -166,17 +167,17 @@ def ask(model, system, prompt, timeout, transport=None, think=True):
         cost = (u.get("input_tokens", 0) * pin + u.get("output_tokens", 0) * pout) / 1e6
         cut = m.get("stop_reason") == "max_tokens"
         if cut:
-            log.warning("review cut by the token limit (REVIEW_MAX_TOKENS=%s)", config.REVIEW_MAX_TOKENS)
+            log.warning("review cut by the token limit (%s tokens)", limit)
         return "".join(b.get("text", "") for b in m.get("content") or [] if b.get("type") == "text"), cost, cut
     base = model["base_url"].rstrip("/")
     base = base if base.endswith("/v1") else base + "/v1"
     with httpx.Client(timeout=timeout, transport=transport) as h:
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
         if model.get("type") == "openai":   # Official API: reasoning models, no temperature, other name for limit
-            body = {"model": model["id"], "max_completion_tokens": config.REVIEW_MAX_TOKENS, "messages": msgs,
+            body = {"model": model["id"], "max_completion_tokens": limit, "messages": msgs,
                     "reasoning_effort": "medium" if think else "low"}
         else:
-            body = {"model": model["id"], "temperature": 0, "max_tokens": config.REVIEW_MAX_TOKENS, "messages": msgs}
+            body = {"model": model["id"], "temperature": 0, "max_tokens": limit, "messages": msgs}
             if not think:
                 body["chat_template_kwargs"] = {"enable_thinking": False}
         r = h.post(base + "/chat/completions", headers={"Authorization": f"Bearer {model.get('key') or 'local'}"}, json=body)
@@ -190,7 +191,7 @@ def ask(model, system, prompt, timeout, transport=None, think=True):
         cost = (u.get("prompt_tokens", 0) * pin + u.get("completion_tokens", 0) * pout) / 1e6
     cut = ch.get("finish_reason") == "length"   # the model's thinking exhausted the limit before the verdict
     if cut:
-        log.warning("review cut by the token limit (REVIEW_MAX_TOKENS=%s)", config.REVIEW_MAX_TOKENS)
+        log.warning("review cut by the token limit (%s tokens)", limit)
     return str((ch.get("message") or {}).get("content") or ""), cost, cut
 
 

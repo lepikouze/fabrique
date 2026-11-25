@@ -59,7 +59,7 @@ JOB_PREFIX = _env("FABRIQUE_PREFIX", "FAB")
 # Runner API rejected when the request passed through a reverse proxy (all-in-one case, where the runner is on the
 # internal network); 0 when runners are on other machines and arrive via the reverse proxy.
 RUNNER_API_INTERNAL = _env("FABRIQUE_RUNNER_API_INTERNAL", "1") == "1"
-APP_VERSION = "0.8.7"                                   # number of the delivered version
+APP_VERSION = "0.8.8"                                   # number of the delivered version
 BUILD = _env("FABRIQUE_VERSION", "dev")              # commit sha, provided to the image build
 VERSION = f"v{APP_VERSION} · {BUILD}"
 

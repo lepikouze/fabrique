@@ -97,7 +97,7 @@
      <table class="tbl"><thead><tr><th></th><th>Model</th><th>Compatible agents</th><th title="Jobs that may use this model as their agent's model at the same time. Empty: no limit. The others wait in the queue.">Simultaneous jobs</th><th title="$ per million tokens: input / output / cached input. Empty: the automatic price shown in grey.">Price</th><th></th></tr></thead><tbody>
      {% set on = models|selectattr('provider_id', 'equalto', load_pid)|map(attribute='id')|list %}
      {% for m in loaded %}{% set pr = (probes.get(load_pid) or {}).get(m.id) %}
-      <tr><td><input type="checkbox" name="model" value="{{ m.id }}" id="mm-{{loop.index}}" {{ 'checked' if m.id in on }}><input type="hidden" name="name:{{ m.id }}" value="{{ m.name }}"></td>
+      <tr><td><input type="checkbox" name="model" value="{{ m.id }}" id="mm-{{loop.index}}" {{ 'checked' if m.id in on or m.id in ticked }}><input type="hidden" name="name:{{ m.id }}" value="{{ m.name }}"></td>
        <td><label for="mm-{{loop.index}}" class="mono">{{ m.id }}</label>{% if m.name != m.id %} <span class="muted">{{ m.name }}</span>{% endif %}</td>
        <td>{% if lp.type == 'anthropic' %}Claude Code{% elif lp.type == 'openai' %}Codex{% elif pr %}{{ 'Claude Code ✓' if pr.anthropic else 'Claude Code ✗ (tool call failed)' }}{% else %}<span class="muted">Claude Code (not tested)</span>{% endif %}</td>
        <td>{% set cur = models|selectattr('id', 'equalto', m.id)|list %}<input type="number" min="1" max="99" step="1" name="max:{{ m.id }}" value="{{ (cur[0].max_jobs if cur and cur[0].max_jobs else '') }}" placeholder="no limit" aria-label="Simultaneous jobs" style="max-width:110px"></td>
@@ -129,6 +129,9 @@
      <p class="muted small">The lower the effort, the faster the agent answers. Accepted values depend on the server (vLLM with Qwen3: low, medium, xhigh). Default: medium. With “Server default”, Fabrique sends no level.</p>
      <label for="p-thinking">Thinking budget <small class="muted">tokens of thinking per agent response</small></label>
      <input id="p-thinking" name="thinking" type="number" min="0" max="64000" step="500" class="mono" style="max-width:160px" placeholder="8000" value="{{ edit.thinking if edit and edit.thinking is not none else '' }}">
+     <label for="p-rtok">Reviewers' limit <small class="muted">tokens per review answer, thinking included</small></label>
+     <input id="p-rtok" name="review_tokens" type="number" min="1000" max="64000" step="1000" class="mono" style="max-width:160px" placeholder="8000" value="{{ edit.review_tokens if edit and edit.review_tokens is not none else '' }}">
+     <p class="muted small">A model that thinks a lot (Qwen, for example) can exceed it: its verdict is then given without thinking. Raise it for such a model (16000 to 24000). Empty: the runner's setting.</p>
      <p class="muted small">Beyond it, the model stops thinking and answers: a small model can otherwise think until its output limit without answering. A slow model wants a lower budget (each thousand tokens is time). Empty: the runner's setting. 0: no budget. A server that does not take it (vLLM, for example) gets the request without it.</p>
     </div>
     <div class="row-end">{% if edit %}<a class="btn" href="/settings?tab=agents">Cancel</a>{% endif %}<button class="btn primary">{{ 'Save' if edit else 'Save and load the models' }}</button></div>

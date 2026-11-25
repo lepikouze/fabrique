@@ -322,7 +322,8 @@ def test_pages_read_the_database_a_bounded_number_of_times(demo_on):
     with db.tx() as c:
         ref = db.one(c, select(db.jobs.c.ref).where(db.jobs.c.archived.is_(False)).order_by(db.jobs.c.id))["ref"]
     cl = web()
-    bounds = {"/jobs": 10, "/jobs?view=list": 10, "/inbox": 22, "/archives": 11, "/repos": 13, "/settings": 14, "/activity": 10,
+    # 0.8.8: +1 on the pages below, the setup checklist is computed in demo mode too (the menu shows "Setup").
+    bounds = {"/jobs": 11, "/jobs?view=list": 11, "/inbox": 22, "/archives": 12, "/repos": 13, "/settings": 14, "/activity": 11,
               "/runners": 14, "/new": 11, f"/jobs/{ref}/panel": 14, f"/jobs/{ref}": 19}
     seen = {}
     for url, limit in bounds.items():
