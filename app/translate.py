@@ -31,10 +31,34 @@ def digest(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def model_id(c):
-    """The model chosen for translations (Settings → Agents and models), or "" if none is usable."""
-    chosen = (db.get_setting(c, "translation")[0] or {}).get("model") or ""
-    return chosen if chosen and any(m["id"] == chosen for m in providers.models_with_provider(c)) else ""
+def offered(c):
+    """Translation offered (Settings → Agents and models). An installation that had chosen a translation model before
+    0.8.10 keeps offering it."""
+    t = db.get_setting(c, "translation")[0] or {}
+    return bool(t.get("offer", bool(t.get("model"))))
+
+
+def model_id(c, j=None):
+    """The model that translates a job: its profile's "Onboarding and translation" model, otherwise the default profile's,
+    otherwise the default model; "" if translation is not offered or no model is usable. An installation that had chosen
+    a translation model before 0.8.10 keeps it for the jobs without a profile (a fast local model was the advice: it must
+    not silently become a billed one)."""
+    if not offered(c):
+        return ""
+    from . import profiles
+    usable = {m["id"] for m in providers.models_with_provider(c)}
+    glob = db.get_setting(c, "agents")[0] or {}
+    names = [((j or {}).get("models") or {}).get("profile") or ""]
+    candidates = []
+    for p in profiles.listing(c):
+        if names[0] and p.get("name") == names[0]:
+            candidates.append(((p.get("roles") or {}).get("onboarding") or {}).get("model"))
+    candidates.append((db.get_setting(c, "translation")[0] or {}).get("model"))
+    gp = profiles.get(c, glob.get("profile"))
+    if gp:
+        candidates.append(((gp.get("roles") or {}).get("onboarding") or {}).get("model"))
+    candidates.append(glob.get("model"))
+    return next((m for m in candidates if m and m in usable), "")
 
 
 def job_language(c, j):
@@ -128,7 +152,7 @@ def attach(c, j, show=True):
     if reader == source:
         return state
     texts = prose(j)
-    state.update(needed=bool(texts), total=len(texts), available=bool(model_id(c)))
+    state.update(needed=bool(texts), total=len(texts), available=bool(model_id(c, j)))
     if not texts:
         return state
     rows = db.rows(c, select(db.translations).where(db.translations.c.job_id == j["id"], db.translations.c.lang == reader))
@@ -170,9 +194,9 @@ def translate(c, user, j, lang, transport=None, clock=time.time):
     {"done", "total", "cost", "seconds", "partial"}. Raises Unavailable when nothing can be done."""
     if lang not in i18n.LANGS:
         raise Unavailable(M("Unknown language."))
-    mid = model_id(c)
+    mid = model_id(c, j)
     if not mid:
-        raise Unavailable(M("No translation model is chosen (Settings → Agents and models)."))
+        raise Unavailable(M("Translation is not offered, or no model can translate this job (Settings → Agents and models)."))
     model = providers.runtime(c, mid)
     have = {r["source_hash"] for r in db.rows(c, select(db.translations.c.source_hash).where(
         db.translations.c.job_id == j["id"], db.translations.c.lang == lang))}

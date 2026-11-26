@@ -403,7 +403,9 @@ def evaluate(c, j, repo):
     rs = repo["settings"] or {}
     diff = j["diff"] or {}
     files = diff.get("files") or []
-    size = int(diff.get("additions") or 0) + int(diff.get("deletions") or 0)
+    # Lines of generated lockfiles (package-lock.json…) do not count: nobody reviews them line by line.
+    gen = int(diff.get("generated") or 0)
+    size = max(0, int(diff.get("additions") or 0) + int(diff.get("deletions") or 0) - gen)
     size_limit = int(rs.get("size_limit") or limits["size_limit"])
     hits = protected_hits(files, (rs.get("protected_paths") or limits["protected_paths"]) + [".fabrique/**"])
     if diff.get("truncated"):   # incomplete list: a protected file may be found in what is missing
@@ -428,7 +430,8 @@ def evaluate(c, j, repo):
         {"key": "protected", "name": M("Protected paths"), "ok": not hits, "detail": M("no protected file touched") if not hits else M("touches {files}", files=", ".join(hits[:4]))},
         {"key": "tests", "name": M("Existing tests"), "ok": not diff.get("tests_changed"),
          "detail": M("none modified") if not diff.get("tests_changed") else M("modifies {files}", files=", ".join((diff.get("tests_changed") or [])[:4]))},
-        {"key": "size", "name": M("Size"), "ok": size <= size_limit, "detail": M("{size} lines out of {size_limit}", size=size, size_limit=size_limit)},
+        {"key": "size", "name": M("Size"), "ok": size <= size_limit,
+         "detail": M("{size} lines out of {size_limit}", size=size, size_limit=size_limit) + (M(" (lockfiles not counted: {n} lines)", n=gen) if gen else "")},
         {"key": "opinion", "name": M("Agent's opinion"), "ok": bool(d and d["confident"]), "detail": M("confident") if d and d["confident"] else M("not confident or no opinion")},
     ]
 
@@ -584,6 +587,7 @@ def report(runner, ref, ev):
             tc = ev.get("tests_changed") if isinstance(ev.get("tests_changed"), list) else []
             diff = {"files": [str(f)[:MAX_PATH] for f in raw[:MAX_FILES]], "truncated": len(raw) > MAX_FILES,
                     "additions": int(ev.get("additions") or 0), "deletions": int(ev.get("deletions") or 0),
+                    "generated": max(0, int(ev.get("generated") or 0)),
                     "tests_changed": [str(f)[:MAX_PATH] for f in tc[:50]]}
             c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(pr_number=n, pr_url=url, diff=diff, updated_at=t,
                                                                          attempts=max(1, int(ev.get("attempts") or 1))))
@@ -658,7 +662,7 @@ def report(runner, ref, ev):
                 raise Denied(M("invalid review"))
             c.execute(db.reviews.delete().where(db.reviews.c.job_id == jid, db.reviews.c.sha == sha, db.reviews.c.role == role))
             c.execute(insert(db.reviews).values(job_id=jid, sha=sha, role=role, verdict=verdict, summary=_txt(ev.get("summary"), 2000),
-                                                points=[_txt(p, 400) for p in (ev.get("points") or [])[:12]], model=_txt(ev.get("model"), 80), at=t))
+                                                points=[_txt(p, 1500) for p in (ev.get("points") or [])[:12]], model=_txt(ev.get("model"), 80), at=t))
             db.log_event(c, jid, M("review"), M("{role}: {verdict}", role=ROLES[role], verdict=VERDICTS[verdict]))
         elif kind == "cancelled":
             who = j["cancel_requested"] or M("a reviewer")
@@ -738,6 +742,19 @@ def report(runner, ref, ev):
             _stage(c, j, "failed", reason, M("Failed: ") + _cut(reason, 200))
             db.log_audit(c, "fabrique", M("Failed"), jid, detail=reason)
             notify.emit(c, "failed", job=j, detail=reason)
+        elif kind == "interrupted":
+            # A limit stopped the agent (duration, turns, a looping or saturated model) before it finished: its work is
+            # committed in the workspace, which the runner keeps; the job can be resumed instead of redone.
+            reason = _txt(ev.get("reason"), 400) or M("stopped by a limit")
+            c.execute(update(db.agents).where(db.agents.c.job_id == jid).values(state="done"))
+            if ev.get("attempts"):
+                c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(attempts=max(1, min(20, int(ev["attempts"])))))
+            kept = M("its work is saved in the workspace") if ev.get("saved") else M("its workspace is kept")
+            _stage(c, j, "failed", M("Interrupted: {why}. Nothing is lost: {kept}, and the job can be resumed where it stopped.", why=reason, kept=kept),
+                   M("Interrupted: ") + _cut(reason, 160))
+            c.execute(update(db.jobs).where(db.jobs.c.id == jid).values(resumable=True))
+            db.log_audit(c, "fabrique", M("Interrupted"), jid, detail=reason)
+            notify.emit(c, "failed", job=j, detail=M("Interrupted, can be resumed: {why}", why=reason))
         elif kind == "closed":
             # The agent gave its opinion and changed nothing (request already covered, dropped at the requester's request…):
             # an explicit end, not a failure. Nothing to review, nothing to merge.

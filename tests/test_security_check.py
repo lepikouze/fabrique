@@ -109,6 +109,7 @@ def test_hook_tells_the_agent_what_to_fix_without_the_secret(fake_betterleaks, t
     (ws / "app.py").write_text('KEY = "x"\n')
     (ws / "requirements.txt").write_text("requessts\n")
     monkeypatch.setenv("FAB_WORKSPACE", str(ws))
+    monkeypatch.setenv("HOME", str(tmp_path))         # alerts already given are remembered in the job's home
     monkeypatch.delenv("FAB_TOKEN", raising=False)
     fake_betterleaks.write_text(json.dumps([{"File": "app.py", "StartLine": 1, "RuleID": "stripe-access-token", "Secret": "NE-DOIT-PAS-SORTIR"}]))
     code, msg = _hook(ws, "Write", "app.py")
@@ -164,3 +165,23 @@ def test_security_warning_shown_to_the_reviewer():
     assert not jobs.security_warn(dict(warn, kind="check"))             # a recipe check is never an informative alert
     assert jobs.to_check(j)[0]["title"] == "Security check: 1 alert(s)"
     assert jobs.to_check(dict(j, verified_sha="def5678")) == []          # alert from an old commit: no longer displayed
+
+
+def test_a_setting_name_is_not_a_secret_and_an_alert_is_given_once(fake_betterleaks, tmp_path, monkeypatch):
+    """0.8.10: `smtpPassword: 'smtp.password'` fired eight times on one module, each time asking the agent to fix it."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+    (ws / "settings.js").write_text("const KEYS = {\n  smtpPassword: 'smtp.password',\n  admin: \"admin_password\",\n  real: 'Sup3r-s3cret!'\n};\n")
+    monkeypatch.setenv("FAB_WORKSPACE", str(ws))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("FAB_TOKEN", raising=False)
+    fake_betterleaks.write_text(json.dumps([{"File": "settings.js", "StartLine": n, "RuleID": "generic-password"} for n in (2, 3, 4)]))
+    code, msg = _hook(ws, "Edit", "settings.js")
+    assert code == 2 and "line 4" in msg and "line 2" not in msg and "line 3" not in msg     # only the real-looking value
+    assert _hook(ws, "Edit", "settings.js")[0] == 0                    # same alert: the agent is not stopped again
+    (ws / "settings.js").write_text("// moved\n" + (ws / "settings.js").read_text())
+    fake_betterleaks.write_text(json.dumps([{"File": "settings.js", "StartLine": 5, "RuleID": "generic-password"}]))
+    assert _hook(ws, "Edit", "settings.js")[0] == 0                    # the same line, moved down: still the same alert
+    fake_betterleaks.write_text(json.dumps([{"File": "settings.js", "StartLine": 2, "RuleID": "stripe-access-token"}]))
+    assert _hook(ws, "Edit", "settings.js")[0] == 2                    # a recognized token is never taken for a name

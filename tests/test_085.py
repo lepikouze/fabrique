@@ -80,8 +80,9 @@ def test_the_runner_stops_only_a_run_in_progress():
     class R:
         done = False
 
-        def _kill(self, why):
+        def _kill(self, why, limit=None):
             killed.append(str(why))
+            assert limit == "loops"     # 0.8.10: a looping model interrupts the job, its work is kept
     ctx = Ctx(LOCAL); ctx.run = R()
     Runner.runaway(None, ctx, 3)
     assert killed and "3 times in a row" in killed[0]

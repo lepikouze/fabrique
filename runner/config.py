@@ -54,7 +54,7 @@ REVIEW_TIMEOUT = int(_env("REVIEW_TIMEOUT", "600"))     # per reviewer; beyond: 
 # direct: one request to the model per reviewer, diff provided (fast, no tools); agent: Claude Code in read-only mode.
 # Direct mode applies to local models and Anthropic with API key; otherwise the runner reverts to agent mode.
 REVIEW_MODE = _env("REVIEW_MODE", "direct")
-REVIEW_MAX_DIFF = int(_env("REVIEW_MAX_DIFF", "60000"))  # diff characters sent to reviewers
+REVIEW_MAX_DIFF = int(_env("REVIEW_MAX_DIFF", "0") or 0)  # diff characters sent to reviewers; 0: from the reviewers' context window
 DIFF_MAX = int(_env("FABRIQUE_DIFF_MAX", "400000"))    # diff characters sent to the dashboard for human reading; 0: no sending
 STUDY_MAX = 40000   # maximum size of a study report (characters)
 # Local model (compatible server): thinking tokens allowed per agent response. Without a budget, a small model can think
@@ -64,7 +64,8 @@ THINKING_BUDGET = int(_env("THINKING_BUDGET", "8000"))
 # Agent responses cut at the output limit in a row before the run is stopped: the model loops or its context is full,
 # and asking again only burns time.
 RUNAWAY_STREAK = int(_env("RUNAWAY_STREAK", "3"))
-REVIEW_MAX_TOKENS = int(_env("REVIEW_MAX_TOKENS", "8000"))  # reviewer response, thinking included; cut off: second attempt without thinking
+REVIEW_MAX_TOKENS = int(_env("REVIEW_MAX_TOKENS", "8000") or 8000)  # reviewer response, thinking included; cut off: second attempt without thinking
+REVIEW_MAX_TOKENS_SET = bool(_env("REVIEW_MAX_TOKENS"))   # unset: a larger answer for a model with a large context window
 ANTHROPIC_API_URL = _env("ANTHROPIC_API_URL", "https://api.anthropic.com")
 MAX_TURNS = int(_env("MAX_TURNS", "60"))
 MAX_TURN_RESUMES = int(_env("MAX_TURN_RESUMES", "2"))   # resumes of the agent session after its turn limit, before failing

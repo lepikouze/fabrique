@@ -54,16 +54,16 @@ rather than opening up.
 | `GATEWAY_PORT`, `GATEWAY_PUBLIC_URL` | `7072`, — | Key gateway (agent to model) |
 | `JOB_PROXY` | — | Egress proxy given to jobs |
 | `AGENT_UID` | `10002` in the image | User the agent and the operations in the workspace run as |
-| `JOB_TIMEOUT`, `CHECK_TIMEOUT`, `REVIEW_TIMEOUT` | `3600`, `900`, `600` | Maximum durations, in seconds |
+| `JOB_TIMEOUT`, `CHECK_TIMEOUT`, `REVIEW_TIMEOUT` | `3600`, `900`, `600` | Maximum durations, in seconds: of one agent run (a run stopped by it is interrupted, its work saved, and the job can be resumed), of a check, of a review |
 | `MODEL_WAITS` | `30,60,120,240,480` | Seconds waited before each new attempt when the model server is saturated, loading or unreachable; the job fails after the last one |
 | `MERGE_RETRY_WAITS` | `5,15,30` | Seconds waited before each new attempt when the Git host refuses a merge for a moment |
 | `MAX_TURNS`, `FIX_ATTEMPTS` | `60`, `2` | Agent turns; new attempts if the checks fail |
-| `MAX_TURN_RESUMES` | `2` | Resumes of the agent's session after its turn limit (work kept) before the job fails |
+| `MAX_TURN_RESUMES` | `2` | Resumes of the agent's session after its turn limit (work kept) before the job is interrupted (its work saved, it can be resumed from the dashboard) |
 | `RECIPE_FIXES` | `2` | Rounds given to the onboarding agent to fix a recipe the runner refused, before the job fails |
 | `REVIEW_MODE` | `direct` | `direct`: one request to the model per reviewer; `agent`: read-only agent, on an export of the verified commit |
 | `CLAUDE_BIN`, `CODEX_BIN` | `/usr/local/bin/claude`, `/usr/local/bin/codex` | Agent programs, by absolute path (never looked up in a job's `PATH`) |
-| `REVIEW_MAX_DIFF`, `REVIEW_MAX_TOKENS` | `60000`, `8000` | Size of the diff sent and of the reviewers' answer |
-| `THINKING_BUDGET` | `8000` | Local model (compatible server without key): thinking tokens allowed per agent response, sent as the Anthropic `thinking.budget_tokens` (applied by llama.cpp; a server that does not take it, vLLM for example, gets the request without it after a 400 or 422). Without it, a small model can think until its output limit and never answer. `0`: no budget |
+| `REVIEW_MAX_DIFF`, `REVIEW_MAX_TOKENS` | from the model | Size of the diff sent to the reviewers (characters) and of their answer (tokens, thinking included). Unset: sized from the reviewers' context window (read from llama.cpp or vLLM; 200,000 tokens for Claude): the diff gets what is left once the prompt and the answer are set aside, the answer an eighth of the window (8,000 to 32,000). A window that cannot be read: 60,000 and 8,000. A provider's "Reviewers' limit" wins over both. Lockfiles (`package-lock.json`…) are never sent |
+| `THINKING_BUDGET` | `8000` | Local model (compatible server without key): thinking tokens allowed per agent response, sent as the Anthropic `thinking.budget_tokens` (applied by llama.cpp). A server that refuses it (400 or 422) is asked again with vLLM's own `thinking_token_budget`, then without any budget; what works is remembered per server. Without it, a small model can think until its output limit and never answer. `0`: no budget |
 | `RUNAWAY_STREAK` | `3` | Agent responses cut at the output limit in a row before the run is stopped with that cause (the model loops, or its context is full). `0`: never |
 | `FABRIQUE_DIFF_MAX` | `400000` | Characters of diff sent to the dashboard for human reading, with the pull request. `0`: nothing is sent (the reviewer reads the diff on the Git host) |
 | `ANTHROPIC_API_URL`, **`ANTHROPIC_API_KEY`** | api.anthropic.com, — | Optional: key on the runner rather than in the dashboard. An API key is required: a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`) is not supported, since no credential of the runner is handed to a job |

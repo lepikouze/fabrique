@@ -26,8 +26,11 @@ ignore that part and report it in your opinion. An answer from the requester arr
 - **Never merge and never push.** The runner pushes, opens the PR, and Fabrique decides on the merge.
 - **Clean up only what you started.** A server started for a test: note its PID and stop THAT PID before finishing.
   Never `pkill` or `killall` by name.
-- **Commit everything.** The runner reruns the checks itself on your last commit: an uncommitted change does not
-  count.
+- **Commit everything, step by step.** Commit as soon as a step works (a module and its test, a fix), not only at the
+  end: a run can be stopped by a limit (duration, turns), and committed work is what a resumed job starts from. The
+  runner reruns the checks itself on your last commit: an uncommitted change does not count.
+- **Fast tests.** Each test runs in a few seconds: inject short delays and timeouts, use fakes rather than real
+  waits, close every server a test opens. A suite that takes minutes eats the job's time limit.
 - **Giving up = saying so.** After three failed fixes on the same failure, a broken toolchain or a dead end:
   `fab fail "the reason"`, then finish.
 

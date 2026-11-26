@@ -76,6 +76,7 @@ class Run:
         self._shown = 0.0   # cost last shown: the live figure never goes down
         self.subagents = []
         self.stalled = self.cancelled = False
+        self.limit = None   # "duration" or "loops": stopped by a limit, the work is kept and the job can be resumed
         self.proc = None
         self.last = time.time()
 
@@ -193,7 +194,8 @@ class Run:
                                        "DISABLE_ERROR_REPORTING": "1", **menv, **self.extra_env()})
         self.ctx.run = self
         self._last_usage, self.done = 0.0, False
-        killer = threading.Timer(config.JOB_TIMEOUT, self._kill, args=(M("maximum duration exceeded ({p} min)", p=config.JOB_TIMEOUT // 60),))
+        killer = threading.Timer(config.JOB_TIMEOUT, self._kill, args=(M("maximum duration exceeded ({p} min)", p=config.JOB_TIMEOUT // 60),),
+                                 kwargs={"limit": "duration"})
         killer.start()
         idle_max = config.WATCHDOG_SECONDS or max(60, int(self.ctx.watchdog_min) * 60)
 
@@ -224,9 +226,10 @@ class Run:
         self.cancelled = True
         self._kill(M("stopped by {who}", who=who))
 
-    def _kill(self, why):
+    def _kill(self, why, limit=None):
         if not self.error:
             self.error = why
+            self.limit = limit
         self.ctx.ex.kill(self.ctx)
 
 

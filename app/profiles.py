@@ -14,7 +14,7 @@ from . import db
 ROLES = {"agent": ("Agent", M("Triage, investigation, implementation, fixes: one session, one model")),
          "review": (M("Reviewers"), M("Code, security, architecture and infrastructure reviews, with a fresh context")),
          "study": (M("Studies"), M("Study reports: a lot of reading, no change")),
-         "onboarding": ("Onboarding", M("Reading a repo and writing its recipe, then replayed by the runner"))}
+         "onboarding": (M("Onboarding and translation"), M("Writing a repo's recipe; translating a job for a reader of another language"))}
 # Examples displayed under each role: the model most relevant to the requested work (Claude, then local).
 EXAMPLES = {"agent": M("Claude Opus 5.5 · local: Qwen3.8 27B. The longest and most demanding work."),
             "review": M("Claude Sonnet 5.5 · local: Gemma 4 26B. Ideally another family than the agent's: a second opinion."),
@@ -25,6 +25,47 @@ EXAMPLES = {"agent": M("Claude Opus 5.5 · local: Qwen3.8 27B. The longest and m
 REVIEWERS = {"code": M("Code reviewer"), "security": M("Security reviewer"), "architecture": M("Architecture reviewer"),
              "infra": M("Infrastructure reviewer")}
 INHERIT = "provider"   # effort: provider setting (the level defined on the compatible provider)
+
+# Ready-made profiles, to start from: each role takes the first available model that matches its wishes, in order.
+# LOCAL: a model of a compatible server (llama.cpp, vLLM). The form opens filled in; nothing is saved until "Save".
+LOCAL = "local"
+PRESETS = {
+    "local": (M("All local"), M("Every role on your own models: no API cost."),
+              {"agent": [LOCAL], "review": [LOCAL], "study": [LOCAL], "onboarding": [LOCAL]}),
+    "economy": (M("Economy"), M("A small Claude model works, Sonnet checks code and security, a local model does the rest."),
+                {"agent": ["haiku", LOCAL], "review": [LOCAL, "haiku"], "review_code": ["sonnet"], "review_security": ["sonnet"],
+                 "study": ["sonnet", LOCAL], "onboarding": [LOCAL, "haiku"]}),
+    "quality": (M("Quality"), M("The strongest Claude model works, Sonnet reviews, Haiku writes recipes and translates."),
+                {"agent": ["opus", "fable", "sonnet"], "review": ["sonnet", "opus"], "study": ["sonnet", "opus"],
+                 "onboarding": ["haiku", "sonnet"]}),
+}
+
+
+def preset(c, key):
+    """A ready-made profile filled in with the available models: {"name", "roles", "missing"}; None if unknown."""
+    from .providers import models_with_provider
+    if key not in PRESETS:
+        return None
+    name, _, wishes = PRESETS[key]
+    models = models_with_provider(c)
+    roles, missing = {}, []
+    for role, wanted in wishes.items():
+        pick = ""
+        for w in wanted:
+            pool = [m for m in models if m.get("provider") != "anthropic" and m.get("provider_type") != "openai"] if w == LOCAL else \
+                   sorted([m for m in models if w in m["id"].lower()], key=lambda m: m["id"], reverse=True)
+            if pool:
+                pick = pool[0]["id"]
+                break
+        if pick:
+            roles[role] = {"model": pick, "effort": INHERIT}
+        elif not role.startswith("review_"):
+            missing.append(ROLES[role][0])
+    taken = {p["name"].lower() for p in listing(c)}
+    label, n = str(name), 2
+    while label.lower() in taken:
+        label, n = f"{name} {n}", n + 1
+    return {"name": label, "roles": roles, "missing": missing}
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
 

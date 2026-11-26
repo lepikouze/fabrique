@@ -6,6 +6,46 @@ Notable changes to Fabrique, most recent first. The format follows
 
 Interface labels are quoted in French, as they appear on a French screen.
 
+## [0.8.10] - 2026-11-26
+
+Nothing lost at a limit, reviewers that see the whole change, simpler profiles. After a day of real jobs on a local
+model on a real install: two finished modules lost at the duration limit, reviews cut short. One database migration
+(applied at startup). Chart 0.5.10.
+
+### Fixed
+- **A job stopped by a limit is interrupted, not failed, and nothing is lost.** The duration of an agent run
+  (`JOB_TIMEOUT`), the last turn limit, a model looping at its output limit, a saturated model server, a silent agent:
+  - the runner commits what the agent left uncommitted, in its workspace;
+  - the job shows "Interrupted", with the cause, and a "Resume" button (with an optional note for the agent): the agent
+    picks up where it stopped, same workspace, same branch, same session;
+  - the workspace of an interrupted job is kept a week (an hour for any other finished job), unless it is archived.
+  Before, the work of a whole module was deleted an hour after the failure: the agent meant to commit at the end.
+- **The agent commits step by step and writes fast tests**: both are now in its rules. A test suite that waited for real
+  timeouts took a quarter of an hour of a job's time.
+- **Reviewers see the whole change.**
+  - Lockfiles (`package-lock.json`, `yarn.lock`, `go.sum`…) are left out of the diff they read (they are told which
+    changed) and out of the PR size gate: one lockfile took the room of four source files, and pushed a PR over the limit.
+  - The diff they read is sized from their model's context window instead of a fixed 60,000 characters: a 131k-token
+    model now reads about 260,000. Their answer gets an eighth of the window (8,000 to 32,000 tokens) when no limit is set.
+  - A point is no longer cut at 400 characters ("Consider injecting the databas").
+  - A diff that still has to be cut makes every verdict "undetermined", with the points kept as an opinion on the part read:
+    a reviewer no longer asks to "fix" files it could not see.
+  - An unreadable answer is asked again strictly: the JSON verdict alone, without thinking.
+- **vLLM gets a thinking limit.** It refuses the Anthropic budget; Fabrique now tries vLLM's own `thinking_token_budget`
+  before sending nothing, and remembers what each server takes. Without a limit, Qwen thought for minutes per answer.
+- **A setting name is not a secret.** `password: 'smtp.password'` stopped the agent eight times on one module. A line whose
+  quoted values are all names (words joined by dots or underscores) is no longer reported by the generic rules, and an alert
+  already given is not given again at each edit of the file. The end-of-job report still lists every alert.
+
+### Changed
+- **Profiles**: the fourth role is "Onboarding and translation"; the per-reviewer models are folded in "Advanced"; three
+  ready-made profiles fill the form from the available models ("All local", "Economy", "Quality"); shorter texts.
+- **Translation follows the job's profile.** The translation model section is replaced by an "Offer to translate jobs"
+  checkbox; the job profile's "Onboarding and translation" model translates, otherwise the default profile's, otherwise
+  the default model. An installation that had chosen a translation model keeps offering translation, and keeps that model
+  for the jobs without a profile.
+- The "Translate" button has no frame around it when it stands alone.
+
 ## [0.8.9] - 2026-11-25
 
 A tolerant onboarding, after a real repository whose recipe was refused twice for a single long check. No migration. Chart 0.5.9.

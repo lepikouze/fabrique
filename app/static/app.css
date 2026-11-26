@@ -642,6 +642,10 @@ html.side-min .brand .logo-mark { display: block; }
 /* Machine translation of a job's texts: the bar that offers or announces it, and the translated texts themselves. */
 .tx-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0 2px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; }
 .tx-bar form { margin: 0; }
+/* the Translate button alone: no frame around it (the frame groups a status and its button) */
+.tx-bar:not(:has(span)) { border: 0; padding: 0; }
+.resume-form { display: flex; gap: 6px; align-items: center; flex: 1 1 320px; }
+.resume-form input { flex: 1; min-width: 0; }
 .tx-note { font-weight: 600; color: var(--blue); }
 .mt { text-decoration: underline dotted; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
 
@@ -670,3 +674,8 @@ p.hint-warn { margin-top: 4px; }
 .sugg .opt:hover, .sugg .opt.on { background: var(--surface-2); }
 .sugg .opt .s { display: block; font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sugg .opt .d { display: block; color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* profile form: ready-made profiles, reviewers folded away */
+.presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+details.advanced { margin: 10px 0; }
+details.advanced > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }

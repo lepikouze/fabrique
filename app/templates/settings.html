@@ -27,19 +27,17 @@
   </section>
   {% macro mname(x) %}{{ (models|selectattr('id', 'equalto', x)|first or {'name': x}).name }}{% endmacro %}
   <section class="box" id="translation">{% set trm, trow = data.translation %}
-   <h2>Translation model</h2>
-   <p class="muted">When a job was written in a language other than the reader's, a “Translate” button appears on its page. This model then translates the texts written by the agents (understanding, assumptions, opinion, questions, study report, review points). Nothing is translated unless asked; never code, a diff or the output of a command. With no model chosen, the button does not appear.</p>
+   <h2>Translation</h2>
    <form method="post" action="/settings/translation" class="frm">
-    <label for="tr-m">Model</label>
-    <select id="tr-m" name="model" style="max-width:420px"><option value="">None: no translation offered</option>{% for m in models %}<option value="{{ m.id }}"{% if trm.model == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
-    <small class="help">A fast local model is fine. With a billed model, the cost of each translation is shown on the job's page and in the audit log.</small>
+    <label class="chk"><input type="checkbox" name="offer" value="1"{% if tr_offered %} checked{% endif %}> Offer to translate jobs</label>
+    <small class="help">A “Translate” button appears on a job written in another language than the reader's. The job profile's “Onboarding and translation” model translates; without a profile, the default model.</small>
     {{ trace(trow) }}
     <div class="row-end"><button class="btn primary">Save</button></div>
    </form>
   </section>
   <section class="box" id="profiles">
    <h2>Model profiles</h2>
-   <p class="muted">One model per role, reusable from one repo to another. Each role names its model, even when it is the same as another role's. A profile is chosen in place of a model: above as the default, in a repo, or on a request.</p>
+   <p class="muted">One model per role, reusable across repos. Chosen instead of a model: as the default above, on a repo, or on a request.</p>
    <table class="tbl"><thead><tr><th>Profile</th>{% for k, (lbl, help) in ROLES.items() %}<th>{{ lbl }}</th>{% endfor %}<th>Used by</th><th></th></tr></thead><tbody>
    {% for p in profs %}{% set us = prof_usage[p.id] %}
     <tr><td><b>{{ p.name }}</b></td>
@@ -49,24 +47,32 @@
       <form method="post" action="/settings/profiles" data-confirm="Remove profile “{{ p.name }}”? The repos using it go back to their model."><input type="hidden" name="action" value="remove"><input type="hidden" name="pid" value="{{ p.id }}"><button class="btn sm ghostb" aria-label="Remove {{ p.name }}">Remove</button></form></td></tr>
    {% else %}<tr><td colspan="{{ ROLES|length + 3 }}" class="muted">No profile: each job uses a single model, the repo's or the default one.</td></tr>{% endfor %}
    </tbody></table>
-   <details class="add-prov" id="profile"{% if prof_edit %} open{% endif %}><summary class="btn">{% if prof_edit %}Edit “{{ prof_edit.name }}”{% else %}{{ ic('plus') }}Add a profile{% endif %}</summary>
+   {% set pf = prof_edit or prof_preset %}
+   <details class="add-prov" id="profile"{% if pf %} open{% endif %}><summary class="btn">{% if prof_edit %}Edit “{{ prof_edit.name }}”{% else %}{{ ic('plus') }}Add a profile{% endif %}</summary>
+   {% if not prof_edit %}<p class="presets"><span class="muted small">Start from:</span>{% for k, ps in PRESETS.items() %} <a class="btn sm" href="/settings?tab=agents&preset={{ k }}#profile" title="{{ ps[1] }}">{{ ps[0] }}</a>{% endfor %}</p>
+   {% if prof_preset and prof_preset.missing %}<p class="hint-warn small">No available model fits: {{ prof_preset.missing|join(', ') }}. Choose one below.</p>{% endif %}{% endif %}
    <form method="post" action="/settings/profiles" class="frm inline-form" autocomplete="off">
     <input type="hidden" name="action" value="save">
     {% if prof_edit %}<input type="hidden" name="pid" value="{{ prof_edit.id }}"><input type="hidden" name="edit" value="1">{% endif %}
-    <label for="pf-name">Profile name</label><input id="pf-name" name="name" required maxlength="60" placeholder="Mixed: local and Claude" value="{{ prof_edit.name if prof_edit else '' }}">
+    <label for="pf-name">Profile name</label><input id="pf-name" name="name" required maxlength="60" placeholder="Mixed: local and Claude" value="{{ pf.name if pf else '' }}">
     <table class="tbl roles"><thead><tr><th>Role</th><th>Model</th></tr></thead><tbody>
-    {% for k, (lbl, help) in ROLES.items() %}{% set r = (prof_edit.roles[k] if prof_edit else {'model': '', 'effort': 'provider'}) %}
+    {% for k, (lbl, help) in ROLES.items() %}{% set r = ((pf.roles.get(k) if pf else none) or {'model': '', 'effort': 'provider'}) %}
      <tr><td><label for="pf-m-{{k}}"><b>{{ lbl }}</b></label><br><small class="muted">{{ help }}</small><br><small class="example">Example: {{ EXAMPLES[k] }}</small></td>
       <td><span class="m-lbl muted small">Model</span><select id="pf-m-{{k}}" name="model:{{k}}" required><option value="" {{ 'selected' if not r.model }} disabled>Choose a model</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
 </tr>
     {% endfor %}
-    {% for k, lbl in REVIEWERS.items() %}{% set r = (prof_edit.roles.get('review_' ~ k) if prof_edit else none) or {'model': ''} %}
-     <tr><td><label for="pf-m-review_{{k}}"><b>{{ lbl }}</b></label><br><small class="muted">Optional: another model for this reviewer only. A stronger model for code and security reviews pays off: each review is a single request.</small></td>
-      <td><span class="m-lbl muted small">Model</span><select id="pf-m-review_{{k}}" name="model:review_{{k}}"><option value="" {{ 'selected' if not r.model }}>Same as Reviewers</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td>
-</tr>
-    {% endfor %}
     </tbody></table>
-    <p class="muted small">The agent keeps a single model for its whole session: nothing is lost between triage and implementation. Reviewers always start from a fresh context (the diff and the request): another model gives them a second opinion. A local model's effort level is set on its provider, further down.</p>
+    <details class="advanced"{% if pf and pf.roles and (pf.roles.get('review_code') or pf.roles.get('review_security') or pf.roles.get('review_architecture') or pf.roles.get('review_infra')) %} open{% endif %}>
+     <summary>Advanced: one model per reviewer</summary>
+     <p class="muted small">Optional. A stronger model for the code and security reviews pays off: each review is a single request.</p>
+     <table class="tbl roles"><tbody>
+     {% for k, lbl in REVIEWERS.items() %}{% set r = (pf.roles.get('review_' ~ k) if pf else none) or {'model': ''} %}
+      <tr><td><label for="pf-m-review_{{k}}"><b>{{ lbl }}</b></label></td>
+       <td><select id="pf-m-review_{{k}}" name="model:review_{{k}}"><option value="" {{ 'selected' if not r.model }}>Same as Reviewers</option>{% for m in models %}<option value="{{ m.id }}" {{ 'selected' if r.model == m.id }}>{{ m.name }}</option>{% endfor %}</select></td></tr>
+     {% endfor %}
+     </tbody></table>
+    </details>
+    <p class="muted small">The agent keeps one model for its whole session. Reviewers start from a fresh context: another model gives a second opinion.</p>
     <div class="row-end">{% if prof_edit %}<a class="btn" href="/settings?tab=agents#profiles">Cancel</a>{% endif %}<button class="btn primary">Save the profile</button></div>
    </form>
    </details>
@@ -130,8 +136,8 @@
      <label for="p-thinking">Thinking budget <small class="muted">tokens of thinking per agent response</small></label>
      <input id="p-thinking" name="thinking" type="number" min="0" max="64000" step="500" class="mono" style="max-width:160px" placeholder="8000" value="{{ edit.thinking if edit and edit.thinking is not none else '' }}">
      <label for="p-rtok">Reviewers' limit <small class="muted">tokens per review answer, thinking included</small></label>
-     <input id="p-rtok" name="review_tokens" type="number" min="1000" max="64000" step="1000" class="mono" style="max-width:160px" placeholder="8000" value="{{ edit.review_tokens if edit and edit.review_tokens is not none else '' }}">
-     <p class="muted small">A model that thinks a lot (Qwen, for example) can exceed it: its verdict is then given without thinking. Raise it for such a model (16000 to 24000). Empty: the runner's setting.</p>
+     <input id="p-rtok" name="review_tokens" type="number" min="1000" max="64000" step="1000" class="mono" style="max-width:160px" placeholder="auto" value="{{ edit.review_tokens if edit and edit.review_tokens is not none else '' }}">
+     <p class="muted small">A model that thinks a lot (Qwen, for example) can exceed it: its verdict is then given without thinking. Empty: an eighth of the model's context window (8000 to 32000).</p>
      <p class="muted small">Beyond it, the model stops thinking and answers: a small model can otherwise think until its output limit without answering. A slow model wants a lower budget (each thousand tokens is time). Empty: the runner's setting. 0: no budget. A server that does not take it (vLLM, for example) gets the request without it.</p>
     </div>
     <div class="row-end">{% if edit %}<a class="btn" href="/settings?tab=agents">Cancel</a>{% endif %}<button class="btn primary">{{ 'Save' if edit else 'Save and load the models' }}</button></div>

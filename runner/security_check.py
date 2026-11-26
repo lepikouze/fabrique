@@ -27,6 +27,24 @@ TIMEOUT = 6                # seconds per registry request
 # recognized (GitHub, Stripe, AWS...) remains flagged everywhere.
 TEST_PATH = re.compile(r"(^|/)(tests?|spec|specs|__tests__|testdata|fixtures?)(/|$)|(^|/)(test_[^/]*|[^/]*_test\.[a-z]+|[^/]*\.(test|spec)\.[a-z]+)$")
 GENERIC = re.compile(r"^generic-")
+# A generic rule fires on `password: "smtp.password"`: the value is the NAME of a setting, not a secret. Words joined by
+# dots or underscores, no digit, nothing random: a line whose quoted values all look like that is not reported (seen:
+# eight alerts on one settings module, each asking the agent to "fix" it).
+KEY_NAME = re.compile(r"[A-Za-z]+(?:[._][A-Za-z]+)+")
+QUOTED = re.compile(r"""(["'`])((?:(?!\1).){1,200})\1""")
+
+
+def key_name_only(cwd, path, line):
+    """True if the line's quoted values are all setting names (smtp.password, admin_password)."""
+    try:
+        with open(os.path.join(cwd, path), encoding="utf-8", errors="replace") as f:
+            for i, text in enumerate(f, 1):
+                if i == line:
+                    values = [m.group(2) for m in QUOTED.finditer(text)]
+                    return bool(values) and all(KEY_NAME.fullmatch(v) for v in values)
+    except OSError:
+        pass
+    return False
 
 # Recognized dependency files -> ecosystem
 MANIFESTS = [(re.compile(r"(^|/)requirements[^/]*\.(txt|in)$"), "pypi"), (re.compile(r"(^|/)pyproject\.toml$"), "pypi"),
@@ -52,9 +70,10 @@ def secrets(args, cwd):
     for f in found if isinstance(found, list) else []:
         path, rule = str(f.get("File") or ""), str(f.get("RuleID") or "secret")
         path = os.path.relpath(path, cwd) if os.path.isabs(path) else path
-        if TEST_PATH.search(path) and GENERIC.match(rule):
+        line = int(f.get("StartLine") or 0)
+        if GENERIC.match(rule) and (TEST_PATH.search(path) or key_name_only(cwd, path, line)):
             continue
-        out.append((path, int(f.get("StartLine") or 0), rule))
+        out.append((path, line, rule))
     return sorted(set(out))
 
 
@@ -210,21 +229,54 @@ def hook(stdin=sys.stdin, get=_get):
     if not full.startswith(root + os.sep) or not os.path.isfile(full) or os.sep + ".git" + os.sep in full:
         return 0
     rel = os.path.relpath(full, root)
-    problems = []
+    found = []   # (key, message): the key survives line moves, so an alert already given is not given again
     for path, line, rule in secrets(["dir", rel], root) or []:
-        problems.append(M("{path} line {line}: hard-coded secret (rule {rule}). Remove it and read it from an environment variable or the configuration; never copy its value, here or in a message.", path=path, line=line, rule=rule))
+        found.append((f"{path}|{rule}|{_line_hash(root, path, line)}",
+                      M("{path} line {line}: hard-coded secret (rule {rule}). Remove it and read it from an environment variable or the configuration; never copy its value, here or in a message.", path=path, line=line, rule=rule)))
     if ecosystem(rel):
         try:
             new = open(full, encoding="utf-8", errors="replace").read()
         except OSError:
             new = ""
         alerts, _, _ = check_packages([(rel, _git(["show", f"HEAD:{rel}"], root), new)], get=get)
-        problems += alerts
+        found += [(f"{rel}|{a}", a) for a in alerts]
+    problems = _new(found)
     if not problems:
         return 0
     _say(M("Check on {rel}: ", rel=rel) + " ".join(p.split(": ", 1)[1].split(".")[0] for p in problems)[:600] + M(". The agent is asked to fix it."))
     print(M("Fabrique check: fix before going on.\n- ") + "\n- ".join(problems), file=sys.stderr)
     return 2
+
+
+def _line_hash(root, path, line):
+    import hashlib
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
+            for i, text in enumerate(f, 1):
+                if i == line:
+                    return hashlib.sha256(text.strip().encode()).hexdigest()[:16]
+    except OSError:
+        pass
+    return str(line)
+
+
+def _new(found):
+    """Messages not given yet in this job: the agent is asked once per alert. If it chose to keep the line (a false
+    alert), it is not stopped again at each edit of the file; the end-of-job report still lists every alert."""
+    path = os.path.join(os.environ.get("HOME") or "/tmp", ".fabrique-alerts-seen")
+    try:
+        with open(path, encoding="utf-8") as f:
+            seen = set(f.read().split("\n"))
+    except OSError:
+        seen = set()
+    fresh = [(k, m) for k, m in found if k not in seen]
+    if fresh:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("".join(k + "\n" for k, _ in fresh))
+        except OSError:
+            pass
+    return [m for _, m in fresh]
 
 
 def diff(base, cwd=".", get=_get):

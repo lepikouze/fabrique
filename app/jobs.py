@@ -512,6 +512,29 @@ def answer(user, ref, text):
         db.log_audit(c, user["user"], M("Question answered"), j["id"], ref, text[:200])
 
 
+def resume_interrupted(user, ref, note=""):
+    """A job stopped by a limit (duration, turns, a looping model) is resumed where it stopped: same workspace, same
+    branch, same agent session. Allowed to whoever may answer the job's questions."""
+    from .auth import can
+    note = (note or "").strip()[:2000]
+    with db.tx() as c:
+        j = _job_for_action(c, user, ref)
+        if not (can(user, "answer") or (can(user, "answer_own") and j["requester"] == user["user"])):
+            raise Refused(M("You cannot resume this job."))
+        if j["stage"] != "failed" or not j.get("resumable") or j["archived"]:
+            raise Refused(M("This job cannot be resumed: only a job interrupted by a limit can."))
+        t = time.time()
+        c.execute(update(db.jobs).where(db.jobs.c.id == j["id"]).values(stage="implementing", activity="idle", resumable=False, updated_at=t,
+                                                                         status_text=M("Resumed · waiting for a runner")))
+        c.execute(insert(db.timeline).values(job_id=j["id"], stage="implementing", at=t,
+                                             summary=M("Resumed by {name} where it stopped.", name=user["name"])))
+        if j["source"] != "demo":
+            from .work import enqueue
+            enqueue(c, j["id"], "resume", {"interrupted": True, "note": note, "by": user["name"]})
+        db.log_event(c, j["id"], M("resumed"), M("Resumed by {name}: the agent picks up where it stopped", name=user["name"]))
+        db.log_audit(c, user["user"], M("Job resumed"), j["id"], ref, note[:200])
+
+
 ONBOARD_TEXT = ("Write the repo {slug}'s recipe .fabrique/setup.json: installation commands, checks (tests, lint, typing, build) and required environment variables, proven by running it. Change no other file.",
                 M("The recipe is the only change; the runner replays it in a fresh container; a human merges the PR."))
 
@@ -913,7 +936,9 @@ def workspaces_to_purge(names, now=None):
     out = []
     for n in names:
         j = known.get(n)
-        if j is None or (j["stage"] in FINAL and j["id"] not in busy and (j["updated_at"] or 0) < now - 3600):
+        # An interrupted job keeps its workspace (its work is there) for a week, unless archived.
+        keep = 7 * 86400 if j is not None and j.get("resumable") and not j["archived"] else 3600
+        if j is None or (j["stage"] in FINAL and j["id"] not in busy and (j["updated_at"] or 0) < now - keep):
             out.append(n)
     return out
 

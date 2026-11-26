@@ -16,6 +16,8 @@
  {% if j.pr_url and j.pr_url.startswith(("https://", "http://")) %}<a class="btn" href="{{ j.pr_url }}" target="_blank" rel="noopener noreferrer">Pull request{{ ic('ext') }}</a>{% endif %}
  {% if can(user, 'decide') and j.stage not in ('merged', 'done', 'closed', 'failed') and j.source != 'demo' %}
  <form method="post" action="/jobs/{{j.ref}}/cancel" data-confirm="Stop {{ j.ref }}? The agent is killed and the job fails.">{% if j.cancel_requested %}<button class="btn" disabled>Stop requested…</button>{% else %}<button class="btn danger">{{ ic('x') }}Stop the job</button>{% endif %}</form>{% endif %}
+ {% if j.stage == 'failed' and j.resumable and not j.archived and j.source != 'demo' and (can(user, 'answer') or (can(user, 'answer_own') and j.requester == user.user)) %}
+ <form method="post" action="/jobs/{{j.ref}}/resume" class="resume-form" data-once><input name="note" maxlength="2000" placeholder="Note for the agent (optional)" aria-label="Note for the agent (optional)"><button class="btn primary" title="The agent picks up where it stopped: same workspace, same branch, same session">{{ ic('send') }}Resume</button></form>{% endif %}
  {% if can(user, 'archive') and (j.stage in ('merged', 'done', 'closed', 'failed') or j.merge_state == 'refused') %}
  <form method="post" action="/jobs/{{j.ref}}/archive">{% if j.archived %}<input type="hidden" name="restore" value="1">{% endif %}<button class="btn">{{ ic('archive') }}{{ 'Restore' if j.archived else 'Archive' }}</button></form>{% endif %}
  {% if can(user, 'settings') and j.archived and j.source != 'demo' %}<button type="button" class="btn danger" data-delete-ref="{{ j.ref }}" data-delete-phrase="{{ DELETE_PHRASE(j) }}" data-delete-title="{{ j.title }}">Delete…</button>{% endif %}

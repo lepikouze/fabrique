@@ -137,6 +137,22 @@ def hoist_system(d):
 MIN_THINKING = 1024   # below, no budget is sent (short internal requests: titles, summaries)
 
 
+def with_vllm_budget(body, budget):
+    """Same body, with vLLM's own thinking limit (`thinking_token_budget`, a sampling parameter of recent versions: once
+    reached, vLLM ends the thinking block and the model answers). Tried when a server refuses the Anthropic form of the
+    budget: without any limit, Qwen on vLLM thought for minutes per answer (seen on a real install). Returns the body
+    unchanged if there is no budget to send."""
+    try:
+        d = json.loads(body)
+    except (ValueError, TypeError):
+        return body
+    b = thinking_budget_for(d.get("max_tokens"), budget) if isinstance(d, dict) else 0
+    if not b:
+        return body
+    d["thinking_token_budget"] = b
+    return json.dumps(d, ensure_ascii=False).encode()
+
+
 def thinking_budget_for(max_tokens, budget):
     """Thinking budget to send, kept below the response limit so that the model has room to answer; 0: none."""
     if not budget or not isinstance(max_tokens, int) or isinstance(max_tokens, bool):
@@ -237,7 +253,8 @@ class Gateway:
         self.lookup, self.port, self.host = lookup, port, host
         self.on_slow = on_slow   # called with (ctx, message) when a response is abnormally long
         self.on_runaway = on_runaway   # called with (ctx, streak) when responses keep stopping at the output limit
-        self.no_budget = set()   # compatible servers that refused the thinking budget: relayed without it
+        self.no_budget = set()   # compatible servers that refused every form of thinking budget: relayed without it
+        self.vllm_budget = set()   # servers that refused the Anthropic budget but take vLLM's thinking_token_budget
         self.client = httpx.Client(timeout=httpx.Timeout(30, read=config.JOB_TIMEOUT), transport=transport)
         self.lock = threading.Lock()   # budget: test, reservation and counting of a job are done in one go
 
@@ -321,7 +338,9 @@ class Gateway:
                     body = plain
                     # The provider's own budget (Settings → model providers), otherwise the runner's.
                     tb = m.get("thinking_budget") if m.get("thinking_budget") is not None else config.THINKING_BUDGET
-                    if root not in gw.no_budget and tb:
+                    if root in gw.vllm_budget and tb:
+                        body = with_vllm_budget(plain, tb)
+                    elif root not in gw.no_budget and tb:
                         body = for_compatible(plain, m.get("effort") or "", tb)
                         budgeted = body is not plain
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
@@ -334,14 +353,24 @@ class Gateway:
                     r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None, headers=headers,
                                                                content=body), stream=True)
                     if budgeted and r.status_code in (400, 422):
-                        # A compatible server that does not take the thinking budget (400, or 422 for vLLM's validation):
-                        # asked again without it,
-                        # and remembered for the following requests.
+                        # A compatible server that does not take the Anthropic thinking budget (400, or 422 for vLLM's
+                        # validation): asked again with vLLM's own limit, then without any; what works is remembered
+                        # for the following requests.
                         r.read(); r.close()
-                        gw.no_budget.add(root)
-                        log.info("%s: thinking budget refused by the model server, relayed without it", ctx.ref)
-                        r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None,
-                                                                   headers=headers, content=plain), stream=True)
+                        alt = with_vllm_budget(plain, tb)
+                        if alt is not plain:
+                            r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None,
+                                                                       headers=headers, content=alt), stream=True)
+                            if r.status_code in (400, 422):
+                                r.read(); r.close()
+                            else:
+                                gw.vllm_budget.add(root)
+                                log.info("%s: Anthropic thinking budget refused, vLLM's thinking_token_budget taken", ctx.ref)
+                        if root not in gw.vllm_budget:
+                            gw.no_budget.add(root)
+                            log.info("%s: thinking budget refused by the model server, relayed without it", ctx.ref)
+                            r = gw.client.send(gw.client.build_request("POST", root + path, params=query or None,
+                                                                       headers=headers, content=plain), stream=True)
                     try:
                         status = r.status_code
                         self.send_response(r.status_code)

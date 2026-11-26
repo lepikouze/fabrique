@@ -136,6 +136,15 @@ class Failed(Exception):
     pass
 
 
+class Interrupted(Failed):
+    """A limit stopped the agent (duration of a run, turns, a model looping at its output limit) before it finished. Its
+    work is saved in the workspace, which is kept: the job can be resumed from the dashboard instead of being redone."""
+
+    def __init__(self, why, saved=False):
+        super().__init__(why)
+        self.saved = saved
+
+
 class Closed(Exception):
     """The agent concluded, with its opinion, that there is nothing to change: the job closes cleanly, it did not fail."""
 
@@ -394,6 +403,11 @@ class Runner:
             self.close(ctx, kind)
             self.panel.event(ctx.ref, type="closed", reason=str(e)[:400])
             self.panel.event(ctx.ref, type="intent_done", note=M("closed without change"))
+        except Interrupted as e:
+            log.warning("%s: interrupted: %s", ctx.ref, e)
+            self.close(ctx, kind)
+            self.panel.event(ctx.ref, type="interrupted", reason=str(e)[:400], saved=e.saved, attempts=ctx.attempt)
+            self.panel.event(ctx.ref, type="intent_done", note=str(e)[:400])
         except Failed as e:
             log.warning("%s: failed: %s", ctx.ref, e)
             self.close(ctx, kind)
@@ -667,10 +681,12 @@ class Runner:
             return False
         if run.stalled:
             if ctx.nudged:
-                raise Failed(M("no progress after a watchdog restart ({watchdog_min} min)", watchdog_min=ctx.watchdog_min))
+                self.interrupt(ctx, M("no progress after a watchdog restart ({watchdog_min} min)", watchdog_min=ctx.watchdog_min))
             ctx.nudged = True
             self.panel.event(ctx.ref, type="log", kind="watchdog", message=M("agent silent for {n} min: restarted", n=ctx.watchdog_min))
             return self.agent(ctx, messages.nudge(ctx.job, ctx.watchdog_min), resume=ctx.job.get("session_id"), system=system)
+        if run.error and getattr(run, "limit", None) and not ctx.onboarding:
+            self.interrupt(ctx, run.error)
         if run.error:
             trouble = messages.model_trouble(run.error)
             if trouble == "too_large":
@@ -687,16 +703,16 @@ class Runner:
                                      message=M("turn limit of the agent reached ({turns} turns): the agent resumes where it stopped "
                                                "({n}/{max})", turns=config.MAX_TURNS, n=ctx.turn_resumes, max=config.MAX_TURN_RESUMES))
                     return self.agent(ctx, messages.more_turns(ctx.job), resume=ctx.job.get("session_id"), system=system)
-                raise Failed(M("the agent did not finish after {n} runs of {turns} turns: split the request into smaller ones, or "
-                               "give this repo a stronger model", n=ctx.turn_resumes + 1, turns=config.MAX_TURNS))
+                self.interrupt(ctx, M("the agent did not finish after {n} runs of {turns} turns", n=ctx.turn_resumes + 1,
+                                      turns=config.MAX_TURNS))
             if trouble == "cut":
-                raise Failed(M("the model stopped at its output limit without finishing: it loops in its thinking or its "
+                self.interrupt(ctx, M("the model stopped at its output limit without finishing: it loops in its thinking or its "
                                "context is full. Give this repo a stronger model (Settings → Agents and models) or split "
                                "the request into smaller ones ({why})", why=str(run.error)[:200]))
             if trouble == "busy" and not ctx.onboarding:
                 waits = config.MODEL_WAITS
                 if ctx.model_waits >= len(waits):
-                    raise Failed(M("the model server stayed saturated or unreachable after {n} attempts: limit the simultaneous "
+                    self.interrupt(ctx, M("the model server stayed saturated or unreachable after {n} attempts: limit the simultaneous "
                                    "jobs on this model (Settings → Agents and models), or raise its context if this "
                                    "conversation is too large for it ({why})", n=len(waits), why=str(run.error)[:200]))
                 seconds = waits[ctx.model_waits]
@@ -715,6 +731,28 @@ class Runner:
         ctx.model_waits = 0   # a run that ended normally: the next saturation starts its attempts again
         return True
 
+    def interrupt(self, ctx, why):
+        """A limit stopped the agent before it finished: its work is committed in the workspace (kept, unlike a failed
+        job's) and the job can be resumed where it stopped. Seen twice in a row: a whole module, its tests nearly green,
+        lost at the duration limit because the agent meant to commit at the end."""
+        raise Interrupted(why, self.save_progress(ctx))
+
+    def save_progress(self, ctx):
+        """Commits what the agent left uncommitted, in its workspace (same exclusions as at the end of a job: environment
+        files, what the recipe's installation created). Nothing is pushed: the branch is only pushed at publication, from
+        a verified commit. True if the workspace holds work since the job's starting point."""
+        try:
+            if jgit(ctx, ["status", "--porcelain"], check=False).stdout.strip():
+                jgit(ctx, ["add", "-A", "--", ".", *ENV_EXCLUDES, *self.setup_excludes(ctx)])
+                if jgit(ctx, ["diff", "--cached", "--name-only"]).stdout.strip():
+                    jgit(ctx, ["commit", "-q", "-m", f"{ctx.ref}: work in progress, saved by the runner at a limit\n\nFabrique-Job: {ctx.ref}"])
+            p = jgit(ctx, ["rev-list", "--count", f"{self.fork(ctx)}..HEAD"], check=False)
+            return p.returncode == 0 and (p.stdout.strip() or "0") != "0"
+        except Exception as e:   # saving must never hide the cause of the stop
+            log.warning("%s: work not saved: %s", ctx.ref, e)
+            self.panel.event(ctx.ref, type="log", kind="runner", message=M("the work in progress could not be committed: {why}", why=str(e)[:300]))
+            return False
+
     def runaway(self, ctx, streak):
         """Agent responses keep stopping at the output limit: the model loops in its thinking, or the conversation fills
         its context. The run is stopped with the cause rather than left asking again for an hour."""
@@ -723,7 +761,7 @@ class Runner:
             return
         run._kill(M("the model stopped {n} times in a row at its output limit without finishing: it loops in its thinking "
                     "or its context is full. Asking again would not help: give this repo a stronger model (Settings → "
-                    "Agents and models) or split the request into smaller ones", n=streak))
+                    "Agents and models) or split the request into smaller ones", n=streak), limit="loops")
 
     def close(self, ctx, kind):
         """End of an order, regardless of the outcome: the job container is destroyed (no more calls possible with
@@ -934,6 +972,8 @@ class Runner:
         p = ctx.intent["payload"]
         if p.get("pause"):
             prompt = messages.resume_paused(ctx.job)
+        elif p.get("interrupted"):
+            prompt = messages.resume_interrupted(ctx.job, p.get("note") or "", p.get("by") or "")
         else:
             prompt = messages.resume(ctx.job, p.get("question", "(question not passed on)"), p.get("answer", ""))
         if ctx.study:
@@ -1030,11 +1070,16 @@ class Runner:
     def reviews(self, ctx, sha, base):
         """Read-only reviewers on the verified diff; returns verdicts (and reports them to the dashboard)."""
         files = [f for f in mgit(ctx, diff_args(base) + ["--name-only", "-z", "--no-renames", f"{base}...{sha}"]).stdout.split("\0") if f]
-        diff = mgit(ctx, diff_args(base) + [f"{base}...{sha}"]).stdout
-        truncated = len(diff) > config.REVIEW_MAX_DIFF
-        if truncated:
-            diff = diff[:config.REVIEW_MAX_DIFF] + M("\n[… diff truncated at {review_max_diff} characters]", review_max_diff=config.REVIEW_MAX_DIFF)
+        diff = mgit(ctx, diff_args(base) + [f"{base}...{sha}", "--", ".", *review.LOCK_EXCLUDES]).stdout
+        locks = [f for f in files if review.LOCKFILE.search(f)]
+        if locks:
+            diff += M("\n[Generated lockfiles changed, not shown: {files}]", files=", ".join(locks[:20]))
         roles = review.roles_for(files)
+        limit = review.max_diff([review.reviewer(ctx, r) for r in roles])
+        truncated = len(diff) > limit
+        if truncated:
+            diff = diff[:limit] + M("\n[… diff truncated at {review_max_diff} characters]", review_max_diff=limit)
+        ctx.review_limit = limit
         ctx.tests_changed = tests_changed(ctx, base, sha)
         self.panel.event(ctx.ref, type="stage", stage="review", summary=M("Read-only review: ") + ", ".join(review.ROLES[r][0] for r in roles) + ".",
                          status=M("Review in progress"))
@@ -1060,10 +1105,10 @@ class Runner:
                 sh(ctx, ["rm", "-rf", ctx.review_dir, ctx.review_home], cwd=ctx.dir, check=False)
                 ctx.review_dir = ctx.review_home = None
 
-    def _review_once(self, ctx, role, diff):
+    def _review_once(self, ctx, role, diff, strict=False):
         """A review; its cost is the largest of what it declares and what the key gateway measured during it."""
         self.settle(ctx)
-        r = review.run(ctx, role, diff)
+        r = review.run(ctx, role, diff, strict=strict)
         with self.gateway.lock:
             gw = ctx.gw_spent - ctx.gw_mark
             ctx.gw_mark = ctx.gw_spent
@@ -1077,15 +1122,15 @@ class Runner:
             if ctx.cancelled:
                 raise Cancelled
             r = self._review_once(ctx, role, diff)
-            if r["verdict"] == "undetermined":   # a second chance before escalating to a human
+            if r["verdict"] == "undetermined":   # a second chance before escalating to a human: JSON alone, no thinking
                 self.panel.event(ctx.ref, type="log", kind=M("review"), message=M("{label}: {cause}; retrying", label=r['label'], cause=r['cause']))
-                r = self._review_once(ctx, role, diff)
+                r = self._review_once(ctx, role, diff, strict=True)
             r = review.confirm(r, lambda cmd: self.replay(ctx, cmd))
-            if truncated and r["verdict"] == "ok":
-                # The reviewer only saw part of the change: its "ok" cannot apply to the whole. A
-                # human reviews (and no automatic merge is sent).
+            if truncated and r["verdict"] in ("ok", "needs_changes"):
+                # The reviewer only saw part of the change: neither its "ok" nor its "to review again" applies to the whole
+                # (seen: "Must fix: I cannot see these files"). A human reviews; its points stay, as an opinion on the part read.
                 r["verdict"] = "undetermined"
-                r["summary"] = (M("Diff too long ({review_max_diff} characters read): review incomplete, a human must review it. Opinion on the part read: {summary}", review_max_diff=config.REVIEW_MAX_DIFF, summary=r['summary']))[:2000]
+                r["summary"] = (M("Diff too long ({review_max_diff} characters read): review incomplete, a human must review it. Opinion on the part read: {summary}", review_max_diff=getattr(ctx, "review_limit", 0) or config.REVIEW_MAX_DIFF, summary=r['summary']))[:2000]
             self.panel.event(ctx.ref, type="review", sha=sha, role=role, verdict=r["verdict"], summary=r["summary"], points=r["points"],
                              model=review.reviewer(ctx, role)["id"])
             self.report_usage(ctx)   # the cost of reviewers counts towards the job cost and the daily budget
@@ -1232,7 +1277,7 @@ class Runner:
             raise Cancelled
         n = self.git(ctx).open_pr(ctx.repo["slug"], ctx.branch, ctx.repo["default_branch"], f"[{ctx.ref}] {title}", body)
         res = self.panel.event(ctx.ref, type="pr", number=n, url=self.git(ctx).pr_url(ctx.repo["slug"], n), files=files, additions=add,
-                               deletions=rem, attempts=attempt, tests_changed=tests_changed(ctx, base, sha),
+                               deletions=rem, generated=generated_lines(ctx, base, sha), attempts=attempt, tests_changed=tests_changed(ctx, base, sha),
                                **({"recipe": ctx.recipe} if ctx.onboarding else {})) or {}
         self.comment(ctx, n, res)
         self.panel.event(ctx.ref, type="intent_done", note=f"PR #{n}", attempts=attempt)
@@ -1277,7 +1322,8 @@ class Runner:
         files, add, rem = numstat(ctx, base, head)
         self.send_diff(ctx, base, head)
         res = self.panel.event(ctx.ref, type="pr", number=n, url=ctx.job.get("pr_url") or self.git(ctx).pr_url(ctx.repo["slug"], n),
-                               files=files, additions=add, deletions=rem, attempts=ctx.job.get("attempts") or 1,
+                               files=files, additions=add, deletions=rem, generated=generated_lines(ctx, base, head),
+                               attempts=ctx.job.get("attempts") or 1,
                                tests_changed=tests_changed(ctx, base, head),
                                summary=M("Review rerun on sha {want}; gates re-evaluated.", want=want)) or {}
         self.comment(ctx, n, res)
@@ -1493,6 +1539,16 @@ def numstat(ctx, base, sha):
         add += int(a) if a.isdigit() else 0
         rem += int(d) if d.isdigit() else 0
     return files, add, rem
+
+
+def generated_lines(ctx, base, sha):
+    """Lines changed in generated lockfiles (package-lock.json…): left out of the PR size gate."""
+    n = 0
+    for rec in mgit(ctx, diff_args(base) + ["--numstat", "-z", "--no-renames", f"{base}...{sha}"]).stdout.split("\0"):
+        a, d, f = (rec.split("\t", 2) + ["", "", ""])[:3]
+        if f and review.LOCKFILE.search(f):
+            n += (int(a) if a.isdigit() else 0) + (int(d) if d.isdigit() else 0)
+    return n
 
 
 def decision_comment(ctx, dec):

@@ -13,9 +13,9 @@ def alembic():
     return cfg
 
 
-def test_an_empty_database_gets_the_whole_schema_and_only_one_migration():
+def test_an_empty_database_gets_the_whole_schema():
     versions = [f for f in os.listdir(os.path.join(os.path.dirname(db.__file__), "migrations", "versions")) if f.endswith(".py")]
-    assert versions == ["0001_baseline.py"]
+    assert sorted(versions) == ["0001_baseline.py", "0002_resumable.py"]
     insp = inspect(db.engine())
     assert set(insp.get_table_names()) - {"alembic_version"} == set(db.meta.tables)
     for name, table in db.meta.tables.items():                         # the migration and the models describe the same columns

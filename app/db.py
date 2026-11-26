@@ -130,6 +130,7 @@ jobs = Table(
     Column("attempts", Integer, nullable=False, default=0, server_default="0"),
     Column("diff", JSON),                                      # {"files": [...], "additions": n, "deletions": n} of the PR
     Column("cancel_requested", String(120)),                   # who requested the stop (the runner kills the agent and confirms)
+    Column("resumable", Boolean, nullable=False, default=False, server_default="0"),   # stopped by a limit, work kept: can be resumed
     Column("created_at", Float, nullable=False),
     Column("updated_at", Float, nullable=False),
     Index("ix_jobs_stage", "stage"),
@@ -386,7 +387,7 @@ DEFAULTS = {
                "protected_paths": ["**/migrations/**", "**/auth/**", "**/permissions/**", ".forgejo/**", ".gitea/**", ".gitlab-ci.yml",
                                    ".github/**", "Dockerfile", "**/.env*", ".fabrique/**"]},
     "access": {"default_role": "requester"},
-    "translation": {"model": ""},               # model that translates a job's texts on request ("" : no translation offered)
+    "translation": {"offer": False},            # offer a "Translate" button; the model: the job profile's onboarding and translation model
     "languages": {"jobs": "en"},                # job language: what Fabrique and its agents write for people (overridable per repo)
     "oidc_secret": {},                           # OIDC client secret entered in the settings: {"v": encrypted value}
     "demo": {"visible": False},                # demo data displayed or hidden (FABRIQUE_DEMO=1)   # role of a new account: requester, or none (pending admin)

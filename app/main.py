@@ -345,8 +345,8 @@ async def job_translate(request: Request, ref: str):
         return forbidden(request, M("this job"))
     lang = i18n.current()
     with db.tx() as c:
-        if not translate.model_id(c):
-            return back(here, err=M("No translation model is chosen (Settings → Agents and models)."))
+        if not translate.model_id(c, j):
+            return back(here, err=M("Translation is not offered, or no model can translate this job (Settings → Agents and models)."))
     if not translate.start(u, j, lang):
         return back(here, ok=M("A translation of this job is already in progress."))
     return back(here, ok=M("Translation started: the texts appear as soon as they are translated."))
@@ -459,6 +459,16 @@ def answer_post(request: Request, ref: str, answer: str = Form("")):
     except jobs.Refused as e:
         return back(_safe_back(request, "/inbox"), err=str(e))
     return back(_safe_back(request, "/inbox"), ok=M("Answer sent. The job resumes."))
+
+
+@app.post("/jobs/{ref}/resume")
+def resume_post(request: Request, ref: str, note: str = Form("")):
+    u = user_of(request)
+    try:
+        jobs.resume_interrupted(u, ref, note)
+    except jobs.Refused as e:
+        return back(_safe_back(request, f"/jobs/{ref}"), err=str(e))
+    return back(_safe_back(request, f"/jobs/{ref}"), ok=M("The job resumes where it stopped."))
 
 
 @app.post("/jobs/{ref}/decide")
@@ -953,6 +963,8 @@ def settings_page(request: Request, tab: str = "agents"):
         default_problem = providers.default_problem(c) if tab == "agents" else ""
         profs = profiles.listing(c)
         prof_usage = {p["id"]: profiles.usage(c, p["id"]) for p in profs} if tab == "agents" else {}
+        preset = profiles.preset(c, request.query_params.get("preset", "")) if tab == "agents" else None
+        tr_offered = translate.offered(c)
     return render(request, "settings.html", "settings", tab=tab, sections=sections, data=data, users=users, provs=provs,
                   ptypes=providers.TYPES, efforts=providers.EFFORTS, model_prices=model_prices, prices_info=prices_info, loaded=loaded,
                   ticked=[unquote(x) for x in request.query_params.get("tick", "").split(",") if x][:40], load_err=load_err, load_pid=lp, probes=probes or {},
@@ -961,6 +973,7 @@ def settings_page(request: Request, tab: str = "agents"):
                   default_problem=default_problem, profs=profs, prof_usage=prof_usage, ROLES=profiles.ROLES, pefforts=profiles.efforts(),
                   EXAMPLES=profiles.EXAMPLES, REVIEWERS=profiles.REVIEWERS,
                   prof_edit=next((p for p in profs if p["id"] == request.query_params.get("profile", "")), None),
+                  prof_preset=preset, PRESETS=profiles.PRESETS, tr_offered=tr_offered,
                   chans=chans, ch_edit=next((x for x in chans if x["id"] == request.query_params.get("chan", "")), None),
                   notif_types=notify.TYPES, notif_events=notify.EVENTS, notif_recent=notify.recent() if tab == "notifications" else [],
                   secret_key_set=bool(config.SECRET_KEY), generated=sorted(config.GENERATED), PW_RULE=auth.PW_RULE,
@@ -1119,11 +1132,9 @@ async def settings_save(request: Request, section: str):
             db.log_audit(c, u["user"], M("Settings: new accounts"), detail=auth.ROLE_LABEL[d])
             url = "/settings?tab=users"
         elif section == "translation":
-            mid = str(f.get("model") or "")
-            if mid and not any(m["id"] == mid for m in providers.models_with_provider(c)):
-                return back("/settings?tab=agents", err=M("Unknown model."))
-            db.set_setting(c, "translation", {"model": mid}, u["user"])
-            db.log_audit(c, u["user"], M("Settings: translation model"), detail=mid or M("none", _ctx="model"))
+            offer = f.get("offer") == "1"
+            db.set_setting(c, "translation", {"offer": offer}, u["user"])
+            db.log_audit(c, u["user"], M("Settings: translation"), detail=M("offered") if offer else M("not offered"))
             url = "/settings?tab=agents#translation"
         elif section == "lang":
             jl = str(f.get("jobs") or "")

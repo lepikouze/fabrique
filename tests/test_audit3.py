@@ -367,7 +367,7 @@ def test_reviewer_reads_an_export_of_the_verified_commit(setup, repo, monkeypatc
     seen = {}
     real = review.run
 
-    def spy(ctx, role, diff):
+    def spy(ctx, role, diff, strict=False):
         seen[role] = (ctx.review_dir, ctx.review_home, sorted(os.listdir(ctx.review_dir)),
                       os.path.exists(os.path.join(ctx.review_dir, "brouillon-du-job.txt")))
         return real(ctx, role, diff)

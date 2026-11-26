@@ -66,7 +66,7 @@ def parse(text):
         v = str(found.get("verdict", "")).strip().lower().replace(" ", "_")
         v = VERDICTS.get(v, v)          # the model's value, once normalised, is the stored one
         if v in ("ok", "needs_changes", "blocking"):
-            points = [str(p)[:400] for p in (found.get("points") or [])][:12]
+            points = [str(p)[:POINT_MAX] for p in (found.get("points") or [])][:12]
             # The verdict follows the labels of the points: "to review again" only when something must be fixed before merging.
             must = any(MUST.match(p) for p in points)
             if v == "needs_changes" and not must and any(LATER.match(p) for p in points):
@@ -79,6 +79,56 @@ def parse(text):
 
 
 VERDICTS = {"needs_changes": "needs_changes", "blocking": "blocking"}
+POINT_MAX = 1500   # characters per point: a "Must fix" cut at 400 hid what to do ("Consider injecting the databas")
+
+# Generated dependency lockfiles: hundreds of lines nobody reviews line by line. Left out of the diff the reviewers read
+# (one package-lock.json took the room of four source files) and out of the PR size; the reviewers are told they changed.
+LOCKFILES = ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb", "poetry.lock",
+             "uv.lock", "Pipfile.lock", "pdm.lock", "Cargo.lock", "composer.lock", "Gemfile.lock", "go.sum", "packages.lock.json",
+             "flake.lock", "mix.lock", "pubspec.lock", "Podfile.lock")
+LOCKFILE = re.compile(r"(^|/)(" + "|".join(re.escape(n) for n in LOCKFILES) + r")$")
+LOCK_EXCLUDES = [f":(exclude,glob)**/{n}" for n in LOCKFILES]
+
+CHARS_PER_TOKEN = 3       # diffs and code: about 3 characters per token, on the safe side
+PROMPT_TOKENS = 6000      # system prompt, request and instructions around the diff
+DEFAULT_MAX_DIFF = 60000  # context window unknown
+
+
+def window(model):
+    """Context window of a reviewer's model, in tokens; None if unknown."""
+    if model.get("provider") == "anthropic":
+        return 200000
+    try:
+        from .gateway import context_size
+        return context_size(model)
+    except Exception:
+        return None
+
+
+def answer_tokens(model, w=None):
+    """Room for the reviewer's answer, thinking included: the provider's setting, the runner's REVIEW_MAX_TOKENS when set,
+    otherwise an eighth of the context window (8,000 to 32,000): 8,000 cut the thinking of Qwen on large changes."""
+    if model.get("review_max_tokens"):
+        return int(model["review_max_tokens"])
+    if config.REVIEW_MAX_TOKENS_SET:
+        return config.REVIEW_MAX_TOKENS
+    w = w if w is not None else window(model)
+    return max(8000, min(32000, w // 8)) if w else config.REVIEW_MAX_TOKENS
+
+
+def max_diff(models):
+    """Diff characters the reviewers can read: REVIEW_MAX_DIFF when set, otherwise what fits in the smallest context
+    window among them once the prompt and the answer are set aside (60,000 when a window is unknown). A fixed 60,000
+    cut changes that a 131k-token model could read whole."""
+    if config.REVIEW_MAX_DIFF:
+        return config.REVIEW_MAX_DIFF
+    sizes = []
+    for m in models:
+        w = window(m)
+        if not w:
+            return DEFAULT_MAX_DIFF
+        sizes.append(int((w - answer_tokens(m, w) - PROMPT_TOKENS) * CHARS_PER_TOKEN * 0.8))
+    return max(20000, min(min(sizes or [DEFAULT_MAX_DIFF]), 400000))
 MUST = re.compile(r"^\s*\**\s*must\s+fix\s*\**\s*:", re.I)
 LATER = re.compile(r"^\s*\**\s*later\s*\**\s*:", re.I)
 TOOLS = {"direct": "You have no tool: everything you can review is in the diff below. If it is truncated, say so in "
@@ -154,7 +204,7 @@ CAUSE_NOJSON = "no JSON verdict in the model's answer"
 def ask(model, system, prompt, timeout, transport=None, think=True):
     """A request to the model; returns (text, cost in $, cut by the token limit?). think=False cuts the thinking
     of a local "thinking" model (llama.cpp, vLLM: chat_template_kwargs.enable_thinking)."""
-    limit = model.get("review_max_tokens") or config.REVIEW_MAX_TOKENS   # the provider's own limit, otherwise the runner's
+    limit = answer_tokens(model)
     if model.get("provider") == "anthropic":
         with httpx.Client(base_url=config.ANTHROPIC_API_URL, timeout=timeout, transport=transport) as h:
             r = h.post("/v1/messages", headers={"x-api-key": model.get("key") or config.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
@@ -200,14 +250,21 @@ def reviewer(ctx, role):
     return (getattr(ctx, "review_models", None) or {}).get(role) or getattr(ctx, "review_model", None) or ctx.model
 
 
-def run(ctx, role, diff, transport=None):
+STRICT = ("\n\nYour previous answer could not be read. Answer now with ONLY the JSON block of the required format, starting "
+          "with { and ending with }: no thinking out loud, no text before or after it.")
+
+
+def run(ctx, role, diff, transport=None, strict=False):
+    """A review. strict: second attempt after an unreadable answer, without thinking and with the JSON format alone."""
     rm = reviewer(ctx, role)
     how = mode(rm)
     label, system, prompt = prompts(ctx, role, diff, how)
+    if strict:
+        prompt += STRICT
     if how == "direct":
         note = ""
         try:
-            text, cost, cut = ask(rm, system, prompt, config.REVIEW_TIMEOUT, transport)
+            text, cost, cut = ask(rm, system, prompt, config.REVIEW_TIMEOUT, transport, think=not strict)
             if cut and rm.get("type", "compatible") == "compatible" and rm.get("provider") != "anthropic":
                 # The model went in circles in its thinking: same review, cut thinking, rather than no verdict.
                 log.warning("%s: review %s: thinking too long, asking again without thinking", ctx.ref, role)
